@@ -178,5 +178,14 @@
     "signed_at": "2026-10-06T00:24:16.077Z",
     "pull_request": 209,
     "evidence": "https://github.com/skopevoj/spoti.pw/pull/209"
+  },
+  {
+    "login": "gabriel-nicollet",
+    "id": 289195501,
+    "cla": "1.0",
+    "via": "checkbox",
+    "signed_at": "2026-10-06T13:37:20.027Z",
+    "pull_request": 215,
+    "evidence": "https://github.com/skopevoj/spoti.pw/pull/215"
   }
 ]
