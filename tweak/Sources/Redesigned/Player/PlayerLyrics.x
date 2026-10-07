@@ -53,6 +53,7 @@
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Sing/SGSingController.h"
 #import "Player.h"
+#import "PlayerVinyl.h"
 
 static const CGFloat kThumbSide = 72;          // the cover once the lyrics are up
 static const CGFloat kThumbGap = 16;           // between the thumbnail and the title beside it
@@ -577,6 +578,8 @@ static void setOpen(BOOL open, BOOL animated) {
     if (open) {
         overlay.thumb.alpha = inPlace ? 0 : 1;
         overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
+        // Vinyl mode: replace the cover thumbnail with a mini spinning vinyl disc.
+        SGRVinylInstallMiniDisc(overlay.thumb.face, overlay.cover);
         overlay.stage.alpha = 0;
         overlay.stage.transform = CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
         [overlay.lyrics setLineInsets:bandOf(l, NO) duration:0];
@@ -605,6 +608,8 @@ static void setOpen(BOOL open, BOOL animated) {
         sg_moving = NO;
         if (sg_open) return;   // opened again while it was going away
         SGRPlayerCoverList().alpha = 1;
+        // Vinyl mode: restore the cover thumbnail.
+        SGRVinylRemoveMiniDisc();
         [overlay removeFromSuperview];
     };
 
