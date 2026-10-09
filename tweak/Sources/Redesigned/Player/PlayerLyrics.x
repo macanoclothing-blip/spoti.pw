@@ -595,6 +595,7 @@ static void setOpen(BOOL open, BOOL animated) {
         overlay.thumb.transform = open ? away : full;
         if (inPlace) overlay.thumb.alpha = open ? 1 : 0;
         overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || open);
+        SGRVinylLyricsDidChange(open, sg_info.viewIfLoaded);
         placeTitleRow(l);
         sg_floating.viewIfLoaded.alpha = open ? 0 : 1;
     };

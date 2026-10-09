@@ -4,11 +4,15 @@
 // is kept intact; everything else — artwork, controls, footer — is hidden and replaced with four
 // tappable pill buttons (Play/Pause, Lyrics, Prev, Next).
 //
-// When Lyrics are open, the redesigned lyrics view is shown normally, but the album cover thumbnail
+// When Lyrics are open, the redesigned lyrics view stays interactive, and the album cover thumbnail
 // in the top-left is replaced by a mini spinning vinyl disc. Tapping it returns to the vinyl view.
+// Dragging the full-size disc pauses playback and repeats the bundled scratch sound with haptics
+// every half-second; playback resumes on release only if it was playing before the gesture.
 //
 // The switch is spotifyglass.redesign.vinyl, read at launch, restart required.
 // PlayerVinyl.x: the vinyl overlay view, mini disc and all hooks.
+
+#import <UIKit/UIKit.h>
 
 #define SGRKeyPlayerVinyl @"spotifyglass.redesign.vinyl"
 
@@ -22,5 +26,9 @@ SGModSection *SGRVinylSection(void);
 void SGRVinylInstallMiniDisc(UIView *face, UIImageView *cover);
 void SGRVinylRemoveMiniDisc(void);
 
-// Called every display-link tick when lyrics are open, to keep the mini disc spinning.
+// Called every display-link tick to keep the vinyl and lyrics thumbnail at the same rotation.
 void SGRVinylUpdateMiniDisc(CGFloat angle);
+
+// Keeps Spotify's title row available beside the mini disc while lyrics are open and animates the
+// full-size disc/tonearm away with that transition.
+void SGRVinylLyricsDidChange(BOOL open, UIView *informationUnit);
