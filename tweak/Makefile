@@ -15,6 +15,7 @@ TWEAK_NAME := spotifyglass
 # Every source under Sources/, so a new feature needs no Makefile edit. Shared/Flags/SGFlagList.m
 # is generated from the IPA by scripts/extract-flags.py.
 spotifyglass_FILES := $(shell find Sources -name '*.m' -o -name '*.x' -o -name '*.swift' | sort)
+spotifyglass_BUNDLE_RESOURCE_FILES := Resources/VinylDisc.png Resources/VinylTonearm.png
 spotifyglass_CFLAGS := -fobjc-arc -ISources -DSG_VERSION=\"$(SG_VERSION)\"
 spotifyglass_FRAMEWORKS := UIKit QuartzCore UniformTypeIdentifiers MediaPlayer MediaAccessibility CoreImage AudioToolbox AVFoundation CoreHaptics Accelerate Network Metal
 # Runtime swizzling instead of Substrate so the dylib has no extra dependency inside the IPA.
