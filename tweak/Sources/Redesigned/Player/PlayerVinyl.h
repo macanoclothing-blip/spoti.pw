@@ -32,3 +32,9 @@ void SGRVinylUpdateMiniDisc(CGFloat angle);
 // Keeps Spotify's title row available beside the mini disc while lyrics are open and animates the
 // full-size disc/tonearm away with that transition.
 void SGRVinylLyricsDidChange(BOOL open, UIView *informationUnit);
+
+// Keeps the Vinyl transport buttons in sync with the lyrics page's auto-hidden controls.
+void SGRVinylLyricsControlsDidChange(CGFloat alpha);
+
+// Spotify's artwork collection must remain hidden after the lyrics transition finishes in Vinyl mode.
+void SGRVinylLyricsDidSettleClosed(void);

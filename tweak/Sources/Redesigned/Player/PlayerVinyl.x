@@ -52,8 +52,10 @@ static const CGFloat kMountY         = 0.135; // pivot Y fraction of overlay hei
 static const CGFloat kTonearmAssetAngle = 36.0 * M_PI / 180.0;
 static const CGFloat kButtonHeight   = 68.0;
 static const CGFloat kButtonBottom   = 16.0;
+static const NSTimeInterval kFastForwardHoldDuration = 0.38;
 static char kVinylResourceAnchor;
 static char kVinylOverlayKey;
+static char kCanvasHoldKey;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -77,6 +79,7 @@ static NSString *vinylResourcePath(NSString *name, NSString *extension) {
     for (NSString *candidate in appPaths) {
         if ([NSFileManager.defaultManager fileExistsAtPath:candidate]) return candidate;
     }
+    _isPlaying = NO;
 
     Dl_info info = {0};
     if (dladdr(&kVinylResourceAnchor, &info) && info.dli_fname) {
@@ -93,6 +96,14 @@ static NSString *vinylResourcePath(NSString *name, NSString *extension) {
     }
     SGLog(@"redesign player: missing vinyl resource %@", filename);
     return nil;
+}
+
+- (void)_applyDiscRotation {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _disc.transform = CATransform3DMakeRotation(_discAngle, 0, 0, 1);
+    [CATransaction commit];
+    if (SGRPlayerLyricsOpen()) SGRVinylUpdateMiniDisc(_discAngle);
 }
 
 static UIImage *vinylResource(NSString *name) {
@@ -211,7 +222,8 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     _bodyLayer = [CALayer layer];
     _bodyLayer.masksToBounds = YES;
     _bodyLayer.contentsGravity = kCAGravityResizeAspectFill;
-    _bodyLayer.opacity = 0.82;
+    _bodyLayer.opacity = 1;
+    _bodyLayer.backgroundColor = [UIColor colorWithWhite:0.035 alpha:1].CGColor;
     _bodyLayer.contents = (__bridge id)vinylDiscTexture().CGImage;
     [self addSublayer:_bodyLayer];
 
@@ -231,6 +243,7 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 
 - (void)setTintColor:(UIColor *)tintColor {
     _tintColor = tintColor;
+    _bodyLayer.backgroundColor = (tintColor ?: UIColor.darkGrayColor).CGColor;
     UIImage *texture = tintedVinylTexture(tintColor);
     _bodyLayer.contents = (__bridge id)texture.CGImage;
     [self setNeedsLayout];
@@ -335,11 +348,12 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     if (label) {
         _label = [[UILabel alloc] init];
         _label.text          = label;
-        _label.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+        _label.font = [UIFont systemFontOfSize:9 weight:UIFontWeightBold];
         _label.textAlignment = NSTextAlignmentCenter;
         _label.textColor = [UIColor colorWithWhite:1 alpha:0.88];
         _label.userInteractionEnabled = NO;
-        [self addSubview:_label];
+        _label.numberOfLines = 1;
+        [_well addSubview:_label];
     }
 
     return self;
@@ -354,14 +368,12 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setSymbol:(NSString *)symbol {
     if ([symbol isEqualToString:_symbol]) return;
     _symbol = symbol;
-    _icon.hidden = [_label.text isEqualToString:@"PLAY"] || [_label.text isEqualToString:@"PAUSE"];
     [self _applySymbol:symbol];
 }
 
 - (void)setCaption:(NSString *)text {
     _label.text = text;
     self.accessibilityLabel = text;
-    _icon.hidden = [text isEqualToString:@"PLAY"] || [text isEqualToString:@"PAUSE"];
 }
 
 - (void)layoutSubviews {
@@ -369,20 +381,27 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     CGFloat W = self.bounds.size.width;
     CGFloat H = self.bounds.size.height;
     CGFloat wellWidth = MIN(W - 4, 88);
-    CGFloat wellHeight = MIN(36, H * 0.53);
+    CGFloat wellHeight = MIN(48, H - 4);
     CGFloat wellX = (W - wellWidth) / 2;
-    _well.frame = CGRectMake(wellX, 2, wellWidth, wellHeight);
+    CGFloat wellY = (H - wellHeight) / 2;
+    _well.frame = CGRectMake(wellX, wellY, wellWidth, wellHeight);
     _wellInner.frame = CGRectInset(_well.bounds, 3, 3);
     _wellGradient.frame = _wellInner.bounds;
-    if (_label && _icon.hidden) {
-        _label.frame = CGRectMake(0, wellHeight + 5, W, MAX(14, H - wellHeight - 5));
+    if (_label && ([_label.text isEqualToString:@"PLAY"] || [_label.text isEqualToString:@"PAUSE"])) {
+        CGFloat iconHeight = MIN(17, wellHeight * 0.42);
+        _icon.hidden = NO;
+        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + 3, iconHeight, iconHeight);
+        _label.frame = CGRectMake(2, iconHeight + 3, wellWidth - 4, wellHeight - iconHeight - 4);
     } else if (_label) {
-        CGFloat iconHeight = MIN(17, MAX(13, (H - wellHeight - 5) * 0.54));
-        _icon.frame = CGRectMake((W - iconHeight) / 2, wellHeight + 3, iconHeight, iconHeight);
-        _label.frame = CGRectMake(0, CGRectGetMaxY(_icon.frame), W, MAX(12, H - CGRectGetMaxY(_icon.frame)));
+        CGFloat iconHeight = MIN(15, wellHeight * 0.36);
+        _icon.hidden = NO;
+        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + 3, iconHeight, iconHeight);
+        _label.frame = CGRectMake(2, iconHeight + 2, wellWidth - 4, wellHeight - iconHeight - 3);
     } else {
-        CGFloat iconHeight = MIN(22, MAX(16, H - wellHeight - 5));
-        _icon.frame = CGRectMake((W - iconHeight) / 2, wellHeight + 4, iconHeight, iconHeight);
+        CGFloat iconHeight = MIN(22, MAX(16, wellHeight - 8));
+        _icon.hidden = NO;
+        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + (wellHeight - iconHeight) / 2,
+                                 iconHeight, iconHeight);
     }
 }
 
@@ -396,6 +415,9 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setAlbumArt:(UIImage *)image tintColor:(UIColor *)tintColor;
 - (void)playerStateDidChange:(SPTPlayerState *)state;
 - (void)setLyricsPresentation:(BOOL)open informationUnit:(UIView *)informationUnit;
+- (void)setLyricsControlsAlpha:(CGFloat)alpha;
+- (BOOL)handlesLyricsControlAtPoint:(CGPoint)point;
+- (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer;
 // Returns the current disc rotation angle (used by the mini disc in lyrics).
 @property (nonatomic, readonly) CGFloat discAngle;
 @property (nonatomic, readonly) UIImage *currentArtwork;
@@ -407,10 +429,14 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     CALayer              *_arm;
     UITapGestureRecognizer *_tap;
     UIPanGestureRecognizer *_scratchPan;
+    UILongPressGestureRecognizer *_fastForwardPress;
     AVAudioPlayer *_scratchAudio;
     NSTimer *_scratchTimer;
     NSString *_scratchTrackURI;
     BOOL _scratchWasPlaying;
+    CGFloat _scratchLastAngle;
+    BOOL _fastForwarding;
+    double _speedBeforeHold;
 
     UILabel  *_titleLabel;
     UILabel  *_artistLabel;
@@ -530,6 +556,7 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 
 - (void)dealloc {
     [self _endScratchResumingPlayback:YES];
+    [self _restorePlaybackSpeed];
     [_link invalidate];
     [NSNotificationCenter.defaultCenter removeObserver:self];
 }
@@ -538,12 +565,12 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     (void)event;
     if (SGRPlayerLyricsOpen()) {
         for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
-            if (CGRectContainsPoint(button.frame, point)) return YES;
+            if (button.alpha > 0.01 && CGRectContainsPoint(button.frame, point)) return YES;
         }
         return NO;
     }
     for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
-        if (CGRectContainsPoint(button.frame, point)) return YES;
+        if (button.alpha > 0.01 && CGRectContainsPoint(button.frame, point)) return YES;
     }
     CGFloat dx = point.x - _discCenter.x;
     CGFloat dy = point.y - _discCenter.y;
@@ -557,11 +584,18 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
-    if (gestureRecognizer != _scratchPan) return YES;
-    if (SGRPlayerLyricsOpen()) return NO;
     CGPoint point = [touch locationInView:self];
     CGFloat dx = point.x - _discCenter.x, dy = point.y - _discCenter.y;
-    return dx * dx + dy * dy <= _discR * _discR;
+    BOOL onDisc = dx * dx + dy * dy <= _discR * _discR;
+    if (gestureRecognizer == _scratchPan) return !SGRPlayerLyricsOpen() && onDisc;
+    if (gestureRecognizer == _fastForwardPress) {
+        if (SGRPlayerLyricsOpen() || onDisc) return NO;
+        for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
+            if (button.alpha > 0.01 && CGRectContainsPoint(button.frame, point)) return NO;
+        }
+        return YES;
+    }
+    return YES;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
@@ -573,18 +607,23 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan: {
             SPTPlayerState *state = SGPlayerState();
+            CGPoint point = [gesture locationInView:self];
+            _scratchLastAngle = atan2(point.y - _discCenter.y, point.x - _discCenter.x);
             _scratchWasPlaying = state && !state.isPaused;
             _scratchTrackURI = state ? SGURIString(state.track.URI) : nil;
+            BOOL playbackPaused = !_scratchWasPlaying;
             if (_scratchWasPlaying) {
                 id<SPTPlayer> player = SGKaraokePlayer();
                 if ([player respondsToSelector:@selector(pause:)]) {
                     id result = [player pause:nil];
+                    playbackPaused = YES;
                     SGLog(@"redesign player: paused for vinyl scratch -> %@", result);
                 } else {
                     SGLog(@"redesign player: no player available to pause for vinyl scratch");
                     _scratchWasPlaying = NO;
                 }
             }
+            if (playbackPaused) _isPlaying = NO;
             SGPrepareFeedback(SGFeedbackGrab);
             [self _playScratchTick];
             __weak typeof(self) weakSelf = self;
@@ -594,6 +633,16 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
             }];
             [NSRunLoop.mainRunLoop addTimer:_scratchTimer forMode:NSRunLoopCommonModes];
             SGLog(@"redesign player: vinyl scratch began (was playing: %@)", _scratchWasPlaying ? @"yes" : @"no");
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            CGPoint point = [gesture locationInView:self];
+            CGFloat angle = atan2(point.y - _discCenter.y, point.x - _discCenter.x);
+            CGFloat delta = angle - _scratchLastAngle;
+            delta = atan2(sin(delta), cos(delta));
+            _scratchLastAngle = angle;
+            _discAngle += delta;
+            [self _applyDiscRotation];
             break;
         }
         case UIGestureRecognizerStateEnded:
@@ -641,6 +690,50 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     }
 }
 
+- (void)_fastForwardHeld:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        if (!SGPlayerSpeedAllowed()) {
+            SGLog(@"redesign player: canvas hold-to-2x is unavailable until Spotify's audio output is active");
+            return;
+        }
+        _speedBeforeHold = SGPlayerSpeed();
+        _fastForwarding = YES;
+        SGSetPlayerSpeed(2.0);
+        SGLog(@"redesign player: canvas held at 2x (previous %.2fx)", _speedBeforeHold);
+    } else if (_fastForwarding &&
+               (gesture.state == UIGestureRecognizerStateEnded ||
+                gesture.state == UIGestureRecognizerStateCancelled ||
+                gesture.state == UIGestureRecognizerStateFailed)) {
+        [self _restorePlaybackSpeed];
+    }
+}
+
+- (void)_restorePlaybackSpeed {
+    if (!_fastForwarding) return;
+    SGSetPlayerSpeed(_speedBeforeHold);
+    _fastForwarding = NO;
+    SGLog(@"redesign player: restored playback speed to %.2fx", _speedBeforeHold);
+}
+
+- (void)setLyricsControlsAlpha:(CGFloat)alpha {
+    CGFloat visibleAlpha = MAX(0, MIN(1, alpha));
+    for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
+        button.alpha = visibleAlpha;
+    }
+}
+
+- (BOOL)handlesLyricsControlAtPoint:(CGPoint)point {
+    if (!SGRPlayerLyricsOpen()) return NO;
+    for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
+        if (button.alpha > 0.01 && CGRectContainsPoint(button.frame, point)) return YES;
+    }
+    return NO;
+}
+
+- (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer {
+    _fastForwardPress = recognizer;
+}
+
 - (void)setLyricsPresentation:(BOOL)open informationUnit:(UIView *)informationUnit {
     if (informationUnit) {
         informationUnit.alpha = open ? 1 : 0;
@@ -651,7 +744,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _arm.opacity = open ? 0 : 1;
     _titleLabel.alpha = open ? 0 : 1;
     _artistLabel.alpha = open ? 0 : 1;
+    [self setLyricsControlsAlpha:1];
     if (open) [self _endScratchResumingPlayback:YES];
+    if (open) [self _restorePlaybackSpeed];
 }
 
 - (void)_overlayTapped:(UITapGestureRecognizer *)tap {
@@ -769,12 +864,8 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     CFTimeInterval dt  = (_lastTS > 0) ? MIN(now - _lastTS, 0.15) : 0;
     _lastTS = now;
 
-    if (_isPlaying) _discAngle += 2 * M_PI * kRPSPlaying * SGPlayerSpeed() * dt;
-
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    _disc.transform = CATransform3DMakeRotation(_discAngle, 0, 0, 1);
-    [CATransaction commit];
+    if (_isPlaying && !_scratchTimer) _discAngle += 2 * M_PI * kRPSPlaying * SGPlayerSpeed() * dt;
+    [self _applyDiscRotation];
 
     // Also spin the mini disc in lyrics if open
     if (SGRPlayerLyricsOpen()) {
@@ -839,6 +930,18 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 void SGRVinylLyricsDidChange(BOOL open, UIView *informationUnit) {
     SGRVinylOverlayView *overlay = (SGRVinylOverlayView *)sg_vinylOverlay;
     [overlay setLyricsPresentation:open informationUnit:informationUnit];
+}
+
+void SGRVinylLyricsControlsDidChange(CGFloat alpha) {
+    [(SGRVinylOverlayView *)sg_vinylOverlay setLyricsControlsAlpha:alpha];
+}
+
+void SGRVinylLyricsDidSettleClosed(void) {
+    if (!vinylOn()) return;
+    UIView *coverList = SGRPlayerCoverList();
+    coverList.alpha = 0;
+    coverList.userInteractionEnabled = NO;
+    coverList.accessibilityElementsHidden = YES;
 }
 
 // ─────────────────────────────────────────────────────
@@ -991,15 +1094,28 @@ static void placeOverlay(UIView *plane) {
     if (!CGRectEqualToRect(overlay.frame, plane.bounds)) overlay.frame = plane.bounds;
     if (overlay.superview != plane)                  [plane addSubview:overlay];
     else if (plane.subviews.lastObject != overlay)   [plane bringSubviewToFront:overlay];
+
+    UILongPressGestureRecognizer *hold = objc_getAssociatedObject(plane, &kCanvasHoldKey);
+    if (!hold) {
+        hold = [[UILongPressGestureRecognizer alloc] initWithTarget:overlay action:@selector(_fastForwardHeld:)];
+        hold.minimumPressDuration = kFastForwardHoldDuration;
+        hold.cancelsTouchesInView = NO;
+        hold.delegate = overlay;
+        [plane addGestureRecognizer:hold];
+        objc_setAssociatedObject(plane, &kCanvasHoldKey, hold, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [overlay setCanvasHoldRecognizer:hold];
 }
 
-// While lyrics are open, let touches the vinyl overlay declined continue to sibling lyric views.
+// In lyrics mode this full-screen background plane must yield hit-testing to the lyrics, seek bar and Sing control.
 %hook UIView
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hit = %orig;
-    if (objc_getAssociatedObject(self, &kVinylOverlayKey) &&
-        vinylOn() && SGRPlayerLyricsOpen() && hit == self) return nil;
-    return hit;
+    SGRVinylOverlayView *overlay = objc_getAssociatedObject(self, &kVinylOverlayKey);
+    if (overlay && vinylOn() && SGRPlayerLyricsOpen()) {
+        CGPoint overlayPoint = [overlay convertPoint:point fromView:self];
+        return [overlay handlesLyricsControlAtPoint:overlayPoint] ? overlay : nil;
+    }
+    return %orig;
 }
 %end
 
@@ -1036,15 +1152,6 @@ static void hideView(UIView *v) {
 
 // Background plane: place vinyl overlay on top of the canvas/fluid field.
 %hook _TtC21NowPlaying_ScrollImpl27NPVBackgroundViewController
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *plane = ((UIViewController *)self).viewIfLoaded;
-    UIView *hit = %orig;
-    if (!vinylOn() || !SGRPlayerLyricsOpen()) return hit;
-
-    SGRVinylOverlayView *overlay = objc_getAssociatedObject(plane, &kVinylOverlayKey);
-    return hit == overlay ? hit : nil;
-}
-
 - (void)viewDidLayoutSubviews {
     %orig;
     if (!vinylOn()) return;
@@ -1114,7 +1221,7 @@ static void hideView(UIView *v) {
 SGModSection *SGRVinylSection(void) {
     SGModRow *row = SGOptionRow(@"Vinyl mode", @"Replaces the player with a spinning vinyl disc", SGRKeyPlayerVinyl);
     row.symbol = @"record.circle";
-    return SGNotedSection(@"Vinyl", @[row], @"Tap the disc to pause or play; drag across it to scratch with sound and haptics. Tap Lyrics again to return to the player. The progress bar remains available. Restart Spotify to apply.");
+    return SGNotedSection(@"Vinyl", @[row], @"Tap the disc to pause or play; drag across it to scratch with sound and haptics. Hold the canvas outside the disc for 2x until release. The progress bar remains available; lyrics controls hide after a few seconds and return on touch. Restart Spotify to apply.");
 }
 
 // ─────────────────────────────────────────────────────

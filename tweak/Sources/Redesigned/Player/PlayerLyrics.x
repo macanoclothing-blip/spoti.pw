@@ -205,6 +205,11 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
 // the part they have now, so the stage swallows none either. With the controls away the row is not
 // there to be asked: a touch goes on to the player, whose watcher brings them back.
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (sg_sing && sg_sing.alpha > 0.01 && sg_sing.superview == self) {
+        CGPoint singPoint = [sg_sing convertPoint:point fromView:self];
+        UIView *singHit = [sg_sing hitTest:singPoint withEvent:event];
+        if (singHit) return singHit;
+    }
     UIView *hit = [super hitTest:point withEvent:event];
     if (hit != self && hit != _stage) return hit;
     UIView *row = SGRPlayerLyricsOpen() && !sg_alone ? sg_info.viewIfLoaded : nil;
@@ -369,6 +374,7 @@ static void showControls(CGFloat alpha, SGRPlayerLyricsOverlay *overlay) {
     UIView *stack = sg_info.viewIfLoaded.superview;
     if ([stack isKindOfClass:UIStackView.class]) stack.alpha = alpha;
     overlay.thumb.alpha = alpha;
+    SGRVinylLyricsControlsDidChange(alpha);
 }
 
 static void stopAloneTimer(void) {
@@ -576,6 +582,7 @@ static void setOpen(BOOL open, BOOL animated) {
     overlay.thumb.transform = open ? full : away;
     overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || !open);
     if (open) {
+        SGRVinylLyricsControlsDidChange(1);
         overlay.thumb.alpha = inPlace ? 0 : 1;
         overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
         // Vinyl mode: replace the cover thumbnail with a mini spinning vinyl disc.
@@ -609,6 +616,7 @@ static void setOpen(BOOL open, BOOL animated) {
         sg_moving = NO;
         if (sg_open) return;   // opened again while it was going away
         SGRPlayerCoverList().alpha = 1;
+        SGRVinylLyricsDidSettleClosed();
         // Vinyl mode: restore the cover thumbnail.
         SGRVinylRemoveMiniDisc();
         [overlay removeFromSuperview];
