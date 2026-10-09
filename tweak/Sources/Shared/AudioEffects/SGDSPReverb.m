@@ -41,7 +41,7 @@ static OSStatus pull(void *refCon, AudioUnitRenderActionFlags *flags, const Audi
     return noErr;
 }
 
-SGDSPReverb *SGDSPReverbCreate(double rate, int preset) {
+SGDSPReverb *SGDSPReverbCreate(double rate, int preset, double amountPercent) {
     AudioComponentDescription description = {kAudioUnitType_Effect, kAudioUnitSubType_Reverb2, kAudioUnitManufacturer_Apple, 0, 0};
     AudioComponent component = AudioComponentFindNext(NULL, &description);
     SGDSPReverb *reverb = component ? calloc(1, sizeof *reverb) : NULL;
@@ -67,17 +67,18 @@ SGDSPReverb *SGDSPReverbCreate(double rate, int preset) {
         return NULL;
     }
     reverb->output.list.mNumberBuffers = 2;
-    SGDSPReverbSet(reverb, preset);
+    SGDSPReverbSet(reverb, preset, amountPercent);
     // The unit sets itself up on its first render, allocating: that render is a block of silence, here.
     float silence[2][kSGDSPEffectMaxFrames] = {{0}};
     SGDSPReverbRun(reverb, silence[0], silence[1], kSGDSPEffectMaxFrames);
     return reverb;
 }
 
-void SGDSPReverbSet(SGDSPReverb *reverb, int preset) {
+void SGDSPReverbSet(SGDSPReverb *reverb, int preset, double amountPercent) {
     const Preset *p = &kPresets[preset < 0 ? 0 : preset >= SGDSPReverbPresetCount ? SGDSPReverbPresetCount - 1 : preset];
+    float amount = (float)(amountPercent < 0 ? 0 : amountPercent > 100 ? 100 : amountPercent) / 100.0f;
     const struct { AudioUnitParameterID id; float value; } values[] = {
-        {kReverb2Param_DryWetMix, p->mix}, {kReverb2Param_Gain, 0}, {kReverb2Param_MinDelayTime, p->minDelay},
+        {kReverb2Param_DryWetMix, p->mix * amount}, {kReverb2Param_Gain, 0}, {kReverb2Param_MinDelayTime, p->minDelay},
         {kReverb2Param_MaxDelayTime, p->maxDelay}, {kReverb2Param_DecayTimeAt0Hz, p->decay},
         {kReverb2Param_DecayTimeAtNyquist, p->decayHigh}, {kReverb2Param_RandomizeReflections, p->density},
     };

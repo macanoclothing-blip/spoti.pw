@@ -574,6 +574,8 @@ static void setOpen(BOOL open, BOOL animated) {
     SGRPlayerLyricsOverlay *overlay = overlayIn(host);
     if (!open) SGRSingControlDismiss(overlay);
     place(overlay, host, l);
+    CGAffineTransform vinylClosingTransform = CGAffineTransformIdentity;
+    BOOL vinylClosing = !open && SGRVinylLyricsClosingTransform(overlay.thumb, &vinylClosingTransform);
     CGAffineTransform away = thumbTransform(l);
     BOOL inPlace = SGRPlayerAnimatedShowing(NULL, NULL);
     CGAffineTransform small = CGAffineTransformConcat(CGAffineTransformMakeScale(kThumbAppearScale, kThumbAppearScale), away);
@@ -599,8 +601,8 @@ static void setOpen(BOOL open, BOOL animated) {
     }
 
     void (^move)(void) = ^{
-        overlay.thumb.transform = open ? away : full;
-        if (inPlace) overlay.thumb.alpha = open ? 1 : 0;
+        overlay.thumb.transform = open ? away : (vinylClosing ? vinylClosingTransform : full);
+        if (inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : 0;
         overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || open);
         SGRVinylLyricsDidChange(open, sg_info.viewIfLoaded);
         placeTitleRow(l);

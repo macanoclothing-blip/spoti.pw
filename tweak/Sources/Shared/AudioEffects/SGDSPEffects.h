@@ -61,8 +61,8 @@ void SGDSPCrossfeedRun(void *crossfeed, float *left, float *right, uint32_t fram
 // preset: an index of SGDSPReverbPresetCount. NULL when the unit could not be made.
 enum { SGDSPReverbPresetCount = 9 };
 typedef struct SGDSPReverb SGDSPReverb;
-SGDSPReverb *SGDSPReverbCreate(double rate, int preset);
-void SGDSPReverbSet(SGDSPReverb *reverb, int preset);
+SGDSPReverb *SGDSPReverbCreate(double rate, int preset, double amountPercent);
+void SGDSPReverbSet(SGDSPReverb *reverb, int preset, double amountPercent);
 void SGDSPReverbRun(void *reverb, float *left, float *right, uint32_t frames);
 void SGDSPReverbFree(void *reverb);
 

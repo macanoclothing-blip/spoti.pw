@@ -139,6 +139,7 @@ static NSArray<SGDSPEffect *> *effects(void) {
             fileRow(@"Script", SGDSPFileLiveprog),
         ]),
         effect(SGKeyDSPReverb, @"Reverb", @"A room around the music", @"building.columns", @[
+            slider(@"Amount", SGKeyDSPReverbAmount, @"%"),
             choice(@"Room", SGKeyDSPReverbPreset, SGDSPReverbPresetNames()),
         ]),
         effect(SGKeyDSPStereoWide, @"Stereo widening", @"A wider or narrower stereo image", @"arrow.left.and.right", @[

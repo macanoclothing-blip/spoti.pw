@@ -34,8 +34,8 @@ void SGDSPEngineSetOutput(SGDSPEngine *engine, double postGainDB, double limiter
 void SGDSPEngineSetCompander(SGDSPEngine *engine, bool on, double timeConstant, const double frequencies[7], const double gains[7]);
 void SGDSPEngineSetBassBoost(SGDSPEngine *engine, bool on, double maxGainDB);
 void SGDSPEngineSetEqualizer(SGDSPEngine *engine, bool on, const double frequencies[15], const double gains[15]);
-// preset: an index of SGDSPReverbPresetCount.
-void SGDSPEngineSetReverb(SGDSPEngine *engine, bool on, int preset);
+// preset: an index of SGDSPReverbPresetCount; amount scales that room's wet mix from 0 to 100 percent.
+void SGDSPEngineSetReverb(SGDSPEngine *engine, bool on, int preset, double amountPercent);
 void SGDSPEngineSetStereoWide(SGDSPEngine *engine, bool on, double levelPercent);
 // preset: an index of SGDSPCrossfeedPresetCount, lightest first.
 void SGDSPEngineSetCrossfeed(SGDSPEngine *engine, bool on, int preset);

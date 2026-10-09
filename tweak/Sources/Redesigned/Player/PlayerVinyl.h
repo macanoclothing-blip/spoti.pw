@@ -26,6 +26,9 @@ SGModSection *SGRVinylSection(void);
 void SGRVinylInstallMiniDisc(UIView *face, UIImageView *cover);
 void SGRVinylRemoveMiniDisc(void);
 
+// Returns the thumbnail transform that carries the mini disc into the full-size disc on lyrics close.
+BOOL SGRVinylLyricsClosingTransform(UIView *thumbnail, CGAffineTransform *transform);
+
 // Called every display-link tick to keep the vinyl and lyrics thumbnail at the same rotation.
 void SGRVinylUpdateMiniDisc(CGFloat angle);
 

@@ -17,6 +17,7 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/Player/SpeedPitch.h"
+#import "Shared/AudioEffects/AudioEffects.h"
 #import "Player.h"
 
 // A sheet this soon after the ⋯'s tap is the player's.
@@ -399,6 +400,85 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
 }
 @end
 
+#pragma mark - Reverb's panel
+
+@interface SGRReverbPanel : UIViewController <UIPopoverPresentationControllerDelegate>
+@end
+
+@implementation SGRReverbPanel {
+    UISlider *_amount;
+    UILabel *_title, *_value, *_note;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    self.view.backgroundColor = UIColor.clearColor;
+
+    _title = [UILabel new];
+    _title.text = @"Reverb";
+    _title.textColor = SGRPrimary();
+    _title.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    [self.view addSubview:_title];
+
+    _value = [UILabel new];
+    _value.textColor = SGRSecondary();
+    _value.font = [UIFont monospacedDigitSystemFontOfSize:13 weight:UIFontWeightMedium];
+    _value.textAlignment = NSTextAlignmentRight;
+    [self.view addSubview:_value];
+
+    _amount = [UISlider new];
+    _amount.minimumValue = 0;
+    _amount.maximumValue = 100;
+    _amount.minimumTrackTintColor = SGRPrimary();
+    _amount.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.22];
+    BOOL enabled = SGDSPSwitch(SGKeyDSP) && SGDSPSwitch(SGKeyDSPReverb);
+    _amount.value = enabled ? (float)SGDSPNumber(SGKeyDSPReverbAmount) : 0;
+    [_amount addTarget:self action:@selector(amountChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.view addSubview:_amount];
+    [self updateValue];
+
+    _note = [UILabel new];
+    _note.text = @"Adjust the room effect; moving above zero enables Audio Effects.";
+    _note.textColor = SGRSecondary();
+    _note.font = [UIFont systemFontOfSize:11];
+    _note.numberOfLines = 2;
+    [self.view addSubview:_note];
+    self.preferredContentSize = CGSizeMake(kPanelWidth, 112);
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
+    _title.frame = CGRectMake(CGRectGetMinX(safe) + 12, CGRectGetMinY(safe) + 10, 120, 24);
+    _value.frame = CGRectMake(CGRectGetMaxX(safe) - 64, CGRectGetMinY(safe) + 10, 52, 24);
+    _amount.frame = CGRectMake(CGRectGetMinX(safe) + 10, CGRectGetMinY(safe) + 38, CGRectGetWidth(safe) - 20, 28);
+    _note.frame = CGRectMake(CGRectGetMinX(safe) + 12, CGRectGetMinY(safe) + 70, CGRectGetWidth(safe) - 24, 32);
+}
+
+- (void)updateValue {
+    _value.text = [NSString stringWithFormat:@"%.0f%%", _amount.value];
+}
+
+- (void)amountChanged:(UISlider *)slider {
+    double amount = round(slider.value);
+    slider.value = (float)amount;
+    if (amount > 0) {
+        SGDSPSetNumber(SGKeyDSPReverbAmount, amount);
+        SGDSPSetSwitch(SGKeyDSPReverb, YES);
+        if (!SGDSPSwitch(SGKeyDSP)) SGDSPSetSwitch(SGKeyDSP, YES);
+    } else {
+        SGDSPSetNumber(SGKeyDSPReverbAmount, 0);
+        SGDSPSetSwitch(SGKeyDSPReverb, NO);
+    }
+    [self updateValue];
+}
+
+- (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller traitCollection:(UITraitCollection *)traits {
+    return UIModalPresentationNone;
+}
+@end
+
 #pragma mark - the takeover of one sheet
 
 @interface SGRPlayerMenuTakeover : NSObject
@@ -662,6 +742,22 @@ static void openSpeedPitch(SGRPlayerMenuTakeover *t) {
     });
 }
 
+static void openReverb(SGRPlayerMenuTakeover *t) {
+    UIView *button = t.button;
+    UIViewController *player = t.player;
+    finish(t, @"Reverb opens its panel", ^{
+        if (!player || !button.window || player.presentedViewController) return;
+        SGRReverbPanel *panel = [SGRReverbPanel new];
+        panel.modalPresentationStyle = UIModalPresentationPopover;
+        UIPopoverPresentationController *popover = panel.popoverPresentationController;
+        popover.sourceView = button;
+        popover.sourceRect = button.bounds;
+        popover.permittedArrowDirections = UIPopoverArrowDirectionUp;
+        popover.delegate = panel;
+        [player presentViewController:panel animated:YES completion:nil];
+    });
+}
+
 #pragma mark building the menu
 
 static UIMenu *group(NSArray<UIMenuElement *> *children) {
@@ -692,6 +788,16 @@ static UIAction *speedAndPitchAction(SGRPlayerMenuTakeover *t) {
     return action;
 }
 
+static UIAction *reverbAction(SGRPlayerMenuTakeover *t) {
+    __weak SGRPlayerMenuTakeover *weak = t;
+    UIAction *action = [UIAction actionWithTitle:@"Reverb" image:symbol(@"waveform") identifier:nil handler:^(UIAction *sender) {
+        pick(weak, ^(SGRPlayerMenuTakeover *strong) { openReverb(strong); });
+    }];
+    action.subtitle = SGDSPSwitch(SGKeyDSP) && SGDSPSwitch(SGKeyDSPReverb)
+        ? [NSString stringWithFormat:@"%.0f%%", SGDSPNumber(SGKeyDSPReverbAmount)] : @"Off";
+    return action;
+}
+
 static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
     NSArray<SGRPlayerMenuSpotifyRow *> *rows = t.rows ?: @[];
     // Tiles in the Music app's order, Share last.
@@ -719,6 +825,7 @@ static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
         [tiles removeLastObject];
     }
     [main addObject:speedAndPitchAction(t)];
+    [main addObject:reverbAction(t)];
     if (more.count == 1) {
         [feedback addObject:more.firstObject];
     } else if (more.count) {

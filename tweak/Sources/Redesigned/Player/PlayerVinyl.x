@@ -56,6 +56,8 @@ static const NSTimeInterval kFastForwardHoldDuration = 0.38;
 static char kVinylResourceAnchor;
 static char kVinylOverlayKey;
 static char kCanvasHoldKey;
+static char kVinylProgressSliderKey;
+static char kVinylProgressStyledKey;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -378,21 +380,13 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     _well.frame = CGRectMake(wellX, wellY, wellWidth, wellHeight);
     _wellInner.frame = CGRectInset(_well.bounds, 3, 3);
     _wellGradient.frame = _wellInner.bounds;
-    if (_label && ([_label.text isEqualToString:@"PLAY"] || [_label.text isEqualToString:@"PAUSE"])) {
-        CGFloat iconHeight = MIN(17, wellHeight * 0.42);
-        _icon.hidden = NO;
-        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + 3, iconHeight, iconHeight);
-        _label.frame = CGRectMake(2, iconHeight + 3, wellWidth - 4, wellHeight - iconHeight - 4);
-    } else if (_label) {
-        CGFloat iconHeight = MIN(15, wellHeight * 0.36);
-        _icon.hidden = NO;
-        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + 3, iconHeight, iconHeight);
-        _label.frame = CGRectMake(2, iconHeight + 2, wellWidth - 4, wellHeight - iconHeight - 3);
-    } else {
-        CGFloat iconHeight = MIN(22, MAX(16, wellHeight - 8));
-        _icon.hidden = NO;
-        _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2, wellY + (wellHeight - iconHeight) / 2,
-                                 iconHeight, iconHeight);
+    CGFloat iconHeight = MIN(_iconSize, MAX(16, wellHeight - 12));
+    _icon.hidden = NO;
+    _icon.frame = CGRectMake(wellX + (wellWidth - iconHeight) / 2,
+                             wellY + (wellHeight - iconHeight) / 2,
+                             iconHeight, iconHeight);
+    if (_label) {
+        _label.hidden = YES;
     }
 }
 
@@ -406,10 +400,13 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setAlbumArt:(UIImage *)image tintColor:(UIColor *)tintColor;
 - (void)playerStateDidChange:(SPTPlayerState *)state;
 - (void)setLyricsPresentation:(BOOL)open informationUnit:(UIView *)informationUnit;
+- (BOOL)lyricsClosingTransformForThumbnail:(UIView *)thumbnail transform:(CGAffineTransform *)transform;
+- (void)setLyricsDiscVisible:(BOOL)visible;
 - (void)setLyricsControlsAlpha:(CGFloat)alpha;
 - (BOOL)handlesLyricsControlAtPoint:(CGPoint)point;
 - (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer;
 - (void)_applyDiscRotation;
+- (BOOL)handlesVinylControlAtPoint:(CGPoint)point;
 // Returns the current disc rotation angle (used by the mini disc in lyrics).
 @property (nonatomic, readonly) CGFloat discAngle;
 @property (nonatomic, readonly) UIImage *currentArtwork;
@@ -519,7 +516,7 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     [self addSubview:_btnPlay];
 
     // LYRICS — pill with music-note glyph
-    _btnLyrics = [[SGRVinylPillButton alloc] initWithSymbol:@"music.note" iconSize:18 label:@"LYRICS"];
+    _btnLyrics = [[SGRVinylPillButton alloc] initWithSymbol:@"quote.bubble" iconSize:20 label:@"LYRICS"];
     [self addSubview:_btnLyrics];
 
     // ← (prev)
@@ -722,6 +719,15 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     return NO;
 }
 
+- (BOOL)handlesVinylControlAtPoint:(CGPoint)point {
+    if (SGRPlayerLyricsOpen()) return [self handlesLyricsControlAtPoint:point];
+    for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
+        if (button.alpha > 0.01 && CGRectContainsPoint(button.frame, point)) return YES;
+    }
+    CGFloat dx = point.x - _discCenter.x, dy = point.y - _discCenter.y;
+    return dx * dx + dy * dy <= _discR * _discR;
+}
+
 - (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer {
     _fastForwardPress = recognizer;
 }
@@ -732,13 +738,28 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         informationUnit.userInteractionEnabled = open;
         informationUnit.accessibilityElementsHidden = !open;
     }
-    _disc.opacity = open ? 0 : 1;
+    _disc.opacity = 0;
     _arm.opacity = open ? 0 : 1;
     _titleLabel.alpha = open ? 0 : 1;
     _artistLabel.alpha = open ? 0 : 1;
     [self setLyricsControlsAlpha:1];
     if (open) [self _endScratchResumingPlayback:YES];
     if (open) [self _restorePlaybackSpeed];
+}
+
+- (BOOL)lyricsClosingTransformForThumbnail:(UIView *)thumbnail transform:(CGAffineTransform *)transform {
+    if (!thumbnail.superview || thumbnail.bounds.size.width <= 0) return NO;
+    CGFloat diameter = CGRectGetWidth(_disc.bounds);
+    if (diameter <= 0) return NO;
+    CGPoint center = [self convertPoint:_disc.position toView:thumbnail.superview];
+    CGFloat scale = diameter / thumbnail.bounds.size.width;
+    *transform = CGAffineTransformMake(scale, 0, 0, scale,
+                                       center.x - thumbnail.center.x, center.y - thumbnail.center.y);
+    return YES;
+}
+
+- (void)setLyricsDiscVisible:(BOOL)visible {
+    _disc.opacity = visible ? 1 : 0;
 }
 
 - (void)_overlayTapped:(UITapGestureRecognizer *)tap {
@@ -932,12 +953,23 @@ void SGRVinylLyricsDidChange(BOOL open, UIView *informationUnit) {
     [overlay setLyricsPresentation:open informationUnit:informationUnit];
 }
 
+BOOL SGRVinylLyricsClosingTransform(UIView *thumbnail, CGAffineTransform *transform) {
+    if (!vinylOn() || !thumbnail || !transform) return NO;
+    SGRVinylOverlayView *overlay = (SGRVinylOverlayView *)sg_vinylOverlay;
+    return overlay && [overlay lyricsClosingTransformForThumbnail:thumbnail transform:transform];
+}
+
 void SGRVinylLyricsControlsDidChange(CGFloat alpha) {
     [(SGRVinylOverlayView *)sg_vinylOverlay setLyricsControlsAlpha:alpha];
 }
 
 void SGRVinylLyricsDidSettleClosed(void) {
     if (!vinylOn()) return;
+    SGRVinylOverlayView *overlay = (SGRVinylOverlayView *)sg_vinylOverlay;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [overlay setLyricsDiscVisible:YES];
+    [CATransaction commit];
     UIView *coverList = SGRPlayerCoverList();
     coverList.alpha = 0;
     coverList.userInteractionEnabled = NO;
@@ -1101,23 +1133,98 @@ static void placeOverlay(UIView *plane) {
         hold.minimumPressDuration = kFastForwardHoldDuration;
         hold.cancelsTouchesInView = NO;
         hold.delegate = overlay;
-        [plane addGestureRecognizer:hold];
+        [(plane.superview ?: plane) addGestureRecognizer:hold];
         objc_setAssociatedObject(plane, &kCanvasHoldKey, hold, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [overlay setCanvasHoldRecognizer:hold];
 }
 
-// In lyrics mode this full-screen background plane must yield hit-testing to the lyrics, seek bar and Sing control.
+// The background plane fills the player; it must yield touches outside Vinyl's own controls to the player's
+// header, seek bar and lyrics surface in both normal and lyrics modes.
 %hook UIView
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     SGRVinylOverlayView *overlay = objc_getAssociatedObject(self, &kVinylOverlayKey);
-    if (overlay && vinylOn() && SGRPlayerLyricsOpen()) {
+    if (overlay && vinylOn()) {
         CGPoint overlayPoint = [overlay convertPoint:point fromView:self];
-        return [overlay handlesLyricsControlAtPoint:overlayPoint] ? overlay : nil;
+        return [overlay handlesVinylControlAtPoint:overlayPoint] ? overlay : nil;
     }
     return %orig;
 }
 %end
+
+static UIImage *makeRetroProgressTrack(BOOL filled) {
+    CGSize size = CGSizeMake(12, 10);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGRect rect = CGRectInset((CGRect){CGPointZero, size}, 1, 1);
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:4];
+        UIColor *top = filled ? [UIColor colorWithWhite:0.96 alpha:1] : [UIColor colorWithWhite:0.28 alpha:1];
+        UIColor *bottom = filled ? [UIColor colorWithWhite:0.72 alpha:1] : [UIColor colorWithWhite:0.08 alpha:1];
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+        NSArray *colors = @[(id)top.CGColor, (id)bottom.CGColor];
+        CGGradientRef gradient = CGGradientCreateWithColors(space, (__bridge CFArrayRef)colors, NULL);
+        CGContextRef cg = context.CGContext;
+        CGContextSaveGState(cg);
+        [path addClip];
+        CGContextDrawLinearGradient(cg, gradient, CGPointMake(0, CGRectGetMaxY(rect)),
+                                    CGPointMake(0, CGRectGetMinY(rect)), 0);
+        CGContextRestoreGState(cg);
+        CGContextSetStrokeColorWithColor(cg, [UIColor colorWithWhite:0.58 alpha:0.9].CGColor);
+        CGContextSetLineWidth(cg, 1);
+        [path stroke];
+        CGGradientRelease(gradient);
+        CGColorSpaceRelease(space);
+    }];
+    return [image resizableImageWithCapInsets:UIEdgeInsetsMake(0, 5, 0, 5) resizingMode:UIImageResizingModeStretch];
+}
+
+static UIImage *retroProgressTrack(BOOL filled) {
+    static UIImage *filledImage, *emptyImage;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        filledImage = makeRetroProgressTrack(YES);
+        emptyImage = makeRetroProgressTrack(NO);
+    });
+    return filled ? filledImage : emptyImage;
+}
+
+static UIImage *retroProgressThumb(void) {
+    static UIImage *image;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        CGSize size = CGSizeMake(24, 24);
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+        image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            CGContextRef cg = context.CGContext;
+            CGRect outer = CGRectMake(1, 1, 22, 22);
+            CGContextSetShadowWithColor(cg, CGSizeMake(0, 2), 2, UIColor.blackColor.CGColor);
+            [[UIColor colorWithWhite:0.04 alpha:1] setFill];
+            [[UIBezierPath bezierPathWithOvalInRect:outer] fill];
+            CGContextSetShadowWithColor(cg, CGSizeZero, 0, NULL);
+            [[UIColor colorWithWhite:0.6 alpha:1] setStroke];
+            UIBezierPath *rim = [UIBezierPath bezierPathWithOvalInRect:CGRectInset(outer, 1, 1)];
+            rim.lineWidth = 1.5;
+            [rim stroke];
+            [[UIColor colorWithWhite:0.94 alpha:1] setFill];
+            [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(8, 8, 8, 8)] fill];
+        }];
+    });
+    return image;
+}
+
+static void styleVinylProgress(UIViewController *unit) {
+    UIView *host = unit.viewIfLoaded;
+    UISlider *slider = (UISlider *)SGRFindByIdentifier(host, @"SPTNowPlayingSliderV2", &kVinylProgressSliderKey);
+    if (![slider isKindOfClass:UISlider.class] || [objc_getAssociatedObject(slider, &kVinylProgressStyledKey) boolValue]) return;
+    UIImage *filled = retroProgressTrack(YES), *empty = retroProgressTrack(NO), *thumb = retroProgressThumb();
+    [slider setMinimumTrackImage:filled forState:UIControlStateNormal];
+    [slider setMinimumTrackImage:filled forState:UIControlStateHighlighted];
+    [slider setMaximumTrackImage:empty forState:UIControlStateNormal];
+    [slider setMaximumTrackImage:empty forState:UIControlStateHighlighted];
+    [slider setThumbImage:thumb forState:UIControlStateNormal];
+    [slider setThumbImage:thumb forState:UIControlStateHighlighted];
+    objc_setAssociatedObject(slider, &kVinylProgressStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
 // ─────────────────────────────────────────────────────
 #pragma mark - unit hiding
@@ -1198,6 +1305,20 @@ static void hideView(UIView *v) {
 }
 %end
 
+%hook _TtC20NowPlaying_ModesImpl19DurationElementUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (vinylOn()) styleVinylProgress((UIViewController *)self);
+}
+%end
+
+%hook _TtC32ReinventFree_ReinventFreeNpvImpl20DurationElementsUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (vinylOn()) styleVinylProgress((UIViewController *)self);
+}
+%end
+
 %hook _TtC20NowPlaying_ModesImpl18FooterElementsUnit
 - (void)viewDidLayoutSubviews {
     %orig;
@@ -1237,6 +1358,8 @@ SGModSection *SGRVinylSection(void) {
         @"_TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl40ReinventFreePlaybackControlsElementsUnit",
         @"_TtC20NowPlaying_ModesImpl23InformationElementsUnit",
+        @"_TtC20NowPlaying_ModesImpl19DurationElementUnit",
+        @"_TtC32ReinventFree_ReinventFreeNpvImpl20DurationElementsUnit",
         @"_TtC20NowPlaying_ModesImpl18FooterElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl26ReinventFreeFooterElementUnit",
     ]);
