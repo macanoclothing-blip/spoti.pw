@@ -121,6 +121,11 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)_buildBase {
     _bodyLayer = [CALayer layer];
     _bodyLayer.masksToBounds = YES;
+    UIImage *discTexture = vinylDiscTexture();
+    if (discTexture) {
+        _bodyLayer.contents = (id)discTexture.CGImage;
+        _bodyLayer.contentsGravity = kCAGravityResizeAspectFill;
+    }
     [self addSublayer:_bodyLayer];
 
     _shineLayer = [CAGradientLayer layer];
@@ -257,6 +262,11 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     _mount.backgroundColor = [UIColor colorWithWhite:0.22 alpha:0.93].CGColor;
     _mount.borderColor     = [UIColor colorWithWhite:0.50 alpha:0.45].CGColor;
     _mount.borderWidth     = 1.0;
+    UIImage *tonearmTexture = vinylTonearmTexture();
+    if (tonearmTexture) {
+        _mount.contents = (id)tonearmTexture.CGImage;
+        _mount.contentsGravity = kCAGravityResizeAspectFill;
+    }
     [self addSublayer:_mount];
 
     _rod = [CALayer layer];
