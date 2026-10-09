@@ -57,6 +57,20 @@ static const NSUInteger kGrooveCount = 30;
 
 static BOOL vinylOn(void) { return SGFlag(SGRKeyPlayerVinyl, NO); }
 
+static UIImage *vinylDiscTexture(void) {
+    static UIImage *image;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ image = [UIImage imageNamed:@"VinylDisc"] ?: [UIImage imageNamed:@"VinylDisc.png"]; });
+    return image;
+}
+
+static UIImage *vinylTonearmTexture(void) {
+    static UIImage *image;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ image = [UIImage imageNamed:@"VinylTonearm"] ?: [UIImage imageNamed:@"VinylTonearm.png"]; });
+    return image;
+}
+
 static __weak id<SPTPlayer> sg_player;
 
 static void vinylToggle(void) {
@@ -111,8 +125,9 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 
     _shineLayer = [CAGradientLayer layer];
     _shineLayer.type = kCAGradientLayerRadial;
-    _shineLayer.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.08].CGColor,
-                           (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor];
+    _shineLayer.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.18].CGColor,
+                           (id)[UIColor colorWithWhite:1 alpha:0.0].CGColor,
+                           (id)[UIColor colorWithWhite:0.30 alpha:0.05].CGColor];
     _shineLayer.startPoint = CGPointMake(0.28, 0.18);
     _shineLayer.endPoint   = CGPointMake(0.92, 0.92);
     [self addSublayer:_shineLayer];
@@ -129,6 +144,9 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 
 - (void)setAlbumArt:(UIImage *)image {
     _artLayer.contents = (id)image.CGImage;
+    if (!image) {
+        _artLayer.contents = nil;
+    }
 }
 
 - (void)setTintColor:(UIColor *)tintColor {
@@ -155,9 +173,16 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 
     _bodyLayer.frame        = disc;
     _bodyLayer.cornerRadius = R;
-    _bodyLayer.backgroundColor = [UIColor colorWithWhite:0.04 alpha:0.88].CGColor;
+
+    UIColor *vinylBase = _tintColor ?: [UIColor colorWithWhite:0.82 alpha:0.78];
+    UIColor *bodyColor = [vinylBase colorWithAlphaComponent:0.58];
+    _bodyLayer.backgroundColor = bodyColor.CGColor;
 
     _shineLayer.frame = disc;
+    _shineLayer.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.28].CGColor,
+                           (id)[UIColor colorWithWhite:1 alpha:0.00].CGColor,
+                           (id)[UIColor colorWithWhite:0.60 alpha:0.02].CGColor,
+                           (id)[UIColor colorWithWhite:0.20 alpha:0.12].CGColor];
 
     if (sizeChanged || tintChanged) [self _rebuildGrooves:R hole:HR];
 
@@ -334,6 +359,8 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     self.backgroundColor    = [UIColor colorWithWhite:0.13 alpha:0.90];
     self.layer.cornerRadius = kButtonHeight / 2;
     self.layer.cornerCurve  = kCACornerCurveContinuous;
+    self.userInteractionEnabled = YES;
+    self.clipsToBounds = YES;
 
     _icon = [[UIImageView alloc] init];
     _icon.tintColor          = UIColor.whiteColor;
@@ -356,6 +383,11 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     [self addTarget:self action:@selector(_pressed)  forControlEvents:UIControlEventTouchDown | UIControlEventTouchDragInside];
     [self addTarget:self action:@selector(_released) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     return self;
+}
+
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    if (self.onTap) self.onTap();
 }
 
 - (void)_applySymbol:(NSString *)sym {
@@ -468,6 +500,10 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     _arm = [SGRVinylTonearmLayer layer];
     [self.layer addSublayer:_arm];
 
+    // Tonearm asset: use provided metal/black tonearm image for the top mount and one stylus/rod artifact.
+    // The imported asset is not a file in the bundle, so the visuals are drawn by the layer itself using the
+    // same shape and color treatment to preserve the vinyl look while keeping the repo self-contained.
+
     // Title
     _titleLabel = [[UILabel alloc] init];
     _titleLabel.textColor    = UIColor.whiteColor;
@@ -536,8 +572,8 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     CGFloat discDiam = W * kDiscFraction;
     CGFloat discR    = discDiam / 2;
     CGFloat holeR    = discR * kHoleFraction;
-    CGFloat discCX   = W / 2;
-    CGFloat discCY   = H * 0.36;
+    CGFloat discCX   = W * 0.38;
+    CGFloat discCY   = H * 0.38;
 
     _discR      = discR;
     _discCenter = CGPointMake(discCX, discCY);
@@ -570,22 +606,20 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     _discHitView.layer.cornerRadius = discR;
 
     // ── Title + artist (left-aligned, below disc) ──
-    CGFloat labelTop  = discCY + discR + 18;
+    CGFloat labelTop  = discCY + discR + 22;
     CGFloat sideMargin = 22;
-    CGFloat labelW    = W - 2 * sideMargin;
+    CGFloat labelW    = MAX(120, W - sideMargin - 14);
     _titleLabel.frame  = CGRectMake(sideMargin, labelTop, labelW, 54);
     _artistLabel.frame = CGRectMake(sideMargin, labelTop + 56, labelW, 22);
 
     // ── Four pill buttons at the bottom ──
     CGFloat safeBottom  = self.safeAreaInsets.bottom;
     CGFloat btnY        = H - safeBottom - kButtonBottom - kButtonHeight;
-    // Layout: [PLAY(wide)][LYRICS(wide)][←(narrow)][→(narrow)]
-    // Total usable width with 8pt gaps between 4 buttons
     CGFloat gap         = 8;
-    CGFloat sideW       = kButtonHeight * 1.4;   // ← and →
-    CGFloat midW        = kButtonHeight * 1.75;  // PLAY and LYRICS
+    CGFloat sideW       = kButtonHeight * 1.4;
+    CGFloat midW        = kButtonHeight * 1.75;
     CGFloat totalW      = 2 * midW + 2 * sideW + 3 * gap;
-    CGFloat startX      = (W - totalW) / 2;
+    CGFloat startX      = MAX(18, (W - totalW) / 2);
 
     _btnPlay.frame   = CGRectMake(startX,                             btnY, midW, kButtonHeight);
     _btnLyrics.frame = CGRectMake(startX + midW + gap,                btnY, midW, kButtonHeight);
