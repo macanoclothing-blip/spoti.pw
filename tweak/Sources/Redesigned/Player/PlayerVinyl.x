@@ -79,7 +79,6 @@ static NSString *vinylResourcePath(NSString *name, NSString *extension) {
     for (NSString *candidate in appPaths) {
         if ([NSFileManager.defaultManager fileExistsAtPath:candidate]) return candidate;
     }
-    _isPlaying = NO;
 
     Dl_info info = {0};
     if (dladdr(&kVinylResourceAnchor, &info) && info.dli_fname) {
@@ -96,14 +95,6 @@ static NSString *vinylResourcePath(NSString *name, NSString *extension) {
     }
     SGLog(@"redesign player: missing vinyl resource %@", filename);
     return nil;
-}
-
-- (void)_applyDiscRotation {
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    _disc.transform = CATransform3DMakeRotation(_discAngle, 0, 0, 1);
-    [CATransaction commit];
-    if (SGRPlayerLyricsOpen()) SGRVinylUpdateMiniDisc(_discAngle);
 }
 
 static UIImage *vinylResource(NSString *name) {
@@ -418,6 +409,7 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setLyricsControlsAlpha:(CGFloat)alpha;
 - (BOOL)handlesLyricsControlAtPoint:(CGPoint)point;
 - (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer;
+- (void)_applyDiscRotation;
 // Returns the current disc rotation angle (used by the mini disc in lyrics).
 @property (nonatomic, readonly) CGFloat discAngle;
 @property (nonatomic, readonly) UIImage *currentArtwork;
@@ -858,6 +850,14 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 }
 
 // ── Display link ──
+
+- (void)_applyDiscRotation {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _disc.transform = CATransform3DMakeRotation(_discAngle, 0, 0, 1);
+    [CATransaction commit];
+    if (SGRPlayerLyricsOpen()) SGRVinylUpdateMiniDisc(_discAngle);
+}
 
 - (void)_tick:(CADisplayLink *)link {
     CFTimeInterval now = link.timestamp;
