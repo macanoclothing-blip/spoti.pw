@@ -240,8 +240,9 @@ Redesigned:
                   lyrics' bottom trailing corner, opposite their glass button, and goes down with the lines when the
                   controls go; while it is open, preparing or explaining itself the controls stay, and a touch on it
                   does not bring them back. What Sing is doing shows on the button, not in words: a ring turning
-                  round the microphone while it prepares or recovers, a white fill up to the vocal level while it is
-                  on, glass when it is off and a dimmed microphone when it has stopped
+                  round the microphone while it prepares or recovers, a white fill for the mix selector while it
+                  is on (instrumental at the bottom, original mix in the middle, vocals at the top), glass when
+                  it is off and a dimmed microphone when it has stopped
     Lyrics/       the full screen lyrics page on glass with Apple Music style lyrics over it, always on (SGRKaraokeView,
                   which the player shows in itself too, Player/PlayerLyrics.x, where after four seconds untouched while
                   the song plays the controls fade out and the lines take the whole player, until a touch or a pause

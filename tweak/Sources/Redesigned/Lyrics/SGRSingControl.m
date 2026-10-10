@@ -91,8 +91,8 @@ static SGRSingLook lookOf(SGSingState state) {
     };
 }
 
-// A vertical, thumb-free slider inside the glass capsule. Direct touch and VoiceOver both send
-// the same value-changed event; UISlider's horizontal gesture recognizer is not involved.
+// A vertical, thumb-free mix selector inside the glass capsule. Direct touch and VoiceOver both
+// send the same value-changed event; UISlider's horizontal gesture recognizer is not involved.
 @interface SGRVocalSlider : UIControl
 @property (nonatomic) float value;
 @end
@@ -106,7 +106,7 @@ static SGRSingLook lookOf(SGSingState state) {
 - (void)setValue:(float)value {
     _value = SGSingClampLevel(value);
     // Rounded end labels must mean the actual endpoint, including subpixel touch coordinates.
-    if (_value < SGSingMinimumVocalLevel + 0.005f) _value = SGSingMinimumVocalLevel;
+    if (_value < SGSingMinimumLevel + 0.005f) _value = SGSingMinimumLevel;
     if (_value > 0.995f) _value = 1;
 }
 - (void)accessibilityIncrement {
@@ -249,9 +249,9 @@ static SGRSingLook lookOf(SGSingState state) {
     _fill.userInteractionEnabled = NO;
     _fill.backgroundColor = [UIColor colorWithWhite:1 alpha:kFillWhite];
     _slider = [SGRVocalSlider new];
-    _slider.accessibilityLabel = @"Vocal volume";
-    _slider.accessibilityHint = @"Original vocals at the top, 20 percent at the bottom";
-    _slider.accessibilityIdentifier = @"sing.vocalLevel";
+    _slider.accessibilityLabel = @"Sing mix";
+    _slider.accessibilityHint = @"Vocals only at the top, original mix in the middle, instrumental at the bottom";
+    _slider.accessibilityIdentifier = @"sing.mixLevel";
     [_slider addTarget:self action:@selector(changed) forControlEvents:UIControlEventValueChanged];
     // The capsule draws on and off itself: a custom button, so UIKit adds no highlight or selected look.
     _button = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -313,17 +313,20 @@ static SGRSingLook lookOf(SGSingState state) {
 - (void)describe {
     SGSingState state = _shown;
     SGRSingLook look = lookOf(state);
-    BOOL original = _slider.value >= 1;
-    _slider.accessibilityValue = original ? @"Original" : [NSString stringWithFormat:@"%.0f percent", _slider.value * 100];
+    BOOL vocalsOnly = _slider.value >= 0.995f;
+    BOOL original = fabsf(_slider.value - SGSingOriginalMixLevel) < 0.005f;
+    _slider.accessibilityValue = vocalsOnly ? @"Vocals only" : original ? @"Original mix"
+        : _slider.value < SGSingOriginalMixLevel ? @"Instrumental and original mix"
+        : @"Original mix and vocals";
     _button.accessibilityLabel = @"Sing";
     _button.accessibilityValue = state == SGSingPreparing ? @"Preparing Sing" : state == SGSingRecovering ? @"Restoring Sing"
         : state == SGSingDraining ? @"Turning Sing off" : state == SGSingFailed ? @"Sing stopped"
-        : look.on ? (original ? @"On, original vocals" : [NSString stringWithFormat:@"On, %.0f percent vocals", _slider.value * 100])
+        : look.on ? (vocalsOnly ? @"On, vocals only" : original ? @"On, original mix" : @"On, Sing mix")
         : @"Off";
     _button.accessibilityHint = state == SGSingPreparing ? @"Tap to cancel." : state == SGSingDraining ? @"Tap to turn Sing back on."
         : state == SGSingFailed ? @"Tap to hear why Sing stopped."
-        : look.on ? (_expanded ? @"Tap to turn Sing off. Drag to adjust the vocals." : @"Tap for the vocal volume.")
-        : @"Turns the song's vocals down on this iPhone.";
+        : look.on ? (_expanded ? @"Tap to turn Sing off. Drag to adjust the mix." : @"Tap for the Sing mix.")
+        : @"Balances the instrumental, original mix and vocals on this iPhone.";
     _button.accessibilityTraits = UIAccessibilityTraitButton | (look.on ? UIAccessibilityTraitSelected : 0);
     // Off from wherever the button is, without opening the capsule first.
     __weak typeof(self) weak = self;
@@ -523,7 +526,7 @@ static SGRSingLook lookOf(SGSingState state) {
         // Stationary page coordinates also keep capsule expansion from changing the value.
         CGFloat travel = [gesture locationInView:self.superview].y - _dragStart.y;
         _stretch = travel / (kSide + fabs(travel));
-        _slider.value = _dragLevel - travel * (1 - SGSingMinimumVocalLevel) / 100;
+        _slider.value = _dragLevel - travel * (1 - SGSingMinimumLevel) / 100;
         [self changed];
     }
     if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled) {

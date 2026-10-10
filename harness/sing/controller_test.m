@@ -87,9 +87,9 @@ int main(void) { @autoreleasepool {
     assert(!SGSingAvailable());
     SGSingConfigure(YES);
     assert(SGSingAvailable() && SGSingCurrentState() == SGSingIdle);
-    assert(SGSingVocalLevel() == .2f && SGSingReducedLevel() == .2f);
-    SGSingSetVocalLevel(-1); assert(SGSingVocalLevel() == .2f);
-    SGSingSetVocalLevel(0); assert(SGSingVocalLevel() == .2f);
+    assert(SGSingVocalLevel() == 0 && SGSingReducedLevel() == 0);
+    SGSingSetVocalLevel(-1); assert(SGSingVocalLevel() == 0);
+    SGSingSetVocalLevel(0); assert(SGSingVocalLevel() == 0);
 
     heat = NSProcessInfoThermalStateSerious;
     assert(NSProcessInfo.processInfo.thermalState == heat);

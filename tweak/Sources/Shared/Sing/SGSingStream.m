@@ -37,7 +37,7 @@ SGSingStream *SGSingStreamCreate(SGAudioStamp origin, uint32_t window, uint32_t 
     atomic_store(&s->modelReady, true);
     // Start with a full window of ready vocals (two completed hops). The first inference
     // duration cannot predict the next worker scheduling delay. Less overlap reduces repeated
-    // inference work; the reserve still covers a full future hop before vocal reduction begins.
+    // inference work; the reserve still covers a full future hop before the selected mix is applied.
     s->timeline = SGSingTimelineCreate(SGSingTimelineFrames, window);
     s->input = SGAudioRingCreate(kInputPackets, SGSingStreamPacketFrames, 2);
     s->output = SGAudioRingCreate(kOutputHops, hop, 2);

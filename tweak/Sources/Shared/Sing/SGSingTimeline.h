@@ -17,7 +17,7 @@ typedef struct SGSingTimeline SGSingTimeline;
 SGSingTimeline *SGSingTimelineCreate(uint32_t capacityFrames, uint32_t reserveFrames);
 void SGSingTimelineDestroy(SGSingTimeline *timeline); // both endpoints stopped
 // Begin also invalidates all retained audio. The caller must change generation before a seek.
-void SGSingTimelineBegin(SGSingTimeline *timeline, SGAudioStamp origin, float vocalLevel);
+void SGSingTimelineBegin(SGSingTimeline *timeline, SGAudioStamp origin, float mixLevel);
 void SGSingTimelineSetLevel(SGSingTimeline *timeline, float level);
 void SGSingTimelineBypass(SGSingTimeline *timeline);
 SGSingTimelineState SGSingTimelineGetState(const SGSingTimeline *timeline);
@@ -34,6 +34,6 @@ bool SGSingTimelineVocals(SGSingTimeline *timeline, SGAudioStamp stamp, const fl
 // Preparing emits available original PCM immediately and advances its audible clock.
 // Draining can return a prefix: pull the remaining frames directly only AFTER this prefix.
 // Active underrun ramps to aligned dry audio and keeps capturing while the worker catches up.
-// Recovery never rewinds/rebuffers and requires a full reserve before reducing vocals again.
+// Recovery never rewinds/rebuffers and requires a full reserve before applying the selected mix again.
 // Its eight-second budget resets only after eight uninterrupted seconds of active playback.
 uint32_t SGSingTimelineRead(SGSingTimeline *timeline, float *output, uint32_t frames);

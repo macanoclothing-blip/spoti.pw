@@ -1,5 +1,6 @@
 // Production streaming regression with controlled source availability and inference deadlines.
 #include "Shared/Sing/SGSingStream.h"
+#include "Shared/Sing/SGSingLevel.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -31,7 +32,9 @@ static unsigned scenario(bool ahead, bool stall, bool cancelEarly, float level, 
     uint64_t clock=0, due=0, activatedAt=0, recoveredAt=0;
     unsigned jobs=0;
     bool active=false, recovering=false, restored=false, cancelled=false;
-    float factor=1 - .4f*(1-level*level);
+    float factor=level <= SGSingOriginalMixLevel
+        ? 1 - .4f*(1 - 2*level)
+        : 1 + (2*level - 1)*(.4f - 1);
     const unsigned totalSeconds = inferenceMilliseconds >= 1000 ? 140 : 50;
     const unsigned cancelSeconds = cancelEarly ? 1 : totalSeconds - 10;
     for (unsigned tick=0; clock < rate*totalSeconds; tick++) {
@@ -73,7 +76,7 @@ static unsigned scenario(bool ahead, bool stall, bool cancelEarly, float level, 
         for (unsigned n=0;n<frames;n++) {
             float dry=sampleAt(audible+n), result=output[n*2];
             assert(isfinite(result) && fabsf(output[n*2+1]+.7f*result)<1e-6);
-            if (!active || level==1 || (cancelled && clock > (rate*(cancelSeconds+1))))
+            if (!active || (cancelled && clock > (rate*(cancelSeconds+1))))
                 assert(result==dry);
             else if (fabsf(dry)>1e-6) assert(result/dry>=factor-1e-5 && result/dry<=1+1e-5);
         }
@@ -99,7 +102,7 @@ static unsigned scenario(bool ahead, bool stall, bool cancelEarly, float level, 
     if (ahead && !cancelEarly) assert(active && activatedAt<rate*35 && (!stall || (recovering && restored)));
     else assert(!active);
     SGSingStreamDestroy(stream);
-    printf("ahead=%d stall=%d early-cancel=%d level=%.2f first reduced=%.3fs recovered=%.3fs: every original sample preserved\n",
+    printf("ahead=%d stall=%d early-cancel=%d level=%.2f first mixed=%.3fs recovered=%.3fs: every original sample preserved\n",
            ahead,stall,cancelEarly,level,(double)activatedAt/rate,(double)recoveredAt/rate);
     return jobs;
 }

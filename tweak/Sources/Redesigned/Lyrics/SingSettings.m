@@ -17,7 +17,7 @@ static NSString *aboutSize(void) {
 }
 
 static NSString *footer(void) {
-    return [NSString stringWithFormat:@"Sing turns the vocals of the song playing down to sing over, from the microphone in its lyrics. "
+    return [NSString stringWithFormat:@"Sing changes the song mix using a voice separation model. In the lyrics, its slider moves from instrumental at the bottom, through the original mix in the middle, to vocals only at the top. "
             "It works on iOS 27 only. Its voice model, %@, is downloaded once and runs only on this iPhone. "
             "The switch and the download apply straight away.", aboutSize()];
 }

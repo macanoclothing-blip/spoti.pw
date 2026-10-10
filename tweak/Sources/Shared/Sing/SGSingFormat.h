@@ -8,7 +8,7 @@ enum {
     SGSingWindowFrames = 88200,                        // two seconds, one run of the model
     SGSingHopFrames = SGSingWindowFrames * 3 / 4,      // 66150: a window every 1.5 s, half a second overlapping
     // 120 ms: what is left in Spotify's own queue when reading ahead, and the reserve of ready vocals the
-    // mix keeps so that its ramp back to the original (SGSingMixerBypass) always has vocals to ramp over.
+    // mix keeps so that its ramp back to the original mix (SGSingMixerBypass) always has vocals to ramp over.
     SGSingReserveFrames = SGSingSampleRate * 120 / 1000,
     SGSingTimelineFrames = SGSingSampleRate * 8,       // eight seconds of original kept for the worker
 };

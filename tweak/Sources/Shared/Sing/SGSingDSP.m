@@ -3,32 +3,34 @@
 
 static const double kLevelRampSeconds = 0.030, kBypassRampSeconds = 0.120;
 
-static float gain(float level) { float value = SGSingClampLevel(level); return value * value; }
 static void ramp(SGSingMixer *m, float to, double seconds) {
-    m->targetGain = to;
+    m->targetLevel = to;
     m->remaining = (uint32_t)fmax(1, m->sampleRate * seconds);
-    m->step = (to - m->gain) / m->remaining;
+    m->step = (to - m->level) / m->remaining;
 }
 void SGSingMixerInit(SGSingMixer *m, double rate, float level) {
-    *m = (SGSingMixer){.gain = gain(level), .targetGain = gain(level),
+    float clamped = SGSingClampLevel(level);
+    *m = (SGSingMixer){.level = clamped, .targetLevel = clamped,
                       .sampleRate = isfinite(rate) && rate >= 8000 && rate <= 192000 ? rate : 44100};
 }
 void SGSingMixerSetLevel(SGSingMixer *m, float level) {
-    float target = gain(level);
-    if (target != m->targetGain) ramp(m, target, kLevelRampSeconds);
+    float target = SGSingClampLevel(level);
+    if (target != m->targetLevel) ramp(m, target, kLevelRampSeconds);
 }
-void SGSingMixerBypass(SGSingMixer *m) { ramp(m, 1, kBypassRampSeconds); }
+void SGSingMixerBypass(SGSingMixer *m) { ramp(m, SGSingOriginalMixLevel, kBypassRampSeconds); }
 void SGSingMixerProcess(SGSingMixer *m, const float *original, const float *vocals, float *out, uint32_t frames) {
     for (uint32_t i = 0; i < frames; i++) {
         if (m->remaining) {
-            m->gain += m->step;
-            if (!--m->remaining) m->gain = m->targetGain;
+            m->level += m->step;
+            if (!--m->remaining) m->level = m->targetLevel;
         }
         for (unsigned c = 0; c < 2; c++) {
             size_t at = (size_t)i * 2 + c;
             float source = isfinite(original[at]) ? original[at] : 0;
             float vocal = isfinite(vocals[at]) ? vocals[at] : 0;
-            float value = source - (1 - m->gain) * vocal;
+            float value = m->level <= SGSingOriginalMixLevel
+                ? source - (1 - 2 * m->level) * vocal
+                : source + (2 * m->level - 1) * (vocal - source);
             out[at] = fmaxf(-1, fminf(1, value)); // bounded peak limiter, no per-stem normalization
         }
     }

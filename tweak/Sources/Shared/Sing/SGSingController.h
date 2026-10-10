@@ -8,8 +8,8 @@ typedef NS_ENUM(NSUInteger, SGSingState) {
     SGSingReady, // the local model is loaded; playback has not supplied audio yet
     SGSingRecovering // aligned original audio while a temporarily late worker catches up
 };
-// Sing is on: the model is loaded and the song's vocals are turned down, or will be as soon as it
-// plays (Ready), or are about to be again (Recovering).
+// Sing is on: the model is loaded and its separated-vocal mix is active, or will be when playback
+// starts (Ready), or is about to resume (Recovering).
 static inline BOOL SGSingStateIsOn(SGSingState state) {
     return state == SGSingActive || state == SGSingReady || state == SGSingRecovering;
 }

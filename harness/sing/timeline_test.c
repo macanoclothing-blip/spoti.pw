@@ -37,7 +37,7 @@ static void recoverWithoutChattering(bool sustained) {
         assert(SGSingTimelineRead(t, output, block) == block); \
         for (unsigned n = 0; n < block; n++) { \
             float ratio = output[n*2] / signal(consumed+n); \
-            assert(ratio >= .616f - 1e-5 && ratio <= 1 + 1e-5); \
+            assert(ratio >= .76f - 1e-5 && ratio <= 1 + 1e-5); \
             assert(fabsf(output[n*2] + output[n*2+1]) < 1e-6); \
         } \
         consumed += block; \
@@ -48,8 +48,8 @@ static void recoverWithoutChattering(bool sustained) {
         fill(processed); assert(SGSingTimelineVocals(t, stamp(processed), vocal));
     }
     ADVANCE();
-    // One late hop used to re-enable reduction with only a second of coverage. Another
-    // slow inference would bring the original vocals back almost immediately.
+    // One late hop used to re-enable mixing with only a second of coverage. Another
+    // slow inference would force an immediate return to the original mix.
     assert(SGSingTimelineGetState(t) == SGSingTimelineRecovering);
     for (; processed < consumed + 88200; processed += block) {
         fill(processed); assert(SGSingTimelineVocals(t, stamp(processed), vocal));
@@ -122,7 +122,7 @@ int main(void) {
         assert(SGSingTimelineVocals(t, stamp(captured), vocal));
         captured += block;
         assert(SGSingTimelineRead(t, output, block) == block);
-        if (i >= 3) verify(consumed, block, .616f); // initial 30 ms fade into reduced vocals
+        if (i >= 3) verify(consumed, block, .6f); // initial 30 ms fade into the instrumental mix
         consumed += block;
     }
     assert(SGSingTimelineGetState(t) == SGSingTimelineActive);
