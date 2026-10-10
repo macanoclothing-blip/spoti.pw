@@ -3,6 +3,7 @@
 #import "Core/SGCore.h"
 #import <MediaPlayer/MediaPlayer.h>
 #import "Redesigned/Kit/SGRTokens.h"
+#import "PlayerVinyl.h"
 
 static char kVolumeRowKey;
 
@@ -65,6 +66,9 @@ static void installVolumeRow(UIViewController *unit) {
         controlsIndex = [stack.arrangedSubviews indexOfObject:controls];
         if (controlsIndex != NSNotFound) [stack insertArrangedSubview:row atIndex:controlsIndex + 1];
     }
+    SGForEachView(row, ^(UIView *view) {
+        if ([view isKindOfClass:MPVolumeView.class]) SGRVinylStyleVolumeView((MPVolumeView *)view);
+    });
     static dispatch_once_t once;
     dispatch_once(&once, ^{ SGLog(@"redesign player: iPhone output-volume row inserted under playback controls"); });
 }

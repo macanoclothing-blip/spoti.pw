@@ -28,6 +28,7 @@
 #import "PlayerVinyl.h"
 #import "Shared/Haptics/Haptics.h"
 #import <AVFoundation/AVFoundation.h>
+#import <MediaPlayer/MediaPlayer.h>
 #import <CoreImage/CoreImage.h>
 #import <dlfcn.h>
 
@@ -58,6 +59,9 @@ static char kVinylOverlayKey;
 static char kCanvasHoldKey;
 static char kVinylProgressSliderKey;
 static char kVinylProgressStyledKey;
+static char kVinylVolumeSliderStyledKey;
+static const CGFloat kVinylProgressShift = 12;
+static const CGFloat kVinylVolumeShift = -12;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -795,13 +799,14 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     CGFloat W = self.bounds.size.width;
     CGFloat H = self.bounds.size.height;
     if (W < 10 || H < 10) return;
+    BOOL landscape = W > H * 1.15;
 
     // ── Disc ──
-    CGFloat discDiam = W * kDiscFraction;
+    CGFloat discDiam = landscape ? MIN(W * kDiscFraction, H * 0.68) : W * kDiscFraction;
     CGFloat discR    = discDiam / 2;
     CGFloat holeR    = discR * kHoleFraction;
-    CGFloat discCX   = W * 0.38;
-    CGFloat discCY   = H * 0.38;
+    CGFloat discCX   = landscape ? discR * 0.82 : W * 0.38;
+    CGFloat discCY   = landscape ? H * 0.36 : H * 0.38;
 
     _discR      = discR;
     _discCenter = CGPointMake(discCX, discCY);
@@ -816,8 +821,9 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _disc.position = CGPointMake(discCX, discCY);
 
     // ── Tonearm ──
+    CGFloat armSize = landscape ? MIN(W, H * 1.55) : W;
     CGPoint pivot = CGPointMake(W * kMountX, H * kMountY);
-    _arm.bounds = CGRectMake(0, 0, W, W);
+    _arm.bounds = CGRectMake(0, 0, armSize, armSize);
     _arm.anchorPoint = CGPointMake(0.80, 0.14);
     _arm.position = pivot;
     _arm.transform = CATransform3DMakeRotation(_armAngle - kTonearmAssetAngle, 0, 0, 1);
@@ -825,28 +831,30 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     [CATransaction commit];
 
     // ── Title + artist (left-aligned, below disc) ──
-    CGFloat labelTop  = discCY + discR + 22;
     CGFloat sideMargin = 22;
-    CGFloat labelW    = MAX(120, W - sideMargin - 14);
-    _titleLabel.frame  = CGRectMake(sideMargin, labelTop, labelW, 54);
-    _artistLabel.frame = CGRectMake(sideMargin, labelTop + 56, labelW, 22);
+    CGFloat labelTop = landscape ? H * 0.28 : discCY + discR + 22;
+    CGFloat labelX = landscape ? discCX + discR + 18 : sideMargin;
+    CGFloat labelW = MAX(0, W - labelX - (landscape ? sideMargin : 14));
+    _titleLabel.frame  = CGRectMake(labelX, labelTop, labelW, 54);
+    _artistLabel.frame = CGRectMake(landscape ? labelX : sideMargin, labelTop + 56, labelW, 22);
 
     // ── Four pill buttons at the bottom ──
     CGFloat safeBottom  = self.safeAreaInsets.bottom;
-    CGFloat btnY        = H - safeBottom - kButtonBottom - kButtonHeight;
-    CGFloat gap         = 8;
-    CGFloat sideW       = kButtonHeight * 1.4;
-    CGFloat midW        = kButtonHeight * 1.75;
+    CGFloat buttonHeight = landscape ? 56 : kButtonHeight;
+    CGFloat btnY        = H - safeBottom - kButtonBottom - buttonHeight;
+    CGFloat gap         = landscape ? 12 : 8;
+    CGFloat sideW       = buttonHeight * 1.4;
+    CGFloat midW        = buttonHeight * 1.75;
     CGFloat scale       = MIN(1, MAX(0, (W - 36 - 3 * gap) / (2 * midW + 2 * sideW)));
     sideW *= scale;
     midW  *= scale;
     CGFloat totalW      = 2 * midW + 2 * sideW + 3 * gap;
     CGFloat startX      = (W - totalW) / 2;
 
-    _btnPlay.frame   = CGRectMake(startX,                             btnY, midW, kButtonHeight);
-    _btnLyrics.frame = CGRectMake(startX + midW + gap,                btnY, midW, kButtonHeight);
-    _btnPrev.frame   = CGRectMake(startX + 2 * midW + 2 * gap,        btnY, sideW, kButtonHeight);
-    _btnNext.frame   = CGRectMake(startX + 2 * midW + sideW + 3 * gap, btnY, sideW, kButtonHeight);
+    _btnPlay.frame   = CGRectMake(startX,                             btnY, midW, buttonHeight);
+    _btnLyrics.frame = CGRectMake(startX + midW + gap,                btnY, midW, buttonHeight);
+    _btnPrev.frame   = CGRectMake(startX + 2 * midW + 2 * gap,        btnY, sideW, buttonHeight);
+    _btnNext.frame   = CGRectMake(startX + 2 * midW + sideW + 3 * gap, btnY, sideW, buttonHeight);
 }
 
 // ── Tonearm ──
@@ -1226,6 +1234,62 @@ static void styleVinylProgress(UIViewController *unit) {
     objc_setAssociatedObject(slider, &kVinylProgressStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
+void SGRVinylStyleVolumeView(MPVolumeView *volumeView) {
+    if (!vinylOn() || !volumeView) return;
+    __block UISlider *slider = nil;
+    SGForEachView(volumeView, ^(UIView *view) {
+        if (!slider && [view isKindOfClass:UISlider.class]) slider = (UISlider *)view;
+    });
+    if (!slider || [objc_getAssociatedObject(slider, &kVinylVolumeSliderStyledKey) boolValue]) return;
+    UIImage *filled = retroProgressTrack(YES), *empty = retroProgressTrack(NO), *thumb = retroProgressThumb();
+    [slider setMinimumTrackImage:filled forState:UIControlStateNormal];
+    [slider setMinimumTrackImage:filled forState:UIControlStateHighlighted];
+    [slider setMaximumTrackImage:empty forState:UIControlStateNormal];
+    [slider setMaximumTrackImage:empty forState:UIControlStateHighlighted];
+    [slider setThumbImage:thumb forState:UIControlStateNormal];
+    [slider setThumbImage:thumb forState:UIControlStateHighlighted];
+    objc_setAssociatedObject(slider, &kVinylVolumeSliderStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static UIStackView *vinylBottomStackIn(UIView *view) {
+    for (UIView *candidate = view; candidate; candidate = candidate.superview) {
+        if ([candidate isKindOfClass:UIStackView.class] &&
+            [candidate.accessibilityIdentifier isEqualToString:@"npv.bottomStackView"]) return (UIStackView *)candidate;
+    }
+    return nil;
+}
+
+static UIView *arrangedSubviewContainingView(UIStackView *stack, UIView *view) {
+    for (UIView *candidate = view; candidate && candidate != stack; candidate = candidate.superview) {
+        if (candidate.superview == stack) return candidate;
+    }
+    return nil;
+}
+
+static UIView *vinylVolumeRow(UIStackView *stack) {
+    __block UIView *volume = nil;
+    SGForEachView(stack, ^(UIView *view) {
+        if (!volume && [view isKindOfClass:MPVolumeView.class]) volume = view;
+    });
+    return volume ? arrangedSubviewContainingView(stack, volume) : nil;
+}
+
+static void updateVinylPlaybackSpacing(UIView *host) {
+    UIStackView *stack = vinylBottomStackIn(host);
+    if (!stack) return;
+    UIView *slider = SGRFindByIdentifier(stack, @"SPTNowPlayingSliderV2", &kVinylProgressSliderKey);
+    UIView *progressRow = slider ? arrangedSubviewContainingView(stack, slider) : nil;
+    UIView *volumeRow = vinylVolumeRow(stack);
+    if (progressRow) {
+        CGAffineTransform down = CGAffineTransformMakeTranslation(0, kVinylProgressShift);
+        if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;
+    }
+    if (volumeRow) {
+        CGAffineTransform up = CGAffineTransformMakeTranslation(0, kVinylVolumeShift);
+        if (!CGAffineTransformEqualToTransform(volumeRow.transform, up)) volumeRow.transform = up;
+    }
+}
+
 // ─────────────────────────────────────────────────────
 #pragma mark - unit hiding
 // ─────────────────────────────────────────────────────
@@ -1309,6 +1373,7 @@ static void hideView(UIView *v) {
 - (void)viewDidLayoutSubviews {
     %orig;
     if (vinylOn()) styleVinylProgress((UIViewController *)self);
+    if (vinylOn()) updateVinylPlaybackSpacing(((UIViewController *)self).viewIfLoaded);
 }
 %end
 
@@ -1316,6 +1381,7 @@ static void hideView(UIView *v) {
 - (void)viewDidLayoutSubviews {
     %orig;
     if (vinylOn()) styleVinylProgress((UIViewController *)self);
+    if (vinylOn()) updateVinylPlaybackSpacing(((UIViewController *)self).viewIfLoaded);
 }
 %end
 
@@ -1324,6 +1390,7 @@ static void hideView(UIView *v) {
     %orig;
     if (!vinylOn()) return;
     hideUnit((UIViewController *)self);
+    updateVinylPlaybackSpacing(((UIViewController *)self).viewIfLoaded);
 }
 %end
 
@@ -1332,6 +1399,7 @@ static void hideView(UIView *v) {
     %orig;
     if (!vinylOn()) return;
     hideUnit((UIViewController *)self);
+    updateVinylPlaybackSpacing(((UIViewController *)self).viewIfLoaded);
 }
 %end
 

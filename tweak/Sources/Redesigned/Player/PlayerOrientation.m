@@ -30,6 +30,27 @@ static BOOL playerVisibleInWindow(UIWindow *window) {
     return visibleControllerTreeContainsPlayer(window.rootViewController, window, 0);
 }
 
+static void requestWindowOrientationIfNeeded(UIWindow *window) {
+    if (@available(iOS 16.0, *)) {
+        UIWindowScene *windowScene = window.windowScene;
+        UIDeviceOrientation deviceOrientation = UIDevice.currentDevice.orientation;
+        BOOL deviceLandscape = UIDeviceOrientationIsLandscape(deviceOrientation);
+        BOOL devicePortrait = UIDeviceOrientationIsPortrait(deviceOrientation);
+        UIInterfaceOrientation interfaceOrientation = windowScene.interfaceOrientation;
+        BOOL orientationMismatch = (deviceLandscape && !UIInterfaceOrientationIsLandscape(interfaceOrientation)) ||
+                                   (devicePortrait && !UIInterfaceOrientationIsPortrait(interfaceOrientation));
+        if (windowScene && orientationMismatch) {
+            UIInterfaceOrientationMask requested = deviceLandscape ? UIInterfaceOrientationMaskLandscape
+                                                                  : UIInterfaceOrientationMaskPortrait;
+            UIWindowSceneGeometryPreferencesIOS *preferences =
+                [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:requested];
+            [windowScene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
+                SGLog(@"redesign player: scene rejected orientation update (%@)", error);
+            }];
+        }
+    }
+}
+
 static void installOnDelegate(id delegate) {
     if (!delegate) return;
     Class cls = object_getClass(delegate);
@@ -117,6 +138,7 @@ void SGRPlayerRefreshOrientationPolicy(void) {
                 }
                 if (player) {
                     if (@available(iOS 16.0, *)) [player setNeedsUpdateOfSupportedInterfaceOrientations];
+                    requestWindowOrientationIfNeeded(window);
                     return;
                 }
             }
@@ -128,10 +150,13 @@ __attribute__((constructor)) static void SGRPlayerOrientationStart(void) {
     if (!SGRedesignedUI()) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         SGRPlayerInstallOrientationPolicy();
+        [UIDevice.currentDevice beginGeneratingDeviceOrientationNotifications];
         NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
         [center addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:NSOperationQueue.mainQueue
-                        usingBlock:^(NSNotification *note) { SGRPlayerInstallOrientationPolicy(); }];
+                        usingBlock:^(NSNotification *note) { (void)note; SGRPlayerInstallOrientationPolicy(); }];
         [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue
-                        usingBlock:^(NSNotification *note) { SGRPlayerInstallOrientationPolicy(); }];
+                        usingBlock:^(NSNotification *note) { (void)note; SGRPlayerInstallOrientationPolicy(); }];
+        [center addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
+                        usingBlock:^(NSNotification *note) { (void)note; SGRPlayerRefreshOrientationPolicy(); }];
     });
 }

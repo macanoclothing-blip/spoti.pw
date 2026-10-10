@@ -31,6 +31,7 @@
 #import "Shared/LockScreenArtwork/SGArtworkFile.h"
 #import "Shared/LockScreenArtwork/SGCanvas.h"
 #import "Album.h"
+#import "Redesigned/Artist/SGArtistLogo.h"
 
 // How much of the cover's height the dissolve into the field covers, and the scrim over the top of it that
 // keeps the status bar and the back button legible on a bright picture. The playlist's numbers: one page.
@@ -42,6 +43,8 @@ static const CGFloat kMinHero = 120, kMinCover = 80;
 static char kHeaderKey, kCoverKey, kTitleKey, kParentKey, kMetaKey, kAddKey, kDownloadKey, kPlayKey, kShuffleKey;
 static char kHeroKey, kHeroHeightKey, kHeaderHeightKey, kInfoKey, kHeaderWatchedKey, kRetryKey;
 static char kExploreKey, kRowWatchedKey, kMoreKey, kPinnedMoreKey;
+static char kLogoArtistKey;
+static NSHashTable<UIView *> *sg_albumLogoHeaders;
 
 #pragma mark - moving Spotify's views
 
@@ -397,6 +400,21 @@ static void applyHeader(UIView *header, UIView *page);
 
 // The Kit's view over the whole header, its content on the header's bottom edge; Spotify's own column goes.
 static SGRHeaderInfo *applyInfo(UIView *header, UIView *page) {
+    if (!sg_albumLogoHeaders) sg_albumLogoHeaders = [NSHashTable weakObjectsHashTable];
+    [sg_albumLogoHeaders addObject:header];
+    static dispatch_once_t logoObserver;
+    dispatch_once(&logoObserver, ^{
+        [NSNotificationCenter.defaultCenter addObserverForName:SGRArtistLogoKeyDidChangeNotification object:nil
+                                                         queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            (void)note;
+            for (UIView *active in sg_albumLogoHeaders.allObjects) {
+                UIView *owner = SGRAlbumPageOf(active);
+                if (!active.window || !owner) continue;
+                objc_setAssociatedObject(active, &kLogoArtistKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                applyHeader(active, owner);
+            }
+        }];
+    });
     SGRHeaderInfo *info = objc_getAssociatedObject(header, &kInfoKey);
     if (!info) {
         info = [[SGRHeaderInfo alloc] initWithFrame:CGRectZero];
@@ -416,6 +434,15 @@ static SGRHeaderInfo *applyInfo(UIView *header, UIView *page) {
     NSString *name = firstText(title), *length = metadataText(metadata);
     NSString *artist = firstText(parent) ?: trimmed(parent.accessibilityLabel);
     [info showTitle:name creator:artist length:length about:nil];
+    NSString *logoArtist = objc_getAssociatedObject(header, &kLogoArtistKey);
+    if (artist.length && ![logoArtist isEqualToString:artist]) {
+        objc_setAssociatedObject(header, &kLogoArtistKey, [artist copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [info showCreatorLogo:nil forCreator:artist];
+        __weak SGRHeaderInfo *weakInfo = info;
+        SGRArtistLogoForArtist(artist, ^(UIImage *logo) {
+            [weakInfo showCreatorLogo:logo forCreator:artist];
+        });
+    }
     [(SGRAlbumHero *)objc_getAssociatedObject(header, &kHeroKey) findMotionOf:name by:artist];
     // The kind and the date are cells the metadata row's collection view makes on its own pass, after the
     // header's, and nothing lays the header out again when they arrive; the collection is Spotify's own Swift

@@ -6,7 +6,7 @@ static NSString *const kMusicBrainz = @"https://musicbrainz.org/ws/2/artist";
 static NSString *const kFanart = @"https://webservice.fanart.tv/v3/music";
 static const NSTimeInterval kTimeout = 15;
 static const NSTimeInterval kLogoCacheTime = 24 * 60 * 60, kMissCacheTime = 5 * 60;
-static const NSUInteger kFanartCandidateLimit = 8;
+static const NSUInteger kFanartCandidateLimit = 20;
 
 NSNotificationName const SGRArtistLogoKeyDidChangeNotification = @"spotifyglass.artistLogoKeyDidChange";
 
@@ -163,7 +163,9 @@ static NSURL *fanartURL(NSString *identifier, NSString *key) {
     return components.URL;
 }
 
-static NSURL *logoURL(NSDictionary *body) {
+static NSArray<NSURL *> *logoURLs(NSDictionary *body) {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
     for (NSString *field in @[@"hdmusiclogo", @"musiclogo"]) {
         NSArray *items = [body[field] isKindOfClass:NSArray.class] ? body[field] : nil;
         NSMutableArray<NSDictionary *> *valid = [NSMutableArray array];
@@ -176,10 +178,12 @@ static NSURL *logoURL(NSDictionary *body) {
         for (id value in sorted) {
             if (![value isKindOfClass:NSDictionary.class]) continue;
             NSURL *url = [NSURL URLWithString:[value[@"url"] isKindOfClass:NSString.class] ? value[@"url"] : @""];
-            if ([url.scheme.lowercaseString isEqualToString:@"https"]) return url;
+            if (![url.scheme.lowercaseString isEqualToString:@"https"] || !url.host.length || [seen containsObject:url.absoluteString]) continue;
+            [seen addObject:url.absoluteString];
+            [urls addObject:url];
         }
     }
-    return nil;
+    return urls;
 }
 
 static UIImage *trimmedLogo(UIImage *image) {
@@ -220,7 +224,10 @@ static UIImage *trimmedLogo(UIImage *image) {
     return result;
 }
 
-static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key, NSString *lookupKey, NSUInteger generation);
+static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key, NSString *lookupKey,
+                              NSUInteger generation, NSTimeInterval missCacheTime);
+static void fetchLogoURLs(NSArray<NSURL *> *urls, NSUInteger urlIndex, NSArray<NSString *> *identifiers, NSUInteger identifierIndex,
+                          NSString *key, NSString *lookupKey, NSUInteger generation, NSTimeInterval missCacheTime);
 
 static void loadLogo(NSString *artist, NSString *key, NSString *lookupKey, NSUInteger generation) {
     NSURL *lookupURL = musicBrainzURL(artist);
@@ -245,57 +252,74 @@ static void loadLogo(NSString *artist, NSString *key, NSString *lookupKey, NSUIn
         }
         NSUInteger count = MIN(identifiers.count, kFanartCandidateLimit);
         SGLog(@"artist logos: MusicBrainz resolved %@ to %lu candidate artist ID(s)", artist, (unsigned long)count);
-        fetchFanartForIDs([identifiers subarrayWithRange:NSMakeRange(0, count)], 0, key, lookupKey, generation);
+        fetchFanartForIDs([identifiers subarrayWithRange:NSMakeRange(0, count)], 0, key, lookupKey, generation, kMissCacheTime);
     });
 }
 
-static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key, NSString *lookupKey, NSUInteger generation) {
+static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key, NSString *lookupKey,
+                              NSUInteger generation, NSTimeInterval missCacheTime) {
     if (index >= identifiers.count) {
         SGLog(@"artist logos: no Fanart.tv logo matched any exact MusicBrainz candidate");
-        finishArtist(lookupKey, nil, generation, kMissCacheTime);
+        finishArtist(lookupKey, nil, generation, missCacheTime);
         return;
     }
     NSURL *url = fanartURL(identifiers[index], key);
     if (!url) {
         SGLog(@"artist logos: could not form Fanart.tv request URL");
-        fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation);
+        fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation, missCacheTime);
         return;
     }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kTimeout];
     sendJSON(request, ^(NSDictionary *fanart, NSError *error) {
         if (error) {
             if (error.code == 404) {
-                fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation);
+                fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation, missCacheTime);
             } else {
                 SGLog(@"artist logos: Fanart.tv lookup failed: %@", error.localizedDescription);
                 finishArtist(lookupKey, nil, generation, failureCacheTime(error));
             }
             return;
         }
-        NSURL *imageURL = logoURL(fanart);
-        if (!imageURL) {
-            fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation);
+        NSArray<NSURL *> *urls = logoURLs(fanart);
+        if (!urls.count) {
+            fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation, missCacheTime);
             return;
         }
-        NSURLRequest *imageRequest = [NSURLRequest requestWithURL:imageURL cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:kTimeout];
-        [[NSURLSession.sharedSession dataTaskWithRequest:imageRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *imageError) {
+        fetchLogoURLs(urls, 0, identifiers, index, key, lookupKey, generation, missCacheTime);
+    });
+}
+
+static void fetchLogoURLs(NSArray<NSURL *> *urls, NSUInteger urlIndex, NSArray<NSString *> *identifiers, NSUInteger identifierIndex,
+                          NSString *key, NSString *lookupKey, NSUInteger generation, NSTimeInterval missCacheTime) {
+    if (urlIndex >= urls.count) {
+        fetchFanartForIDs(identifiers, identifierIndex + 1, key, lookupKey, generation, missCacheTime);
+        return;
+    }
+    NSURLRequest *imageRequest = [NSURLRequest requestWithURL:urls[urlIndex] cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:kTimeout];
+    [[NSURLSession.sharedSession dataTaskWithRequest:imageRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *imageError) {
             if (imageError) {
                 SGLog(@"artist logos: image download failed: %@", imageError.localizedDescription);
-                finishArtist(lookupKey, nil, generation, failureCacheTime(imageError));
+                fetchLogoURLs(urls, urlIndex + 1, identifiers, identifierIndex, key, lookupKey, generation,
+                              MIN(missCacheTime, failureCacheTime(imageError)));
                 return;
             }
             NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
             if (!http || http.statusCode < 200 || http.statusCode >= 300) {
                 SGLog(@"artist logos: image download returned HTTP %ld", (long)(http ? http.statusCode : 0));
-                NSInteger status = http ? http.statusCode : 0;
-                finishArtist(lookupKey, nil, generation, status == 429 || status == 503 ? 30 : kMissCacheTime);
+                NSTimeInterval retryAfter = http && (http.statusCode == 429 || http.statusCode == 503) ? 30 : missCacheTime;
+                fetchLogoURLs(urls, urlIndex + 1, identifiers, identifierIndex, key, lookupKey, generation,
+                              MIN(missCacheTime, retryAfter));
                 return;
             }
             UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
-            if (!image) SGLog(@"artist logos: downloaded logo was not a valid image");
-            finishArtist(lookupKey, trimmedLogo(image), generation, kMissCacheTime);
+            UIImage *logo = trimmedLogo(image);
+            if (!logo) {
+                SGLog(@"artist logos: downloaded logo was not a valid image");
+                fetchLogoURLs(urls, urlIndex + 1, identifiers, identifierIndex, key, lookupKey, generation, missCacheTime);
+                return;
+            }
+            finishArtist(lookupKey, logo, generation, kMissCacheTime);
         }] resume];
-    });
 }
 
 void SGRArtistLogoForArtist(NSString *artist, void (^done)(UIImage *)) {

@@ -14,6 +14,7 @@ static const CGFloat kSide = 20, kPlayWidth = 148, kRowSpacing = 16, kRowAbove =
 // The faces: Spotify's 24pt, overlap and 8pt gap, but no taller than the name's line, so none moves the title.
 static const CGFloat kFaceMax = 22, kFaceStep = 0.85, kFaceGap = 8, kFaceRing = 1.5;
 static const NSUInteger kFaceCap = 3;
+static const CGFloat kCreatorLogoMaxWidth = 170, kCreatorLogoMaxHeight = 28;
 
 static CGFloat titleDisplayHeight(UILabel *title, UIImageView *logo, CGFloat width) {
     if (logo.hidden) return ceil([title sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)].height);
@@ -75,7 +76,7 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
 
 @implementation SGRHeaderInfo {
     UILabel *_title, *_creator, *_length, *_about;
-    UIImageView *_artistLogo;
+    UIImageView *_artistLogo, *_creatorLogo;
     SGRMirrorButton *_shuffle, *_trailing;
     SGRPlayCapsule *_play;
     __weak UIView *_creatorLink;
@@ -100,6 +101,12 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     [self insertSubview:_artistLogo belowSubview:_title];
     _creator = infoLabel(self, SGRFont(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryExtraLarge),
                          SGRSecondary(), 1, NSTextAlignmentCenter);
+    _creatorLogo = [UIImageView new];
+    _creatorLogo.contentMode = UIViewContentModeScaleAspectFit;
+    _creatorLogo.hidden = YES;
+    _creatorLogo.userInteractionEnabled = NO;
+    _creatorLogo.isAccessibilityElement = YES;
+    [self addSubview:_creatorLogo];
     _length = infoLabel(self, SGRFont(UIFontTextStyleFootnote, UIFontWeightRegular, UIContentSizeCategoryExtraLarge),
                         SGRTertiary(), 1, NSTextAlignmentCenter);
     _about = infoLabel(self, SGRFont(UIFontTextStyleFootnote, UIFontWeightRegular, UIContentSizeCategoryExtraLarge),
@@ -135,7 +142,7 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
 // pull or a tap through to the page under it.
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    if (hit == self || hit == _creator) return [self sgr_creatorHit:point];
+    if (hit == self || hit == _creator || hit == _creatorLogo) return [self sgr_creatorHit:point];
     return hit;
 }
 
@@ -148,12 +155,34 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
         _title.alpha = 1;
         _title.accessibilityElementsHidden = NO;
     }
+    if (![_creator.text ?: @"" isEqualToString:creator ?: @""]) {
+        _creatorLogo.image = nil;
+        _creatorLogo.hidden = YES;
+        _creatorLogo.accessibilityLabel = nil;
+        _creator.alpha = 1;
+        _creator.accessibilityElementsHidden = NO;
+    }
     changed |= setText(_title, title);
     changed |= setText(_creator, creator);
     changed |= setText(_length, length);
     changed |= setText(_about, about);
     if (changed) [self setNeedsLayout];
     return changed;
+}
+
+- (void)showCreatorLogo:(UIImage *)logo forCreator:(NSString *)creator {
+    if (![_creator.text isEqualToString:creator]) return;
+    BOOL visible = logo != nil;
+    BOOL changed = _creatorLogo.image != logo || _creatorLogo.hidden == visible;
+    if (!changed) return;
+    _creatorLogo.image = logo;
+    _creatorLogo.hidden = !visible;
+    _creatorLogo.accessibilityLabel = visible ? creator : nil;
+    _creator.alpha = visible ? 0 : 1;
+    _creator.accessibilityElementsHidden = visible;
+    _creatorLogo.alpha = visible && self.window ? 0 : 1;
+    [self setNeedsLayout];
+    if (visible && self.window) SGRAnimate(SGRMotionFade, ^{ self->_creatorLogo.alpha = 1; }, nil);
 }
 
 - (void)showLogo:(UIImage *)logo forTitle:(NSString *)title {
@@ -225,7 +254,7 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     if ([_watchedFaces containsObject:view]) return;
     [_watchedFaces addObject:view];
     __weak SGRHeaderInfo *weakSelf = self;
-    SGRObserveImage(view, ^(UIImageView *changed) { [weakSelf sgr_faceLanded]; });
+    SGRObserveImage(view, ^(UIImageView *changed) { (void)changed; [weakSelf sgr_faceLanded]; });
 }
 
 // Called from inside Spotify's setImage:, so read once it has returned, and once for faces landing together.
@@ -289,10 +318,19 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     NSUInteger count = _faceImages.count;
     CGFloat side = MIN(kFaceMax, ceil(_creator.font.lineHeight) + 1), step = round(side * kFaceStep);
     CGFloat faces = count ? side + (count - 1) * step : 0, lead = count ? faces + kFaceGap : 0;
-    CGFloat name = MIN(ceil([_creator sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].width), line.size.width - lead);
+    CGFloat name;
+    if (!_creatorLogo.hidden && _creatorLogo.image.size.height > 0) {
+        CGFloat aspect = _creatorLogo.image.size.width / _creatorLogo.image.size.height;
+        name = MIN(kCreatorLogoMaxWidth, MIN(kCreatorLogoMaxHeight * aspect, line.size.width - lead));
+    } else {
+        name = MIN(ceil([_creator sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)].width), line.size.width - lead);
+    }
     CGFloat x = line.origin.x + round((line.size.width - lead - name) / 2);
     BOOL rtl = self.effectiveUserInterfaceLayoutDirection == UIUserInterfaceLayoutDirectionRightToLeft;
     _creator.frame = CGRectMake(rtl ? x : x + lead, line.origin.y, name, line.size.height);
+    CGFloat logoHeight = MIN(kCreatorLogoMaxHeight, line.size.height);
+    _creatorLogo.frame = CGRectMake(_creator.frame.origin.x, line.origin.y + round((line.size.height - logoHeight) / 2),
+                                    name, logoHeight);
     _creatorDrawn = YES;
     _faces.hidden = count == 0;
     if (!count) return;

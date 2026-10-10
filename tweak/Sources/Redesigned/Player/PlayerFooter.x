@@ -22,6 +22,7 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
+#import <MediaPlayer/MediaPlayer.h>
 
 static const CGFloat kLyricsGlyphSize = 20;
 // Filled and at full strength while the lyrics are up, the way the Music app marks the control that is on.
@@ -37,10 +38,9 @@ static const CGFloat kGlyphMaxWidth = 30;
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
 // The controls follow a share of the footer's move, so some of the room opens above them too.
 static const CGFloat kControlsShare = 0.3;
-// Bring the transport row closer to the progress bar without changing the stack's measured spacing.
-static const CGFloat kControlsLift = 32;
+static const CGFloat kControlsLift = 12;
 
-static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey;
+static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kProgressSliderKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
 
 // The view the footer's stack view arranges around `view`.
@@ -149,6 +149,24 @@ static UIView *controlsIn(UIStackView *stack, UIView *footer) {
     return nil;
 }
 
+static UIView *arrangedSubviewContainingVolume(UIStackView *stack) {
+    __block UIView *found = nil;
+    for (UIView *candidate in stack.arrangedSubviews) {
+        SGForEachView(candidate, ^(UIView *view) {
+            if (!found && [view isKindOfClass:MPVolumeView.class]) found = candidate;
+        });
+        if (found) break;
+    }
+    return found;
+}
+
+static UIView *arrangedSubviewContainingProgress(UIStackView *stack) {
+    for (UIView *candidate in stack.arrangedSubviews) {
+        if (SGRFindByIdentifier(candidate, @"SPTNowPlayingSliderV2", &kProgressSliderKey)) return candidate;
+    }
+    return nil;
+}
+
 static void lowerRow(UIView *row) {
     UIView *stack = row.superview, *player = stack.superview;
     UIWindow *window = row.window;
@@ -161,8 +179,15 @@ static void lowerRow(UIView *row) {
     CGAffineTransform down = CGAffineTransformMakeTranslation(0, move);
     if (!CGAffineTransformEqualToTransform(row.transform, down)) row.transform = down;
 
-    UIView *controls = controlsIn((UIStackView *)stack, row);
+    UIStackView *bottomStack = (UIStackView *)stack;
+    UIView *controls = controlsIn(bottomStack, row);
+    UIView *volumeRow = arrangedSubviewContainingVolume(bottomStack);
+    UIView *progressRow = arrangedSubviewContainingProgress(bottomStack);
     CGFloat controlsMove = controls ? round(move * kControlsShare) - kControlsLift : 0;
+    if (controls && volumeRow && progressRow) {
+        CGFloat midpoint = (CGRectGetMidY(volumeRow.frame) + CGRectGetMidY(progressRow.frame)) / 2;
+        controlsMove = round(midpoint - controls.center.y);
+    }
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
 

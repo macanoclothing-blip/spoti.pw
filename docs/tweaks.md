@@ -255,18 +255,25 @@ Redesigned:
                   The player follows device rotation: plist/liquid-glass.plist permits landscape, and the player
                   controller and the app delegate's orientation policy opt into rotation only while it is visible;
                   scripts/merge-local-network-plist.py also adds landscape to Spotify's device-specific orientation
-                  keys, which take precedence over the generic plist key.
-                  In landscape the lyrics layout uses a cover column and a separate lyrics column.
+                  keys, which take precedence over the generic plist key. Device-orientation changes request a
+                  matching scene geometry update while the player is visible. In landscape the lyrics layout uses
+                  a cover column and a separate lyrics column; Vinyl mode scales the disc to the shorter screen
+                  dimension and places its metadata beside it.
                   Player/PlayerVolume.x inserts a volume slider with speaker endpoints below the transport controls and
-                  above the lyrics, Connect and queue row; its track is vertically aligned with the icons. The transport
-                  row is lifted toward the progress bar independently of the volume row. It adjusts
-                  the iPhone's output volume, not
-                  Spotify Connect's remote device volume.
+                  above the lyrics, Connect and queue row; its track is vertically aligned with the icons. In the
+                  standard player the transport row is centered between the song progress and volume sliders. Vinyl
+                  mode gives the volume slider and progress track a matching retro treatment, raises the volume row and
+                  lowers the progress row. The slider adjusts the iPhone's output volume, not Spotify Connect's remote
+                  device volume.
     Artist/       artist page headers look up a Fanart.tv music logo automatically when opened, with the artist name
-                  as fallback (Artist/SGArtistLogo.m). MusicBrainz matching includes normalized names, sort-names and
-                  aliases and tries equally named artist IDs in score order; transparent logo margins are cropped before
-                  drawing. A missing logo is retried on a later visit. The user's Fanart.tv key stays in local preferences
-                  and is shown partially in Mod Settings. Apple Music exposes artwork, not a public artist-logo endpoint.
+                  as fallback; album headers keep the album title and show the credited artist's logo in place of the
+                  artist line when available (Artist/SGArtistLogo.m, Album/AlbumHeader.x). MusicBrainz matching includes
+                  normalized names,
+                  sort-names and aliases and tries up to 20 matching artist IDs in score order. Fanart.tv logo URLs are
+                  tried in HD/like order, falling through to alternate URLs and artist IDs when an image is unavailable
+                  or invalid; transparent margins are cropped before drawing. A missing logo is retried on a later visit.
+                  The user's Fanart.tv key stays in local preferences and is shown partially in Mod Settings. Apple Music
+                  exposes artwork, not a public artist-logo endpoint.
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
                   edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred

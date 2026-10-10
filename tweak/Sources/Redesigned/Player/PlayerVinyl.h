@@ -14,6 +14,8 @@
 
 #import <UIKit/UIKit.h>
 
+@class MPVolumeView;
+
 #define SGRKeyPlayerVinyl @"spotifyglass.redesign.vinyl"
 
 // The rows added to the player's settings page (NowPlayingBarSettings.m).
@@ -41,3 +43,6 @@ void SGRVinylLyricsControlsDidChange(CGFloat alpha);
 
 // Spotify's artwork collection must remain hidden after the lyrics transition finishes in Vinyl mode.
 void SGRVinylLyricsDidSettleClosed(void);
+
+// Applies the vinyl mode's retro treatment to the iPhone volume slider.
+void SGRVinylStyleVolumeView(MPVolumeView *volumeView);
