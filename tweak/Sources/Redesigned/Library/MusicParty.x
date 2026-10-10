@@ -45,8 +45,13 @@ static NSString *partyTrackID(NSString *uri) {
     return [uri hasPrefix:prefix] ? [uri substringFromIndex:prefix.length] : nil;
 }
 
+static BOOL partyIsPlayerTrack(id value) {
+    Class trackClass = NSClassFromString(@"SPTPlayerTrack");
+    return trackClass && [value isKindOfClass:trackClass];
+}
+
 static NSDictionary *partyRecord(SPTPlayerTrack *track) {
-    if (![track isKindOfClass:SPTPlayerTrack.class]) return nil;
+    if (!partyIsPlayerTrack(track)) return nil;
     NSString *title = partyString(track.trackTitle);
     NSString *artist = partyString(track.artistName);
     NSString *uri = partyURIString(track.URI);
@@ -446,12 +451,12 @@ static NSArray *partyShuffle(NSArray *items) {
     }
     SPTPlayerState *state = SGPlayerState();
     NSMutableArray *queue = [NSMutableArray array];
-    if ([state.track isKindOfClass:SPTPlayerTrack.class]) [queue addObject:state.track];
+    if (partyIsPlayerTrack(state.track)) [queue addObject:state.track];
     for (id track in [state.future isKindOfClass:NSArray.class] ? state.future : @[]) {
-        if ([track isKindOfClass:SPTPlayerTrack.class]) [queue addObject:track];
+        if (partyIsPlayerTrack(track)) [queue addObject:track];
     }
     for (id track in [state.reverse isKindOfClass:NSArray.class] ? state.reverse : @[]) {
-        if ([track isKindOfClass:SPTPlayerTrack.class]) [queue addObject:track];
+        if (partyIsPlayerTrack(track)) [queue addObject:track];
     }
     for (SPTPlayerTrack *track in queue) {
         NSDictionary *record = partyRecord(track);
@@ -514,7 +519,7 @@ static NSArray *partyShuffle(NSArray *items) {
 
 - (void)refreshStatus {
     SPTPlayerState *state = SGPlayerState();
-    BOOL hasCurrent = [state.track isKindOfClass:SPTPlayerTrack.class];
+    BOOL hasCurrent = partyIsPlayerTrack(state.track);
     BOOL ready = YES;
     NSString *message = _teams.selectedSegmentIndex == 1
         ? @"Squadre A e B giocano a turno sullo stesso iPhone: passatevi il telefono dopo ogni round."
@@ -562,7 +567,7 @@ static NSArray *partyShuffle(NSArray *items) {
     } else if (_mode == SGRPartyModeNext) {
         BOOL hasNext = NO;
         for (id track in [state.future isKindOfClass:NSArray.class] ? state.future : @[]) {
-            if ([track isKindOfClass:SPTPlayerTrack.class]) { hasNext = YES; break; }
+            if (partyIsPlayerTrack(track)) { hasNext = YES; break; }
         }
         if (!hasNext) {
             message = @"Aggiungi almeno un brano alla coda futura di Spotify per usare questa modalità.";
@@ -782,7 +787,7 @@ static NSArray *partyShuffle(NSArray *items) {
 - (void)prepareNextRound {
     SPTPlayerState *state = SGPlayerState();
     NSDictionary *next = state.future.firstObject;
-    if (![next isKindOfClass:SPTPlayerTrack.class]) {
+    if (!partyIsPlayerTrack(next)) {
         _promptLabel.text = @"La coda non ha un prossimo brano";
         _clueLabel.text = @"Aggiungi brani alla coda di Spotify per giocare questa modalità.";
         [self showSetupRecovery];
