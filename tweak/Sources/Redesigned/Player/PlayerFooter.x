@@ -35,9 +35,10 @@ static const CGFloat kGlyphMaxWidth = 30;
 // The Music app keeps that row just over the home indicator: its middle this far above the safe area's
 // bottom, and never less than kRowMinBottom above the screen's on a phone without a home indicator.
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
-// The controls follow a share of the row's move when nothing stands between them, so the gaps above
-// and below them even out instead of all the room opening under them.
+// The controls follow a share of the footer's move, so some of the room opens above them too.
 static const CGFloat kControlsShare = 0.3;
+// Bring the transport row closer to the progress bar without changing the stack's measured spacing.
+static const CGFloat kControlsLift = 32;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
@@ -135,19 +136,17 @@ static UIViewController *unitOf(UIView *view) {
     return [next isKindOfClass:UIViewController.class] && ((UIViewController *)next).viewIfLoaded == view ? (UIViewController *)next : nil;
 }
 
-// The arranged view drawn right above `row` in its stack, by where the stack put them.
-static UIView *rowAbove(UIView *row) {
-    UIView *best = nil;
-    CGFloat top = row.center.y - row.bounds.size.height / 2, bestBottom = -CGFLOAT_MAX;
-    for (UIView *sibling in row.superview.subviews) {
-        if (sibling == row || sibling.hidden || sibling.alpha < 0.01 || sibling.bounds.size.height < 1) continue;
-        CGFloat bottom = sibling.center.y + sibling.bounds.size.height / 2;
-        if (bottom <= top + 1 && bottom > bestBottom) {
-            best = sibling;
-            bestBottom = bottom;
-        }
+// The transport unit may no longer be immediately above the footer because the volume row is inserted
+// between them. Find it in the stack rather than relying on adjacency.
+static UIView *controlsIn(UIStackView *stack, UIView *footer) {
+    NSUInteger footerIndex = [stack.arrangedSubviews indexOfObject:footer];
+    if (footerIndex == NSNotFound) return nil;
+    for (NSInteger i = (NSInteger)footerIndex - 1; i >= 0; i--) {
+        UIView *candidate = stack.arrangedSubviews[(NSUInteger)i];
+        UIViewController *unit = unitOf(candidate);
+        if ([NSStringFromClass(unit.class) containsString:@"PlaybackControlsElementsUnit"]) return candidate;
     }
-    return best;
+    return nil;
 }
 
 static void lowerRow(UIView *row) {
@@ -162,11 +161,10 @@ static void lowerRow(UIView *row) {
     CGAffineTransform down = CGAffineTransformMakeTranslation(0, move);
     if (!CGAffineTransformEqualToTransform(row.transform, down)) row.transform = down;
 
-    // Only the controls, and only straight above: a volume row between them keeps its place and theirs.
-    UIView *above = rowAbove(row);
-    BOOL controls = [NSStringFromClass(unitOf(above).class) containsString:@"PlaybackControlsElementsUnit"];
-    CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controls ? round(move * kControlsShare) : 0);
-    if (above && controls && !CGAffineTransformEqualToTransform(above.transform, follow)) above.transform = follow;
+    UIView *controls = controlsIn((UIStackView *)stack, row);
+    CGFloat controlsMove = controls ? round(move * kControlsShare) - kControlsLift : 0;
+    CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
+    if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
 
     SGRFooterReach *reach = objc_getAssociatedObject(row, &kReachKey);
     if (!reach) {
@@ -184,7 +182,7 @@ static void lowerRow(UIView *row) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         SGLog(@"redesign player: footer row from %.0f to %.0f of %.0f (safe area %.0f), controls %@ %.0f", middle, middle + move, height,
-              window.safeAreaInsets.bottom, controls ? @"follow" : @"stay", controls ? round(move * kControlsShare) : 0);
+              window.safeAreaInsets.bottom, controls ? @"lift" : @"stay", controlsMove);
     });
 }
 

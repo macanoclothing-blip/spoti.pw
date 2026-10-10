@@ -13,6 +13,18 @@ services = original.get("NSBonjourServices", [])
 if not isinstance(services, list):
     raise ValueError("Spotify's NSBonjourServices is not an array")
 overlay["NSBonjourServices"] = list(dict.fromkeys(services + overlay["NSBonjourServices"]))
+
+orientations = overlay.get("UISupportedInterfaceOrientations", [])
+if not isinstance(orientations, list):
+    raise ValueError("The overlay's UISupportedInterfaceOrientations is not an array")
+for key in ("UISupportedInterfaceOrientations~iphone", "UISupportedInterfaceOrientations~ipad"):
+    existing = original.get(key)
+    if existing is None:
+        continue
+    if not isinstance(existing, list):
+        raise ValueError(f"Spotify's {key} is not an array")
+    overlay[key] = list(dict.fromkeys(existing + orientations))
+
 if not original.get("NSLocalNetworkUsageDescription"):
     overlay["NSLocalNetworkUsageDescription"] = "Find nearby speakers and devices for Spotify Connect and Cast."
 

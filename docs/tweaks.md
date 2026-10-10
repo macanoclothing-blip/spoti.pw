@@ -253,9 +253,14 @@ Redesigned:
                   the lyrics' corner that shows only for a song that has them, in the order of sizes the Lyrics page sets
                   (LyricsText.h). Laid out on the Mac against harness/lyrics/
                   The player follows device rotation: plist/liquid-glass.plist permits landscape, and the player
-                  controller opts into autorotation. In landscape the lyrics layout uses a cover column and a separate
-                  lyrics column. Player/PlayerVolume.x inserts a volume slider with speaker endpoints below the transport
-                  controls and above the lyrics, Connect and queue row; it adjusts the iPhone's output volume, not
+                  controller and the app delegate's orientation policy opt into rotation only while it is visible;
+                  scripts/merge-local-network-plist.py also adds landscape to Spotify's device-specific orientation
+                  keys, which take precedence over the generic plist key.
+                  In landscape the lyrics layout uses a cover column and a separate lyrics column.
+                  Player/PlayerVolume.x inserts a volume slider with speaker endpoints below the transport controls and
+                  above the lyrics, Connect and queue row; its track is vertically aligned with the icons. The transport
+                  row is lifted toward the progress bar independently of the volume row. It adjusts
+                  the iPhone's output volume, not
                   Spotify Connect's remote device volume.
     Artist/       artist page headers look up a Fanart.tv music logo automatically when opened, with the artist name
                   as fallback (Artist/SGArtistLogo.m). MusicBrainz matching includes normalized names, sort-names and

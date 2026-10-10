@@ -6,6 +6,7 @@ static NSString *const kMusicBrainz = @"https://musicbrainz.org/ws/2/artist";
 static NSString *const kFanart = @"https://webservice.fanart.tv/v3/music";
 static const NSTimeInterval kTimeout = 15;
 static const NSTimeInterval kLogoCacheTime = 24 * 60 * 60, kMissCacheTime = 5 * 60;
+static const NSUInteger kFanartCandidateLimit = 8;
 
 NSNotificationName const SGRArtistLogoKeyDidChangeNotification = @"spotifyglass.artistLogoKeyDidChange";
 
@@ -76,13 +77,19 @@ static void sendJSON(NSURLRequest *request, void (^done)(NSDictionary *, NSError
     }] resume];
 }
 
-static void finishArtist(NSString *key, UIImage *logo, NSUInteger generation) {
+static NSTimeInterval failureCacheTime(NSError *error) {
+    if (error.code == 429 || error.code == 503 || error.code == NSURLErrorTimedOut
+        || error.code == NSURLErrorNetworkConnectionLost || error.code == NSURLErrorNotConnectedToInternet) return 30;
+    return kMissCacheTime;
+}
+
+static void finishArtist(NSString *key, UIImage *logo, NSUInteger generation, NSTimeInterval missCacheTime) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != sg_generation) return;
         if (!sg_cache) sg_cache = [NSMutableDictionary dictionary];
         if (!sg_pending) sg_pending = [NSMutableDictionary dictionary];
         if (sg_cache.count >= 100) [sg_cache removeAllObjects];
-        NSTimeInterval lifetime = logo ? kLogoCacheTime : kMissCacheTime;
+        NSTimeInterval lifetime = logo ? kLogoCacheTime : missCacheTime;
         sg_cache[key] = @{@"image": logo ?: NSNull.null, @"expires": [NSDate dateWithTimeIntervalSinceNow:lifetime]};
         NSArray *callbacks = [sg_pending[key] copy];
         [sg_pending removeObjectForKey:key];
@@ -132,11 +139,20 @@ static NSArray<NSString *> *musicBrainzIDs(NSDictionary *body, NSString *artist)
 
 static NSURL *musicBrainzURL(NSString *artist) {
     NSURLComponents *components = [NSURLComponents componentsWithString:kMusicBrainz];
-    NSString *escaped = [[artist stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"] stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+    NSMutableString *escaped = [NSMutableString string];
+    NSString *special = @"+-!(){}[]^\"~*?:\\/";
+    for (NSUInteger i = 0; i < artist.length; i++) {
+        unichar character = [artist characterAtIndex:i];
+        if ([special rangeOfString:[NSString stringWithCharacters:&character length:1]].location != NSNotFound) {
+            [escaped appendString:@"\\"];
+        }
+        [escaped appendFormat:@"%C", character];
+    }
     components.queryItems = @[
         [NSURLQueryItem queryItemWithName:@"query" value:[NSString stringWithFormat:@"artist:\"%@\"", escaped]],
         [NSURLQueryItem queryItemWithName:@"fmt" value:@"json"],
         [NSURLQueryItem queryItemWithName:@"limit" value:@"25"],
+        [NSURLQueryItem queryItemWithName:@"inc" value:@"aliases"],
     ];
     return components.URL;
 }
@@ -210,7 +226,7 @@ static void loadLogo(NSString *artist, NSString *key, NSString *lookupKey, NSUIn
     NSURL *lookupURL = musicBrainzURL(artist);
     if (!lookupURL) {
         SGLog(@"artist logos: could not form MusicBrainz lookup URL");
-        finishArtist(lookupKey, nil, generation);
+        finishArtist(lookupKey, nil, generation, kMissCacheTime);
         return;
     }
     NSMutableURLRequest *lookup = [NSMutableURLRequest requestWithURL:lookupURL cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kTimeout];
@@ -218,23 +234,25 @@ static void loadLogo(NSString *artist, NSString *key, NSString *lookupKey, NSUIn
     sendJSON(lookup, ^(NSDictionary *body, NSError *error) {
         if (error) {
             SGLog(@"artist logos: MusicBrainz lookup failed: %@", error.localizedDescription);
-            finishArtist(lookupKey, nil, generation);
+            finishArtist(lookupKey, nil, generation, failureCacheTime(error));
             return;
         }
         NSArray<NSString *> *identifiers = musicBrainzIDs(body, artist);
         if (!identifiers.count) {
             SGLog(@"artist logos: MusicBrainz returned no exact name, sort-name or alias match");
-            finishArtist(lookupKey, nil, generation);
+            finishArtist(lookupKey, nil, generation, kMissCacheTime);
             return;
         }
-        fetchFanartForIDs(identifiers, 0, key, lookupKey, generation);
+        NSUInteger count = MIN(identifiers.count, kFanartCandidateLimit);
+        SGLog(@"artist logos: MusicBrainz resolved %@ to %lu candidate artist ID(s)", artist, (unsigned long)count);
+        fetchFanartForIDs([identifiers subarrayWithRange:NSMakeRange(0, count)], 0, key, lookupKey, generation);
     });
 }
 
 static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key, NSString *lookupKey, NSUInteger generation) {
     if (index >= identifiers.count) {
         SGLog(@"artist logos: no Fanart.tv logo matched any exact MusicBrainz candidate");
-        finishArtist(lookupKey, nil, generation);
+        finishArtist(lookupKey, nil, generation, kMissCacheTime);
         return;
     }
     NSURL *url = fanartURL(identifiers[index], key);
@@ -250,7 +268,7 @@ static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index
                 fetchFanartForIDs(identifiers, index + 1, key, lookupKey, generation);
             } else {
                 SGLog(@"artist logos: Fanart.tv lookup failed: %@", error.localizedDescription);
-                finishArtist(lookupKey, nil, generation);
+                finishArtist(lookupKey, nil, generation, failureCacheTime(error));
             }
             return;
         }
@@ -263,18 +281,19 @@ static void fetchFanartForIDs(NSArray<NSString *> *identifiers, NSUInteger index
         [[NSURLSession.sharedSession dataTaskWithRequest:imageRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *imageError) {
             if (imageError) {
                 SGLog(@"artist logos: image download failed: %@", imageError.localizedDescription);
-                finishArtist(lookupKey, nil, generation);
+                finishArtist(lookupKey, nil, generation, failureCacheTime(imageError));
                 return;
             }
             NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
             if (!http || http.statusCode < 200 || http.statusCode >= 300) {
                 SGLog(@"artist logos: image download returned HTTP %ld", (long)(http ? http.statusCode : 0));
-                finishArtist(lookupKey, nil, generation);
+                NSInteger status = http ? http.statusCode : 0;
+                finishArtist(lookupKey, nil, generation, status == 429 || status == 503 ? 30 : kMissCacheTime);
                 return;
             }
             UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
             if (!image) SGLog(@"artist logos: downloaded logo was not a valid image");
-            finishArtist(lookupKey, trimmedLogo(image), generation);
+            finishArtist(lookupKey, trimmedLogo(image), generation, kMissCacheTime);
         }] resume];
     });
 }

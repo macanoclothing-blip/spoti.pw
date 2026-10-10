@@ -166,7 +166,9 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     _artistLogo.accessibilityLabel = title;
     _title.alpha = visible ? 0 : 1;
     _title.accessibilityElementsHidden = visible;
+    _artistLogo.alpha = visible && self.window ? 0 : 1;
     [self setNeedsLayout];
+    if (visible && self.window) SGRAnimate(SGRMotionFade, ^{ self->_artistLogo.alpha = 1; }, nil);
 }
 
 // The creator line, tappable where its name and faces are drawn -- a tap either side of a short name belongs

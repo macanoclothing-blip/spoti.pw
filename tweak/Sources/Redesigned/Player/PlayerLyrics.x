@@ -54,6 +54,7 @@
 #import "Shared/Sing/SGSingController.h"
 #import "Player.h"
 #import "PlayerVinyl.h"
+#import "PlayerOrientation.h"
 
 static const CGFloat kThumbSide = 72;          // the cover once the lyrics are up
 static const CGFloat kThumbGap = 16;           // between the thumbnail and the title beside it
@@ -700,6 +701,11 @@ static void replace(void) {
 
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations {
     return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    SGRPlayerRefreshOrientationPolicy();
 }
 
 - (void)viewDidLayoutSubviews {

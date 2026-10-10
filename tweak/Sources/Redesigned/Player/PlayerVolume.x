@@ -40,6 +40,9 @@ static void installVolumeRow(UIViewController *unit) {
         volume.tintColor = SGRAccent();
         volume.accessibilityLabel = @"iPhone volume";
         volume.translatesAutoresizingMaskIntoConstraints = NO;
+        volume.transform = CGAffineTransformMakeTranslation(0, 3);
+        [volume setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
+        [volume setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
         [volume.heightAnchor constraintEqualToConstant:30].active = YES;
         [row addArrangedSubview:volume];
         UIImageView *loud = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
