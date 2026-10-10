@@ -2,7 +2,7 @@
 // controls and footer. This adjusts the iPhone's system output, not a Spotify Connect device.
 #import "Core/SGCore.h"
 #import <MediaPlayer/MediaPlayer.h>
-#import "Redesigned/Kit/SGRAccent.h"
+#import "Redesigned/Kit/SGRTokens.h"
 
 static char kVolumeRowKey;
 
@@ -33,7 +33,10 @@ static void installVolumeRow(UIViewController *unit) {
         [device.widthAnchor constraintEqualToConstant:44].active = YES;
         [row addArrangedSubview:device];
         MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
         volume.showsRouteButton = NO;
+#pragma clang diagnostic pop
         volume.showsVolumeSlider = YES;
         volume.tintColor = SGRAccent();
         volume.accessibilityLabel = @"iPhone volume";
