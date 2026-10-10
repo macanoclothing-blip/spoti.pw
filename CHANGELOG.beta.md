@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0-beta.1](https://github.com/macanoclothing-blip/spoti.pw/compare/v0.23.0-beta...v0.23.0-beta.1) (2026-10-10)
+
+
+### Fixes
+
+* integrate native Music Haptics and add mode picker ([237fbfa](https://github.com/macanoclothing-blip/spoti.pw/commit/237fbfa014307de63a9657c018e4affd1ca24e8f))
+* prevent delay opening player menu by enabling anchor interaction ([#168](https://github.com/macanoclothing-blip/spoti.pw/issues/168)) ([813293c](https://github.com/macanoclothing-blip/spoti.pw/commit/813293ca18cade239fdf7cf7945ef3052463e5ab))
+
 ## [0.23.0-beta](https://github.com/skopevoj/spoti.pw/compare/v0.22.0...v0.23.0-beta) (2026-09-28)
 
 
