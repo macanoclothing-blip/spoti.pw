@@ -2,10 +2,12 @@
 // adding local listening sessions. No listening data leaves the device unless the user exports it.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/Kit/SGRBridges.h"
 #import "Shared/Navigation/Links.h"
 #import "Shared/Player/PlayerState.h"
 #import "MusicUniverse.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <ImageIO/ImageIO.h>
 #import <float.h>
 #import <math.h>
 
@@ -16,6 +18,7 @@ static NSString *const kArtistURIKey = @"artistURI";
 static NSString *const kTrackKey = @"track";
 static NSString *const kAlbumKey = @"album";
 static NSString *const kTrackURIKey = @"trackURI";
+static NSString *const kArtworkURLKey = @"artworkURL";
 static NSString *const kTimestampKey = @"timestamp";
 static NSString *const kDurationKey = @"msPlayed";
 static NSString *const kSessionKey = @"session";
@@ -70,6 +73,33 @@ static NSString *firstString(NSDictionary *row, NSArray<NSString *> *keys) {
         if ([value isKindOfClass:NSString.class] && [value length]) return value;
     }
     return nil;
+}
+
+static NSString *artworkURLFromMetadata(NSDictionary *metadata) {
+    NSString *value = firstString(metadata, @[@"image_xlarge_url", @"image_large_url", @"image_url", @"image_small_url"]);
+    if ([value hasPrefix:@"spotify:image:"]) {
+        value = [@"https://i.scdn.co/image/" stringByAppendingString:[value substringFromIndex:@"spotify:image:".length]];
+    }
+    NSURLComponents *components = value.length ? [NSURLComponents componentsWithString:value] : nil;
+    if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
+        ![components.host.lowercaseString isEqualToString:@"i.scdn.co"] ||
+        !components.path.length) return nil;
+    return components.URL.absoluteString;
+}
+
+static UIImage *universeThumbnailFromData(NSData *data) {
+    if (!data.length) return nil;
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    if (!source) return nil;
+    CGImageRef thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)@{
+        (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+        (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @YES,
+        (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @160,
+    });
+    UIImage *image = thumbnail ? [UIImage imageWithCGImage:thumbnail] : nil;
+    if (thumbnail) CGImageRelease(thumbnail);
+    CFRelease(source);
+    return image;
 }
 
 static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatter *iso,
@@ -224,6 +254,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         kTrackKey: title,
         kAlbumKey: firstString(source, @[@"album_title", @"album_name"]) ?: @"",
         kTrackURIKey: uri ?: @"",
+        kArtworkURLKey: artworkURLFromMetadata(source) ?: @"",
     };
     _activeChunkStart = [NSDate date];
     _activeSession = NSUUID.UUID.UUIDString;
@@ -314,7 +345,9 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
                 NSDictionary *row = value;
                 NSDictionary *event = eventFromHistoryRow(row, iso, legacy) ?: eventFromHistoryRow(row, plainISO, legacy);
                 if (!event) { skipped++; continue; }
-                [parsed addObject:event];
+                NSMutableDictionary *enriched = [event mutableCopy];
+                enriched[kArtworkURLKey] = artworkURLFromMetadata(row) ?: @"";
+                [parsed addObject:enriched];
                 fileAccepted++;
             }
             if (!fileAccepted && !firstError) {
@@ -382,11 +415,18 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 @property (nonatomic, copy) NSArray<NSDictionary *> *edges;
 @property (nonatomic, copy) NSString *selectedArtist;
 @property (nonatomic, copy) void (^artistPicked)(NSDictionary *artist);
+@property (nonatomic, copy) dispatch_block_t artworkDidLoad;
+- (void)setArtwork:(UIImage *)image forArtist:(NSDictionary *)artist;
+- (UIImage *)thumbnailForArtist:(NSDictionary *)artist diameter:(CGFloat)diameter;
 @end
 
 @implementation SGRUniverseMapView {
     CGFloat _zoom;
     CGPoint _pan;
+    NSMutableDictionary<NSString *, UIImage *> *_artworkImages;
+    NSMutableDictionary<NSString *, NSString *> *_artworkURLs;
+    NSMutableDictionary<NSString *, NSString *> *_failedArtworkURLs;
+    NSMutableSet<NSString *> *_loadingArtwork;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -394,6 +434,10 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     self.backgroundColor = UIColor.clearColor;
     self.accessibilityLabel = @"Interactive map of listening history. Move with two fingers, pinch to zoom, tap an artist.";
     _zoom = 1;
+    _artworkImages = [NSMutableDictionary dictionary];
+    _artworkURLs = [NSMutableDictionary dictionary];
+    _failedArtworkURLs = [NSMutableDictionary dictionary];
+    _loadingArtwork = [NSMutableSet set];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panned:)];
     pan.minimumNumberOfTouches = 2;
     [self addGestureRecognizer:pan];
@@ -405,9 +449,82 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     return self;
 }
 
-- (void)setNodes:(NSArray<NSDictionary *> *)nodes { _nodes = [nodes copy] ?: @[]; [self setNeedsDisplay]; }
+- (void)setNodes:(NSArray<NSDictionary *> *)nodes {
+    _nodes = [nodes copy] ?: @[];
+    for (NSDictionary *artist in _nodes) [self loadArtworkForArtist:artist];
+    [self setNeedsDisplay];
+}
 - (void)setEdges:(NSArray<NSDictionary *> *)edges { _edges = [edges copy] ?: @[]; [self setNeedsDisplay]; }
 - (void)setSelectedArtist:(NSString *)selectedArtist { _selectedArtist = [selectedArtist copy]; [self setNeedsDisplay]; }
+
+- (void)setArtwork:(UIImage *)image forArtist:(NSDictionary *)artist {
+    NSString *key = normalizedArtist(artist[kArtistKey] ?: @"");
+    if (!key.length || !image) return;
+    _artworkImages[key] = image;
+    [self setNeedsDisplay];
+    if (self.artworkDidLoad) self.artworkDidLoad();
+}
+
+- (void)loadArtworkForArtist:(NSDictionary *)artist {
+    NSString *key = normalizedArtist(artist[kArtistKey] ?: @"");
+    NSString *urlString = artist[kArtworkURLKey];
+    if (!key.length || !urlString.length) return;
+    NSURLComponents *components = [NSURLComponents componentsWithString:urlString];
+    if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
+        ![components.host.lowercaseString isEqualToString:@"i.scdn.co"]) return;
+    if (![_artworkURLs[key] isEqualToString:urlString]) {
+        _artworkURLs[key] = urlString;
+        [_artworkImages removeObjectForKey:key];
+        [_failedArtworkURLs removeObjectForKey:key];
+    }
+    if (_artworkImages[key] || [_loadingArtwork containsObject:key] ||
+        [_failedArtworkURLs[key] isEqualToString:urlString]) return;
+    [_loadingArtwork addObject:key];
+    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:components.URL completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        UIImage *image = data.length && status == 200 ? universeThumbnailFromData(data) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_loadingArtwork removeObject:key];
+            if (!image) {
+                if (error.code != NSURLErrorCancelled) {
+                    self->_failedArtworkURLs[key] = urlString;
+                    SGLog(@"music universe: artist artwork %@ could not be loaded (HTTP %ld): %@",
+                          artist[kArtistKey], (long)status, error.localizedDescription ?: @"invalid image response");
+                }
+                return;
+            }
+            self->_artworkImages[key] = image;
+            [self setNeedsDisplay];
+            if (self.artworkDidLoad) self.artworkDidLoad();
+        });
+    }];
+    [task resume];
+}
+
+- (UIImage *)thumbnailForArtist:(NSDictionary *)artist diameter:(CGFloat)diameter {
+    CGSize size = CGSizeMake(diameter, diameter);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    UIImage *source = _artworkImages[normalizedArtist(artist[kArtistKey] ?: @"")];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
+        CGRect bounds = (CGRect){CGPointZero, size};
+        UIBezierPath *circle = [UIBezierPath bezierPathWithOvalInRect:bounds];
+        [circle addClip];
+        if (source) {
+            [source drawInRect:bounds];
+        } else {
+            [SGRAccent() setFill];
+            UIRectFill(bounds);
+            UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:diameter * 0.42
+                                                                                                            weight:UIImageSymbolWeightSemibold
+                                                                                                             scale:UIImageSymbolScaleMedium];
+            UIImage *symbol = [[UIImage systemImageNamed:@"music.note" withConfiguration:configuration]
+                               imageWithTintColor:UIColor.whiteColor];
+            [symbol drawInRect:CGRectInset(bounds, diameter * 0.3, diameter * 0.3)
+                     blendMode:kCGBlendModeNormal alpha:0.9];
+        }
+        (void)rendererContext;
+    }];
+}
 
 - (CGPoint)basePointForIndex:(NSUInteger)index count:(NSUInteger)count {
     CGFloat width = self.bounds.size.width, height = self.bounds.size.height;
@@ -441,6 +558,14 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         [[UIColor colorWithWhite:1 alpha:i % 9 == 0 ? 0.32 : 0.13] setFill];
         CGContextFillEllipseInRect(context, CGRectMake(x, y, diameter, diameter));
     }
+    CGContextSetStrokeColorWithColor(context, [UIColor.whiteColor colorWithAlphaComponent:0.045].CGColor);
+    CGContextSetLineWidth(context, 0.7);
+    for (NSUInteger ring = 1; ring <= 3; ring++) {
+        CGFloat radius = MIN(bounds.size.width, bounds.size.height) * 0.12 * ring;
+        CGContextStrokeEllipseInRect(context, CGRectMake(CGRectGetMidX(bounds) - radius,
+                                                          CGRectGetMidY(bounds) - radius,
+                                                          radius * 2, radius * 2));
+    }
 
     NSUInteger count = self.nodes.count;
     if (!count) {
@@ -471,21 +596,49 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     for (NSUInteger i = 0; i < count; i++) {
         NSDictionary *artist = self.nodes[i];
         CGPoint point = [self pointForIndex:i count:count];
-        CGFloat radius = 4 + MIN(7, sqrt([artist[@"ms"] doubleValue] / 60000.0) * 0.35);
-        UIColor *color = SGRAccent();
+        CGFloat radius = 17 + MIN(8, sqrt([artist[@"ms"] doubleValue] / 60000.0) * 0.4);
         BOOL selected = [normalizedArtist(artist[kArtistKey]) isEqualToString:normalizedArtist(self.selectedArtist ?: @"")];
-        CGContextSetFillColorWithColor(context, [color colorWithAlphaComponent:selected ? 0.95 : 0.68].CGColor);
-        CGContextFillEllipseInRect(context, CGRectMake(point.x - radius, point.y - radius, radius * 2, radius * 2));
+        CGRect circle = CGRectMake(point.x - radius, point.y - radius, radius * 2, radius * 2);
+        CGContextSaveGState(context);
+        CGContextAddEllipseInRect(context, circle);
+        CGContextClip(context);
+        UIImage *artwork = _artworkImages[normalizedArtist(artist[kArtistKey] ?: @"")];
+        if (artwork) {
+            [artwork drawInRect:circle];
+        } else {
+            NSUInteger hueIndex = normalizedArtist(artist[kArtistKey] ?: @"").hash % 6;
+            NSArray<UIColor *> *fallbacks = @[SGRAccent(), UIColor.systemPurpleColor, UIColor.systemPinkColor,
+                                               UIColor.systemBlueColor, UIColor.systemTealColor, UIColor.systemIndigoColor];
+            [fallbacks[hueIndex] setFill];
+            UIRectFill(circle);
+            NSString *name = [artist[kArtistKey] description];
+            NSRange firstCharacter = [name rangeOfComposedCharacterSequenceAtIndex:0];
+            NSString *initial = [[name substringWithRange:firstCharacter] uppercaseString];
+            NSDictionary *letterStyle = @{NSFontAttributeName: [UIFont systemFontOfSize:15 weight:UIFontWeightBold],
+                                          NSForegroundColorAttributeName: UIColor.whiteColor};
+            CGSize letterSize = [initial sizeWithAttributes:letterStyle];
+            [initial drawAtPoint:CGPointMake(CGRectGetMidX(circle) - letterSize.width / 2,
+                                              CGRectGetMidY(circle) - letterSize.height / 2) withAttributes:letterStyle];
+        }
+        CGContextRestoreGState(context);
+        CGContextSetStrokeColorWithColor(context, [UIColor.whiteColor colorWithAlphaComponent:selected ? 0.95 : 0.52].CGColor);
+        CGContextSetLineWidth(context, selected ? 2.5 : 1);
+        CGContextStrokeEllipseInRect(context, circle);
         if (selected) {
-            CGContextSetStrokeColorWithColor(context, [UIColor.whiteColor colorWithAlphaComponent:0.9].CGColor);
-            CGContextSetLineWidth(context, 1.5);
-            CGContextStrokeEllipseInRect(context, CGRectInset(CGRectMake(point.x - radius - 4, point.y - radius - 4,
-                                                                          (radius + 4) * 2, (radius + 4) * 2), 0, 0));
+            CGContextSetStrokeColorWithColor(context, [SGRAccent() colorWithAlphaComponent:0.75].CGColor);
+            CGContextSetLineWidth(context, 2);
+            CGContextStrokeEllipseInRect(context, CGRectInset(circle, -4, -4));
         }
         if (i < 18 || selected) {
-            NSDictionary *attributes = @{NSFontAttributeName: [UIFont systemFontOfSize:selected ? 11 : 9 weight:selected ? UIFontWeightSemibold : UIFontWeightRegular],
-                                         NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:selected ? 0.95 : 0.7]};
-            [artist[kArtistKey] drawAtPoint:CGPointMake(point.x + radius + 5, point.y - 6) withAttributes:attributes];
+            NSString *name = artist[kArtistKey];
+            UIFont *font = [UIFont systemFontOfSize:selected ? 11 : 9 weight:selected ? UIFontWeightSemibold : UIFontWeightMedium];
+            NSDictionary *attributes = @{NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.whiteColor};
+            CGSize size = [name sizeWithAttributes:attributes];
+            CGRect label = CGRectMake(point.x + radius + 5, point.y - 10, size.width + 12, 20);
+            UIBezierPath *pill = [UIBezierPath bezierPathWithRoundedRect:label cornerRadius:10];
+            [[UIColor.blackColor colorWithAlphaComponent:0.62] setFill];
+            [pill fill];
+            [name drawAtPoint:CGPointMake(label.origin.x + 6, label.origin.y + 3) withAttributes:attributes];
         }
     }
 }
@@ -506,7 +659,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 - (void)tapped:(UITapGestureRecognizer *)gesture {
     CGPoint point = [gesture locationInView:self];
     NSUInteger count = self.nodes.count, selected = NSNotFound;
-    CGFloat closest = 30;
+    CGFloat closest = 36;
     for (NSUInteger i = 0; i < count; i++) {
         CGPoint node = [self pointForIndex:i count:count];
         CGFloat distance = hypot(point.x - node.x, point.y - node.y);
@@ -540,6 +693,8 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     self.view.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     self.modalPresentationStyle = UIModalPresentationFullScreen;
     _events = SGRUniverseStore.shared.events;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(nowPlayingArtworkChanged:)
+                                               name:SGRNowPlayingArtworkDidChangeNotification object:nil];
 
     UIScrollView *scroll = [UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -563,7 +718,6 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     ]];
 
     UIView *header = [UIView new];
-    header.translatesAutoresizingMaskIntoConstraints = NO;
     header.translatesAutoresizingMaskIntoConstraints = NO;
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.translatesAutoresizingMaskIntoConstraints = NO;
@@ -603,43 +757,81 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     [actions addArrangedSubview:export];
     [content addArrangedSubview:actions];
 
-    _status = [self label:@"I dati restano su questo dispositivo." style:UIFontTextStyleCaption1 weight:UIFontWeightRegular color:SGRTertiary()];
+    UIView *statusCard = [self card];
+    UIStackView *statusContent = [UIStackView new];
+    statusContent.translatesAutoresizingMaskIntoConstraints = NO;
+    statusContent.axis = UILayoutConstraintAxisHorizontal;
+    statusContent.alignment = UIStackViewAlignmentTop;
+    statusContent.spacing = 10;
+    UIImageView *privacyIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"lock.shield.fill"]];
+    privacyIcon.tintColor = SGRAccent();
+    [privacyIcon.widthAnchor constraintEqualToConstant:18].active = YES;
+    _status = [self label:@"I dati restano su questo dispositivo." style:UIFontTextStyleCaption1 weight:UIFontWeightRegular color:SGRSecondary()];
     _status.numberOfLines = 0;
-    [content addArrangedSubview:_status];
+    [statusContent addArrangedSubview:privacyIcon];
+    [statusContent addArrangedSubview:_status];
+    [statusCard addSubview:statusContent];
+    [NSLayoutConstraint activateConstraints:@[
+        [statusContent.topAnchor constraintEqualToAnchor:statusCard.topAnchor constant:12],
+        [statusContent.leadingAnchor constraintEqualToAnchor:statusCard.leadingAnchor constant:14],
+        [statusContent.trailingAnchor constraintEqualToAnchor:statusCard.trailingAnchor constant:-14],
+        [statusContent.bottomAnchor constraintEqualToAnchor:statusCard.bottomAnchor constant:-12],
+    ]];
+    [content addArrangedSubview:statusCard];
 
+    [content addArrangedSubview:[self sectionTitle:@"IL TUO COSMO MUSICALE"]];
     _map = [SGRUniverseMapView new];
     _map.translatesAutoresizingMaskIntoConstraints = NO;
     _map.layer.cornerRadius = SGRRadiusCard;
     _map.layer.masksToBounds = YES;
     [content addArrangedSubview:_map];
-    [_map.heightAnchor constraintEqualToConstant:340].active = YES;
+    [_map.heightAnchor constraintEqualToConstant:320].active = YES;
     __weak typeof(self) weakSelf = self;
     _map.artistPicked = ^(NSDictionary *artist) { [weakSelf selectArtist:artist]; };
+    _map.artworkDidLoad = ^{
+        [weakSelf updateArtistList];
+        [weakSelf updateSelectedArtwork];
+    };
 
-    UILabel *timeTitle = [self sectionTitle:@"VIAGGIA NEL TEMPO"];
+    UILabel *timeTitle = [self sectionTitle:@"ESPLORA NEL TEMPO"];
     [content addArrangedSubview:timeTitle];
     _period = [self label:@"Tutta la cronologia" style:UIFontTextStyleCaption1 weight:UIFontWeightMedium color:SGRSecondary()];
-    [content addArrangedSubview:_period];
     _timeline = [UISlider new];
     _timeline.minimumValue = 0;
     _timeline.maximumValue = 1;
     _timeline.accessibilityLabel = @"Viaggia nella cronologia";
     _timeline.minimumTrackTintColor = SGRAccent();
     [_timeline addTarget:self action:@selector(filtersChanged) forControlEvents:UIControlEventValueChanged];
-    [content addArrangedSubview:_timeline];
     _mood = [[UISegmentedControl alloc] initWithItems:@[@"Tutto", @"Mattina", @"Giorno", @"Sera", @"Notte"]];
     _mood.accessibilityLabel = @"Filtra per momento della giornata";
     _mood.selectedSegmentIndex = 0;
     _mood.selectedSegmentTintColor = [SGRAccent() colorWithAlphaComponent:0.8];
     [_mood addTarget:self action:@selector(filtersChanged) forControlEvents:UIControlEventValueChanged];
-    [content addArrangedSubview:_mood];
+    UIView *timelineCard = [self card];
+    UIStackView *timelineContent = [UIStackView new];
+    timelineContent.translatesAutoresizingMaskIntoConstraints = NO;
+    timelineContent.axis = UILayoutConstraintAxisVertical;
+    timelineContent.spacing = 10;
+    [timelineContent addArrangedSubview:_period];
+    [timelineContent addArrangedSubview:_timeline];
+    [timelineContent addArrangedSubview:_mood];
+    [timelineCard addSubview:timelineContent];
+    [NSLayoutConstraint activateConstraints:@[
+        [timelineContent.topAnchor constraintEqualToAnchor:timelineCard.topAnchor constant:14],
+        [timelineContent.leadingAnchor constraintEqualToAnchor:timelineCard.leadingAnchor constant:14],
+        [timelineContent.trailingAnchor constraintEqualToAnchor:timelineCard.trailingAnchor constant:-14],
+        [timelineContent.bottomAnchor constraintEqualToAnchor:timelineCard.bottomAnchor constant:-14],
+    ]];
+    [content addArrangedSubview:timelineCard];
 
     UITextField *search = [UITextField new];
     search.placeholder = @"Cerca artisti nella tua storia";
     search.textColor = SGRPrimary();
     search.tintColor = SGRAccent();
-    search.backgroundColor = [UIColor colorWithWhite:1 alpha:0.09];
-    search.layer.cornerRadius = 14;
+    search.backgroundColor = [UIColor colorWithWhite:1 alpha:0.07];
+    search.layer.cornerRadius = 15;
+    search.layer.borderWidth = 1;
+    search.layer.borderColor = SGRHairline().CGColor;
     search.clearButtonMode = UITextFieldViewModeWhileEditing;
     search.returnKeyType = UIReturnKeySearch;
     search.delegate = self;
@@ -676,20 +868,55 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     _selectionTitle = [self label:@"Scegli un artista sulla mappa" style:UIFontTextStyleHeadline weight:UIFontWeightSemibold color:SGRPrimary()];
     _selectionDetail = [self label:@"Ogni collegamento racconta artisti ascoltati vicini nel tempo." style:UIFontTextStyleSubheadline weight:UIFontWeightRegular color:SGRSecondary()];
     _selectionDetail.numberOfLines = 0;
+    UIImageView *selectionArtwork = [UIImageView new];
+    selectionArtwork.translatesAutoresizingMaskIntoConstraints = NO;
+    selectionArtwork.tag = 48321;
+    selectionArtwork.image = [UIImage systemImageNamed:@"music.note"];
+    selectionArtwork.tintColor = UIColor.whiteColor;
+    selectionArtwork.backgroundColor = SGRAccent();
+    selectionArtwork.contentMode = UIViewContentModeScaleAspectFill;
+    selectionArtwork.clipsToBounds = YES;
+    selectionArtwork.layer.cornerRadius = 28;
+    [selectionArtwork.widthAnchor constraintEqualToConstant:56].active = YES;
+    [selectionArtwork.heightAnchor constraintEqualToConstant:56].active = YES;
+    UIStackView *selectionLabels = [UIStackView new];
+    selectionLabels.axis = UILayoutConstraintAxisVertical;
+    selectionLabels.spacing = 4;
+    [selectionLabels addArrangedSubview:_selectionTitle];
+    [selectionLabels addArrangedSubview:_selectionDetail];
+    UIStackView *selectionHeading = [UIStackView new];
+    selectionHeading.axis = UILayoutConstraintAxisHorizontal;
+    selectionHeading.alignment = UIStackViewAlignmentCenter;
+    selectionHeading.spacing = 12;
+    [selectionHeading addArrangedSubview:selectionArtwork];
+    [selectionHeading addArrangedSubview:selectionLabels];
     _openArtist = [self button:@"Apri in Spotify" symbol:@"arrow.up.right" action:@selector(openSelectedArtist)];
     _openArtist.enabled = NO;
-    [selectionContent addArrangedSubview:_selectionTitle];
-    [selectionContent addArrangedSubview:_selectionDetail];
+    [selectionContent addArrangedSubview:selectionHeading];
     [selectionContent addArrangedSubview:_openArtist];
     [content addArrangedSubview:selection];
 
     [content addArrangedSubview:[self sectionTitle:@"IL TUO ASCOLTO, IN BREVE"]];
+    UIView *insightCard = [self card];
+    UIStackView *insightContent = [UIStackView new];
+    insightContent.translatesAutoresizingMaskIntoConstraints = NO;
+    insightContent.axis = UILayoutConstraintAxisVertical;
+    insightContent.spacing = 8;
     _summary = [self label:@"" style:UIFontTextStyleSubheadline weight:UIFontWeightMedium color:SGRPrimary()];
     _summary.numberOfLines = 0;
-    [content addArrangedSubview:_summary];
+    _summary.font = SGRFont(UIFontTextStyleHeadline, UIFontWeightSemibold, UIContentSizeCategoryLarge);
     _insight = [self label:@"" style:UIFontTextStyleSubheadline weight:UIFontWeightRegular color:SGRSecondary()];
     _insight.numberOfLines = 0;
-    [content addArrangedSubview:_insight];
+    [insightContent addArrangedSubview:_summary];
+    [insightContent addArrangedSubview:_insight];
+    [insightCard addSubview:insightContent];
+    [NSLayoutConstraint activateConstraints:@[
+        [insightContent.topAnchor constraintEqualToAnchor:insightCard.topAnchor constant:16],
+        [insightContent.leadingAnchor constraintEqualToAnchor:insightCard.leadingAnchor constant:16],
+        [insightContent.trailingAnchor constraintEqualToAnchor:insightCard.trailingAnchor constant:-16],
+        [insightContent.bottomAnchor constraintEqualToAnchor:insightCard.bottomAnchor constant:-16],
+    ]];
+    [content addArrangedSubview:insightCard];
 
     UILabel *privacy = [self label:@"La cronologia viene conservata localmente. L'esportazione è manuale; spoti.pw non invia questi dati a server." style:UIFontTextStyleCaption1 weight:UIFontWeightRegular color:SGRTertiary()];
     privacy.numberOfLines = 0;
@@ -807,6 +1034,19 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     [self refresh];
 }
 
+- (void)nowPlayingArtworkChanged:(NSNotification *)notification {
+    UIImage *image = notification.userInfo[@"image"];
+    NSString *trackURI = notification.userInfo[@"trackURI"];
+    if (![image isKindOfClass:UIImage.class] || !trackURI.length) return;
+    NSString *artistName = SGPlayerState().track.artistName;
+    for (NSDictionary *artist in _visibleArtists) {
+        if (![artist[@"trackURI"] isEqualToString:trackURI] &&
+            ![normalizedArtist(artist[kArtistKey]) isEqualToString:normalizedArtist(artistName)]) continue;
+        [_map setArtwork:image forArtist:artist];
+        break;
+    }
+}
+
 - (void)filtersChanged {
     [self refresh];
 }
@@ -869,13 +1109,14 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         NSMutableDictionary *artist = artists[key];
         if (!artist) {
             artist = [@{kArtistKey: name, @"ms": @0, @"plays": @0, @"recent": @0,
-                        @"track": @"", @"trackURI": @"", @"artistURI": @""} mutableCopy];
+                        @"track": @"", @"trackURI": @"", @"artistURI": @"", kArtworkURLKey: @""} mutableCopy];
             artists[key] = artist;
         }
         artist[@"ms"] = @([artist[@"ms"] doubleValue] + [event[kDurationKey] doubleValue]);
         artist[@"recent"] = event[kTimestampKey];
         artist[@"track"] = event[kTrackKey] ?: @"";
         artist[@"trackURI"] = event[kTrackURIKey] ?: @"";
+        if ([event[kArtworkURLKey] length]) artist[kArtworkURLKey] = event[kArtworkURLKey];
         NSString *artistURI = event[kArtistURIKey];
         if (artistURI.length) artist[@"artistURI"] = artistURI;
         NSString *session = event[kSessionKey] ?: eventIdentity(event);
@@ -917,6 +1158,16 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     _map.edges = _visibleEdges;
     _map.selectedArtist = _selectedArtist[kArtistKey];
     [self updateArtistList];
+    NSString *playingURI = nil;
+    UIImage *playingArtwork = SGRNowPlayingArtwork(&playingURI, NULL);
+    if (playingArtwork && playingURI.length) {
+        for (NSDictionary *artist in _visibleArtists) {
+            if ([artist[@"trackURI"] isEqualToString:playingURI]) {
+                [_map setArtwork:playingArtwork forArtist:artist];
+                break;
+            }
+        }
+    }
 
     if (!SGRUniverseStore.shared.isLoaded) {
         _status.text = @"Sto caricando la cronologia salvata…";
@@ -972,18 +1223,38 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     for (NSUInteger i = 0; i < count; i++) {
         NSDictionary *artist = _visibleArtists[i];
         UIButton *row = [UIButton buttonWithType:UIButtonTypeSystem];
-        [row setTitle:[NSString stringWithFormat:@"%lu   %@   ·   %lu ascolti",
-                       (unsigned long)(i + 1), artist[kArtistKey], (unsigned long)[artist[@"plays"] unsignedIntegerValue]]
-               forState:UIControlStateNormal];
-        row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
-        row.tintColor = SGRPrimary();
-        row.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightMedium];
+        UIButtonConfiguration *configuration = [UIButtonConfiguration filledButtonConfiguration];
+        configuration.title = [NSString stringWithFormat:@"%lu  %@", (unsigned long)(i + 1), artist[kArtistKey]];
+        configuration.subtitle = [NSString stringWithFormat:@"%lu ascolti · %@",
+                                  (unsigned long)[artist[@"plays"] unsignedIntegerValue],
+                                  [self formattedDuration:[artist[@"ms"] doubleValue]]];
+        configuration.image = [_map thumbnailForArtist:artist diameter:42];
+        configuration.imagePlacement = NSDirectionalRectEdgeLeading;
+        configuration.imagePadding = 12;
+        configuration.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+        configuration.baseBackgroundColor = [UIColor colorWithWhite:1 alpha:0.055];
+        configuration.baseForegroundColor = SGRPrimary();
+        configuration.contentInsets = NSDirectionalEdgeInsetsMake(9, 12, 9, 12);
+        configuration.titleTextAttributesTransformer = ^NSDictionary<NSAttributedStringKey,id> *(NSDictionary<NSAttributedStringKey,id> *attributes) {
+            NSMutableDictionary *result = [attributes mutableCopy];
+            result[NSFontAttributeName] = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+            return result;
+        };
+        configuration.subtitleTextAttributesTransformer = ^NSDictionary<NSAttributedStringKey,id> *(NSDictionary<NSAttributedStringKey,id> *attributes) {
+            NSMutableDictionary *result = [attributes mutableCopy];
+            result[NSFontAttributeName] = [UIFont systemFontOfSize:12 weight:UIFontWeightRegular];
+            result[NSForegroundColorAttributeName] = SGRTertiary();
+            return result;
+        };
+        row.configuration = configuration;
+        row.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
         row.accessibilityLabel = [NSString stringWithFormat:@"%@, %lu ascolti", artist[kArtistKey],
                                   (unsigned long)[artist[@"plays"] unsignedIntegerValue]];
         objc_setAssociatedObject(row, &kArtistRowKey, artist, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [row addTarget:self action:@selector(artistRowTapped:) forControlEvents:UIControlEventTouchUpInside];
         [_artistList addArrangedSubview:row];
-        [row.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+        [row.heightAnchor constraintGreaterThanOrEqualToConstant:64].active = YES;
+        [_artistList setCustomSpacing:8 afterView:row];
     }
 }
 
@@ -995,6 +1266,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 - (void)selectArtist:(NSDictionary *)artist {
     _selectedArtist = artist;
     _selectionTitle.text = artist[kArtistKey];
+    [self updateSelectedArtwork];
     NSTimeInterval millis = [artist[@"ms"] doubleValue];
     NSString *artistKey = normalizedArtist(artist[kArtistKey]);
     NSMutableArray<NSDictionary *> *neighbors = [NSMutableArray array];
@@ -1023,6 +1295,13 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     openConfiguration.title = [artist[@"artistURI"] length] ? @"Apri artista" : @"Apri ultimo brano";
     _openArtist.configuration = openConfiguration;
     _map.selectedArtist = artist[kArtistKey];
+}
+
+- (void)updateSelectedArtwork {
+    if (!_selectedArtist) return;
+    UIImageView *selectionArtwork = [self.view viewWithTag:48321];
+    selectionArtwork.image = [_map thumbnailForArtist:_selectedArtist diameter:56];
+    selectionArtwork.tintColor = UIColor.whiteColor;
 }
 
 - (NSString *)formattedDuration:(NSTimeInterval)millis {
@@ -1069,6 +1348,10 @@ void SGRMusicUniversePresentFrom(UIView *source) {
     if ([owner.presentedViewController isKindOfClass:SGRMusicUniverseViewController.class]) return;
     SGRMusicUniverseViewController *page = [SGRMusicUniverseViewController new];
     [owner presentViewController:page animated:YES completion:nil];
+}
+
+NSArray<NSDictionary *> *SGRMusicUniverseHistoryEvents(void) {
+    return SGRUniverseStore.shared.events;
 }
 
 static SGRUniverseStore *sgr_universeStore;

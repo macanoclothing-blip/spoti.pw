@@ -11,6 +11,8 @@
 //                       (Redesigned/Navbar/SearchField.x)
 //     MusicUniverse.x   a private listening atlas seeded from Spotify's extended-history export, followed by
 //                       local player-state recording, with an interactive map, timeline, filters and insights
+//     MusicParty.x      pass-and-play music quizzes on one device, using the Spotify queue and private local
+//                       listening history; artist search can also open Spotify's own search
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
 // Threading: main thread only.

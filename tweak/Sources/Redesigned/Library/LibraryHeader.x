@@ -46,6 +46,7 @@
 #import "Redesigned/Kit/SGRKit.h"
 #import "Library.h"
 #import "MusicUniverse.h"
+#import "MusicParty.h"
 
 NSString *const SGRLibraryListIdentifier = @"YourLibraryContent.collectionView";
 
@@ -74,6 +75,22 @@ static char kUniverseButtonKey;
 }
 @end
 
+@interface SGRMusicPartyButton : UIButton
+@end
+
+@implementation SGRMusicPartyButton
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    [self addTarget:self action:@selector(openParty:) forControlEvents:UIControlEventTouchUpInside];
+    return self;
+}
+
+- (void)openParty:(id)sender {
+    (void)sender;
+    SGRMusicPartyPresentFrom(self);
+}
+@end
+
 static UIButton *universeButton(UIView *header) {
     UIButton *button = objc_getAssociatedObject(header, &kUniverseButtonKey);
     if (button) return button;
@@ -88,6 +105,26 @@ static UIButton *universeButton(UIView *header) {
     button.accessibilityHint = @"Esplora la tua cronologia musicale";
     button.frame = CGRectMake(0, 0, 40, 44);
     objc_setAssociatedObject(header, &kUniverseButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [header addSubview:button];
+    return button;
+}
+
+static UIButton *musicPartyButton(UIView *header) {
+    static char kMusicPartyButtonKey;
+    UIButton *button = objc_getAssociatedObject(header, &kMusicPartyButtonKey);
+    if (button) return button;
+    button = [SGRMusicPartyButton buttonWithType:UIButtonTypeSystem];
+    UIImageSymbolConfiguration *symbol = [UIImageSymbolConfiguration configurationWithPointSize:18
+                                                                                           weight:UIImageSymbolWeightSemibold];
+    [button setImage:[UIImage systemImageNamed:@"gamecontroller.fill" withConfiguration:symbol]
+            forState:UIControlStateNormal];
+    button.tintColor = SGRPrimary();
+    button.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
+    button.layer.cornerRadius = 18;
+    button.accessibilityLabel = @"Music Party";
+    button.accessibilityHint = @"Gioca a quiz musicali su questo dispositivo";
+    button.frame = CGRectMake(0, 0, 40, 44);
+    objc_setAssociatedObject(header, &kMusicPartyButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [header addSubview:button];
     return button;
 }
@@ -231,6 +268,9 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
         CGPoint faceCenter = [face.superview convertPoint:face.center toView:header];
         universe.center = CGPointMake(universe.center.x, faceCenter.y);
         [trailing addObject:universe];
+        UIButton *party = musicPartyButton(header);
+        party.center = CGPointMake(party.center.x, faceCenter.y);
+        [trailing addObject:party];
     }
     if (face) [trailing addObject:face];
     if (!trailing.count) return trailing;

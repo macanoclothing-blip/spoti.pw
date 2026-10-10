@@ -265,9 +265,13 @@ Redesigned:
                   artwork at the Kit's radius with a circular one left round, a hairline between the rows, and the search
                   inside the library on glass capsules (Library.h lists its files). Music Universe imports Spotify's
                   extended streaming-history JSON, then records future playback locally from player state; it draws an
-                  explorable artist map, listening-sequence connections, time-of-day filters, a timeline, top-artist and
+                  explorable artist map with circular artist artwork, listening-sequence connections, time-of-day filters,
+                  a timeline, top-artist and
                   album insights, and can export or erase its private local data (MusicUniverse.x). No history is sent
-                  off device. The filter chips under the row stay Spotify's: they were taken out when this was first
+                  off device. Music Party adds pass-and-play music quizzes on the same phone, drawing from Spotify's
+                  active queue and locally imported history; artist lookup can use either that history or Spotify's
+                  own search, and no companion app is needed (MusicParty.x). The filter chips under the row stay
+                  Spotify's: they were taken out when this was first
                   built and put back in 0.21 (issue #20), since sorting a library is not something the page can do
                   without, and Spotify already draws them on the system's own glass
     Playlist/     the playlist page (Liked Songs and one's own too, all three being the same page) the way the Music

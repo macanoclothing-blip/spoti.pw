@@ -17,7 +17,7 @@ TWEAK_NAME := spotifyglass
 spotifyglass_FILES := $(shell find Sources -name '*.m' -o -name '*.x' -o -name '*.swift' | sort)
 spotifyglass_BUNDLE_RESOURCE_FILES := Resources/VinylDisc.png Resources/VinylTonearm.png Resources/VinylScratch.m4a
 spotifyglass_CFLAGS := -fobjc-arc -ISources -DSG_VERSION=\"$(SG_VERSION)\"
-spotifyglass_FRAMEWORKS := UIKit QuartzCore UniformTypeIdentifiers MediaPlayer MediaAccessibility CoreImage AudioToolbox AVFoundation CoreHaptics Accelerate Network Metal
+spotifyglass_FRAMEWORKS := UIKit QuartzCore UniformTypeIdentifiers MediaPlayer MediaAccessibility CoreImage ImageIO AudioToolbox AVFoundation CoreHaptics Accelerate Network Metal
 # Runtime swizzling instead of Substrate so the dylib has no extra dependency inside the IPA.
 spotifyglass_LOGOS_DEFAULT_GENERATOR := internal
 
