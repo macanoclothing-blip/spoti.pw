@@ -70,6 +70,7 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
 
 @implementation SGRHeaderInfo {
     UILabel *_title, *_creator, *_length, *_about;
+    UIImageView *_artistLogo;
     SGRMirrorButton *_shuffle, *_trailing;
     SGRPlayCapsule *_play;
     __weak UIView *_creatorLink;
@@ -87,6 +88,11 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     _title = infoLabel(self, SGRFont(UIFontTextStyleTitle2, UIFontWeightBold, UIContentSizeCategoryExtraLarge),
                        SGRPrimary(), 2, NSTextAlignmentCenter);
     _title.accessibilityTraits = UIAccessibilityTraitHeader;
+    _artistLogo = [UIImageView new];
+    _artistLogo.contentMode = UIViewContentModeScaleAspectFit;
+    _artistLogo.hidden = YES;
+    _artistLogo.isAccessibilityElement = YES;
+    [self insertSubview:_artistLogo belowSubview:_title];
     _creator = infoLabel(self, SGRFont(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryExtraLarge),
                          SGRSecondary(), 1, NSTextAlignmentCenter);
     _length = infoLabel(self, SGRFont(UIFontTextStyleFootnote, UIFontWeightRegular, UIContentSizeCategoryExtraLarge),
@@ -130,12 +136,32 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
 
 - (BOOL)showTitle:(NSString *)title creator:(NSString *)creator length:(NSString *)length about:(NSString *)about {
     BOOL changed = NO;
+    if (![_title.text ?: @"" isEqualToString:title ?: @""]) {
+        _artistLogo.image = nil;
+        _artistLogo.hidden = YES;
+        _artistLogo.accessibilityLabel = nil;
+        _title.alpha = 1;
+        _title.accessibilityElementsHidden = NO;
+    }
     changed |= setText(_title, title);
     changed |= setText(_creator, creator);
     changed |= setText(_length, length);
     changed |= setText(_about, about);
     if (changed) [self setNeedsLayout];
     return changed;
+}
+
+- (void)showLogo:(UIImage *)logo forTitle:(NSString *)title {
+    if (![_title.text isEqualToString:title]) return;
+    BOOL visible = logo != nil;
+    BOOL changed = _artistLogo.image != logo || _artistLogo.hidden == visible;
+    if (!changed) return;
+    _artistLogo.image = logo;
+    _artistLogo.hidden = !visible;
+    _artistLogo.accessibilityLabel = title;
+    _title.alpha = visible ? 0 : 1;
+    _title.accessibilityElementsHidden = visible;
+    [self setNeedsLayout];
 }
 
 // The creator line, tappable where its name and faces are drawn -- a tap either side of a short name belongs
@@ -348,7 +374,10 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
         if (previous) y += previous == _creator ? 4 : 2;
         CGFloat height = ceil([label sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
         if (label == _creator) [self sgr_layoutCreator:CGRectMake(kSide, y, text, height)];
-        else label.frame = CGRectMake(kSide, y, text, height);
+        else {
+            label.frame = CGRectMake(kSide, y, text, height);
+            if (label == _title) _artistLogo.frame = label.frame;
+        }
         y += height;
         previous = label;
     }

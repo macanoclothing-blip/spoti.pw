@@ -28,6 +28,7 @@
 // (SGRPinnedMore) draws and fires it from the top trailing corner of the page, level with the back button.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "SGArtistLogo.h"
 #import "Artist.h"
 
 // How much of the photo's height the dissolve into the field covers, and the scrim over the top of it that
@@ -40,6 +41,9 @@ static const CGFloat kBar = 100, kFade = 150;
 
 static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey;
 static char kTitleKey, kMetaKey, kShuffleKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
+static char kLogoArtistKey;
+static NSHashTable<UIView *> *sg_artistHeaders;
+static void applyHeader(UIView *header);
 
 #pragma mark - Spotify's views
 
@@ -248,6 +252,19 @@ static void applyHeader(UIView *header) {
     UIView *artwork = SGRFindByIdentifier(header, @"Components.Header.UI.ArtworkImage", &kArtworkKey);
     UIView *page = SGRArtistPageOf(container);
     if (!container || !artwork || !page) return;
+    if (!sg_artistHeaders) sg_artistHeaders = [NSHashTable weakObjectsHashTable];
+    [sg_artistHeaders addObject:header];
+    static dispatch_once_t logoObserver;
+    dispatch_once(&logoObserver, ^{
+        [NSNotificationCenter.defaultCenter addObserverForName:SGRArtistLogoKeyDidChangeNotification object:nil
+                                                         queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            for (UIView *active in sg_artistHeaders.allObjects) {
+                if (!active.window) continue;
+                objc_setAssociatedObject(active, &kLogoArtistKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                applyHeader(active);
+            }
+        }];
+    });
     // The photo header the redesign lays out: the page's curtain waits for all of it (ArtistField.x put it up).
     SGRRevealHold(page, SGRRevealPage);
 
@@ -278,6 +295,15 @@ static void applyHeader(UIView *header) {
     UIView *listeners = SGRFindByIdentifier(header, @"Components.Header.UI.Metadata", &kMetaKey);
     NSString *name = firstText(title) ?: firstText(bar), *listening = firstText(listeners);
     [info showTitle:name creator:nil length:listening about:nil];
+    NSString *logoArtist = objc_getAssociatedObject(header, &kLogoArtistKey);
+    if (name.length && ![logoArtist isEqualToString:name]) {
+        objc_setAssociatedObject(header, &kLogoArtistKey, [name copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [info showLogo:nil forTitle:name];
+        __weak SGRHeaderInfo *weakInfo = info;
+        SGRArtistLogoForArtist(name, ^(UIImage *logo) {
+            [weakInfo showLogo:logo forTitle:name];
+        });
+    }
 
     UIView *shuffle = SGRFindByIdentifier(header, @"Components.UI.ShuffleButton", &kShuffleKey);
     UIView *play = SGRFindByIdentifier(header, @"header-play-button", &kPlayKey);

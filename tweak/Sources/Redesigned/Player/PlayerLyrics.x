@@ -272,6 +272,29 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     CGRect area = SGRPlayerArtworkAreaIn(host), cover = SGRPlayerCoverFrameIn(host);
     if (CGRectIsNull(area) || CGRectIsNull(cover)) return l;
     CGRect row = untransformed(info, host), bar = untransformed(duration, host);
+    UIEdgeInsets safe = host.window.safeAreaInsets;
+    if (host.bounds.size.width > host.bounds.size.height) {
+        CGFloat leftWidth = floor(area.size.width * 0.42);
+        CGFloat side = MIN(kThumbSide, MIN(leftWidth - 2 * SGRSideMargin, area.size.height - safe.top - safe.bottom - 16));
+        if (side < 120) return l;
+        CGFloat left = CGRectGetMinX(area) + (leftWidth - side) / 2;
+        CGFloat top = CGRectGetMinY(area) + (area.size.height - side) / 2;
+        l.cover = cover;
+        l.thumb = CGRectMake(left, top, side, side);
+        CGFloat column = CGRectGetMinX(area) + leftWidth + SGRGrid;
+        CGFloat titleTop = MAX(CGRectGetMinY(area) + safe.top + 8, top);
+        l.lift = titleTop - CGRectGetMinY(row);
+        l.shift = title ? column - CGRectGetMinX(untransformed(title, host)) : 0;
+        CGFloat lines = titleTop + row.size.height + kLyricsTop;
+        CGFloat stageBottom = CGRectGetMinY(bar) - kLyricsBottom;
+        l.stage = CGRectMake(column, lines, CGRectGetMaxX(area) - column, stageBottom - lines);
+        UIView *header = sg_header.viewIfLoaded;
+        CGFloat roomTop = MIN(header ? CGRectGetMinY(SGFrameIn(header, host)) : safe.top, CGRectGetMinY(l.stage));
+        CGFloat roomBottom = MAX(host.bounds.size.height - safe.bottom, CGRectGetMaxY(l.stage));
+        l.room = CGRectMake(column, roomTop, l.stage.size.width, roomBottom - roomTop);
+        l.ok = l.stage.size.width > 140 && l.stage.size.height > 80 && l.lift < 0;
+        return l;
+    }
     // The thumbnail takes the title's own leading edge, so the two line up down the page.
     CGFloat leading = title ? CGRectGetMinX(untransformed(title, host)) : CGRectGetMinX(area) + SGRSideMargin;
     l.cover = cover;
@@ -285,7 +308,6 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     // With the controls away: from the header row's top, just under the status bar, down to the home
     // indicator. The lines fade out at both ends, so nothing needs clearing beyond that.
     UIView *header = sg_header.viewIfLoaded;
-    UIEdgeInsets safe = host.window.safeAreaInsets;
     CGFloat roomTop = MIN(header ? CGRectGetMinY(SGFrameIn(header, host)) : safe.top, CGRectGetMinY(l.stage));
     CGFloat roomBottom = MAX(host.bounds.size.height - safe.bottom, CGRectGetMaxY(l.stage));
     l.room = CGRectMake(CGRectGetMinX(area), roomTop, area.size.width, roomBottom - roomTop);

@@ -14,3 +14,4 @@ SGModSection *SGAppearanceSection(void);   // the Appearance card at the top of 
 UIViewController *SGPlayerSettingsPage(void);
 UIViewController *SGLyricsSettingsPage(void);  // its sources in either look, and the redesign's display
 UIViewController *SGNavbarPage(void);       // the tab editor of whichever look is stored
+UIViewController *SGArtistLogoSettingsPage(void);

@@ -252,6 +252,14 @@ Redesigned:
                   a line's pronunciation (under the words it spells) and translation, switched on from a glass button in
                   the lyrics' corner that shows only for a song that has them, in the order of sizes the Lyrics page sets
                   (LyricsText.h). Laid out on the Mac against harness/lyrics/
+                  Portrait and landscape are declared in plist/liquid-glass.plist. In landscape the lyrics layout uses
+                  a cover column and a separate lyrics column. Player/PlayerVolume.x inserts iOS's public MPVolumeView
+                  below the transport controls; this adjusts the iPhone's output volume, not Spotify Connect's remote
+                  device volume, which remains in Spotify's own Connect controls.
+    Artist/       artist page headers use a Fanart.tv music logo when the user supplies a personal API key (Artist/
+                  SGArtistLogo.m); the artist name remains the fallback. The artist name is sent to MusicBrainz for an
+                  exact-name artist ID lookup, and Fanart.tv supplies the logo. Keys stay in local preferences and are
+                  shown partially in Mod Settings. Apple Music exposes artwork, not a public artist-logo endpoint.
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
                   edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred

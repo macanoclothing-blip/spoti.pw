@@ -17,6 +17,7 @@
 #import "Redesigned/Navbar/Navbar.h"
 #import "Redesigned/NowPlayingBar/NowPlayingBar.h"
 #import "Redesigned/Kit/SGRAccent.h"
+#import "Redesigned/Artist/SGArtistLogo.h"
 
 NSString *const SGRedesignedUIInfo = @"The newest version of spoti.pw, leaning towards Apple Music's style. It is not compatible with the legacy look's settings.\n\nThe legacy look gives you more freedom, yet still looks like Spotify.";
 
@@ -88,6 +89,7 @@ UIViewController *SGPlayerSettingsPage(void) {
         [pages addObject:SGWithSymbol(SGPageRow(@"Now playing bar", ^UIViewController *{ return SGNowPlayingBarSettingsPage(); }), @"rectangle.bottomthird.inset.filled")];
         [pages addObject:SGWithSymbol(SGPageRow(@"Queue & devices", ^UIViewController *{ return SGQueueSettingsPage(); }), @"text.line.first.and.arrowtriangle.forward")];
     }
+
     [pages addObject:SGWithSymbol(SGPageRow(@"Lock screen widget", ^UIViewController *{ return SGLockScreenWidgetPage(); }), @"lock")];
     [sections addObject:SGSection(nil, pages)];
     [sections addObjectsFromArray:native ? SGNativePlayerScreenSections() : SGRNowPlayingSections()];
@@ -95,4 +97,18 @@ UIViewController *SGPlayerSettingsPage(void) {
     [sections addObjectsFromArray:SGVibrationsSections()];
 
     return [[SGModPage alloc] initWithTitle:@"Player" intro:SGRestartNote sections:sections footer:nil];
+}
+
+UIViewController *SGArtistLogoSettingsPage(void) {
+    SGModRow *key = SGTextRow(@"Fanart.tv API key",
+        @"Set this up once. Artist logos are looked up automatically when you open an artist page. Artist names are sent to MusicBrainz to resolve an exact artist match.",
+        @"API key",
+        ^NSString *{ return SGRArtistLogoKeyShown() ?: @"Not set"; },
+        ^NSString *(NSString *text) { return SGRArtistLogoSetKey(text); });
+    key.refreshOn = SGRArtistLogoKeyDidChangeNotification;
+    SGModSection *section = SGNotedSection(@"Artist logos", @[key],
+        @"Set your Fanart.tv API key once; after that, logos are looked up automatically when you open an artist page. "
+         "The artist name stays visible if no logo is available. The key is stored on this device. Apple Music does not provide a public artist-logo endpoint.");
+    section.footerLink = @"https://fanart.tv/get-an-api-key/";
+    return [[SGModPage alloc] initWithTitle:@"Artist logos" intro:nil sections:@[section] footer:nil];
 }

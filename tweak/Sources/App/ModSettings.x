@@ -70,7 +70,10 @@ static UIViewController *modSettingsPage(void) {
         liveActivity.value = ^NSString *{ return SGLiveActivitySummary(); };
         [parts addObject:liveActivity];
     }
-    if (SGRedesignedUIStored()) [parts addObject:pageRow(@"Albums", @"square.stack", ^UIViewController *{ return SGRAlbumSettingsPage(); })];
+    if (SGRedesignedUIStored()) {
+        [parts addObject:pageRow(@"Albums", @"square.stack", ^UIViewController *{ return SGRAlbumSettingsPage(); })];
+        [parts addObject:pageRow(@"Artist logos", @"person.crop.rectangle.stack", ^UIViewController *{ return SGArtistLogoSettingsPage(); })];
+    }
     else [parts addObject:pageRow(@"Home & Library", @"house", ^UIViewController *{ return SGHomeSettingsPage(); })];
     [sections addObject:SGAppearanceSection()];
     // Sing's microphone is the redesigned player's, so Karaoke is the redesign's; its row follows a download.
