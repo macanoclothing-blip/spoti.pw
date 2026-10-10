@@ -222,11 +222,16 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
     NSMutableArray<UIView *> *trailing = controlsIn(header, @[
         @"YourLibraryHeader.recents", @"YourLibraryHeader.search", @"YourLibraryHeader.plus",
     ], keys);
-    [trailing addObject:universeButton(header)];
     __block UIView *face = nil;
     SGForEachView(header, ^(UIView *view) {
         if (!face && isFace(view) && view.bounds.size.width > 1) face = view;
     });
+    if (face) {
+        UIButton *universe = universeButton(header);
+        CGPoint faceCenter = [face.superview convertPoint:face.center toView:header];
+        universe.center = CGPointMake(universe.center.x, faceCenter.y);
+        [trailing addObject:universe];
+    }
     if (face) [trailing addObject:face];
     if (!trailing.count) return trailing;
 
