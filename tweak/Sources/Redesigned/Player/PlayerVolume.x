@@ -23,15 +23,14 @@ static void installVolumeRow(UIViewController *unit) {
         row = [[UIStackView alloc] initWithFrame:CGRectZero];
         row.axis = UILayoutConstraintAxisHorizontal;
         row.alignment = UIStackViewAlignmentCenter;
-        row.spacing = 8;
+        row.spacing = 10;
         row.layoutMarginsRelativeArrangement = YES;
-        row.layoutMargins = UIEdgeInsetsMake(0, 20, 0, 20);
-        UILabel *device = [UILabel new];
-        device.text = @"iPhone";
-        device.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];
-        device.textColor = [UIColor.whiteColor colorWithAlphaComponent:0.65];
-        [device.widthAnchor constraintEqualToConstant:44].active = YES;
-        [row addArrangedSubview:device];
+        row.layoutMargins = UIEdgeInsetsMake(0, 18, 0, 18);
+        UIImageView *quiet = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.fill"]];
+        quiet.tintColor = SGRSecondary();
+        quiet.contentMode = UIViewContentModeScaleAspectFit;
+        [quiet.widthAnchor constraintEqualToConstant:18].active = YES;
+        [row addArrangedSubview:quiet];
         MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -40,8 +39,15 @@ static void installVolumeRow(UIViewController *unit) {
         volume.showsVolumeSlider = YES;
         volume.tintColor = SGRAccent();
         volume.accessibilityLabel = @"iPhone volume";
+        volume.translatesAutoresizingMaskIntoConstraints = NO;
+        [volume.heightAnchor constraintEqualToConstant:30].active = YES;
         [row addArrangedSubview:volume];
-        [row.heightAnchor constraintEqualToConstant:30].active = YES;
+        UIImageView *loud = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
+        loud.tintColor = SGRSecondary();
+        loud.contentMode = UIViewContentModeScaleAspectFit;
+        [loud.widthAnchor constraintEqualToConstant:20].active = YES;
+        [row addArrangedSubview:loud];
+        [row.heightAnchor constraintEqualToConstant:36].active = YES;
         objc_setAssociatedObject(stack, &kVolumeRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     NSUInteger controlsIndex = [stack.arrangedSubviews indexOfObject:controls];

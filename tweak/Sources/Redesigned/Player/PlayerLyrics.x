@@ -694,6 +694,14 @@ static void replace(void) {
 #pragma mark - the units
 
 %hook _TtC19NowPlaying_ViewImpl24NowPlayingViewController
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
+
 - (void)viewDidLayoutSubviews {
     %orig;
     UIView *host = ((UIViewController *)self).viewIfLoaded;

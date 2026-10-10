@@ -15,6 +15,11 @@ static const CGFloat kSide = 20, kPlayWidth = 148, kRowSpacing = 16, kRowAbove =
 static const CGFloat kFaceMax = 22, kFaceStep = 0.85, kFaceGap = 8, kFaceRing = 1.5;
 static const NSUInteger kFaceCap = 3;
 
+static CGFloat titleDisplayHeight(UILabel *title, UIImageView *logo, CGFloat width) {
+    if (logo.hidden) return ceil([title sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)].height);
+    return MIN(110, MAX(76, ceil(title.font.lineHeight * 2.4)));
+}
+
 static UILabel *infoLabel(UIView *parent, UIFont *font, UIColor *color, NSInteger lines, NSTextAlignment alignment) {
     UILabel *label = [UILabel new];
     label.font = font;
@@ -354,7 +359,8 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     for (UILabel *label in @[_title, _creator, _length]) {
         if (label.hidden) continue;
         if (previous) height += previous == _creator ? 4 : 2;
-        height += ceil([label sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
+        height += label == _title ? titleDisplayHeight(_title, _artistLogo, text)
+                                  : ceil([label sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
         previous = label;
     }
     if (previous) height += kRowAbove;
@@ -372,7 +378,8 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
     for (UILabel *label in @[_title, _creator, _length]) {
         if (label.hidden) continue;
         if (previous) y += previous == _creator ? 4 : 2;
-        CGFloat height = ceil([label sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
+        CGFloat height = label == _title ? titleDisplayHeight(_title, _artistLogo, text)
+                                         : ceil([label sizeThatFits:CGSizeMake(text, CGFLOAT_MAX)].height);
         if (label == _creator) [self sgr_layoutCreator:CGRectMake(kSide, y, text, height)];
         else {
             label.frame = CGRectMake(kSide, y, text, height);

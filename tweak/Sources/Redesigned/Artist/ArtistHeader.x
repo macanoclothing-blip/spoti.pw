@@ -300,8 +300,16 @@ static void applyHeader(UIView *header) {
         objc_setAssociatedObject(header, &kLogoArtistKey, [name copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [info showLogo:nil forTitle:name];
         __weak SGRHeaderInfo *weakInfo = info;
+        __weak UIView *weakHeader = header;
         SGRArtistLogoForArtist(name, ^(UIImage *logo) {
             [weakInfo showLogo:logo forTitle:name];
+            if (logo) return;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * 60 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                UIView *active = weakHeader;
+                if (!active || ![objc_getAssociatedObject(active, &kLogoArtistKey) isEqualToString:name]) return;
+                objc_setAssociatedObject(active, &kLogoArtistKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (active.window) [active setNeedsLayout];
+            });
         });
     }
 
