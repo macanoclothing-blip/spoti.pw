@@ -45,6 +45,7 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Library.h"
+#import "MusicUniverse.h"
 
 NSString *const SGRLibraryListIdentifier = @"YourLibraryContent.collectionView";
 
@@ -55,6 +56,41 @@ static const CGFloat kRowInset = 8;
 static char kTitleKey, kRowWatchedKey;
 static char kRecentsKey, kSearchKey, kPlusKey, kHeaderTitleKey;
 static char kBackKey, kMenuKey, kFolderPlusKey, kPlayKey, kPauseKey, kFolderTitleKey;
+static char kUniverseButtonKey;
+
+@interface SGRUniverseButton : UIButton
+@end
+
+@implementation SGRUniverseButton
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    [self addTarget:self action:@selector(openUniverse:) forControlEvents:UIControlEventTouchUpInside];
+    return self;
+}
+
+- (void)openUniverse:(id)sender {
+    (void)sender;
+    SGRMusicUniversePresentFrom(self);
+}
+@end
+
+static UIButton *universeButton(UIView *header) {
+    UIButton *button = objc_getAssociatedObject(header, &kUniverseButtonKey);
+    if (button) return button;
+    button = [SGRUniverseButton buttonWithType:UIButtonTypeSystem];
+    UIImageSymbolConfiguration *symbol = [UIImageSymbolConfiguration configurationWithPointSize:18
+                                                                                           weight:UIImageSymbolWeightSemibold];
+    [button setImage:[UIImage systemImageNamed:@"sparkles" withConfiguration:symbol] forState:UIControlStateNormal];
+    button.tintColor = SGRPrimary();
+    button.backgroundColor = [UIColor colorWithWhite:1 alpha:0.1];
+    button.layer.cornerRadius = 18;
+    button.accessibilityLabel = @"Music Universe";
+    button.accessibilityHint = @"Esplora la tua cronologia musicale";
+    button.frame = CGRectMake(0, 0, 40, 44);
+    objc_setAssociatedObject(header, &kUniverseButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [header addSubview:button];
+    return button;
+}
 
 static void vanish(UIView *view) {
     if (!view) return;
@@ -186,6 +222,7 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
     NSMutableArray<UIView *> *trailing = controlsIn(header, @[
         @"YourLibraryHeader.recents", @"YourLibraryHeader.search", @"YourLibraryHeader.plus",
     ], keys);
+    [trailing addObject:universeButton(header)];
     __block UIView *face = nil;
     SGForEachView(header, ^(UIView *view) {
         if (!face && isFace(view) && view.bounds.size.width > 1) face = view;

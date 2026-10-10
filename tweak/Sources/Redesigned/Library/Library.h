@@ -9,6 +9,8 @@
 //                       circular one left round, and a hairline between the rows
 //     LibrarySearch.x   the search inside the library: its field a glass capsule, the way the Search tab's is
 //                       (Redesigned/Navbar/SearchField.x)
+//     MusicUniverse.x   a private listening atlas seeded from Spotify's extended-history export, followed by
+//                       local player-state recording, with an interactive map, timeline, filters and insights
 //
 // Every hook installs only while Redesigned UI is on (SGRedesignedUI).
 // Threading: main thread only.
