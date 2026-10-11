@@ -56,6 +56,9 @@ void SGSingStreamDestroy(SGSingStream *s) {
 }
 void SGSingStreamPause(SGSingStream *s, bool paused) { atomic_store(&s->paused, paused); }
 void SGSingStreamSetModelReady(SGSingStream *s, bool ready) { atomic_store(&s->modelReady, ready); }
+void SGSingStreamSetVoiceRenderer(SGSingStream *s, SGSingVoiceRenderer renderer, void *context) {
+    if (s) SGSingTimelineSetVoiceRenderer(s->timeline, renderer, context);
+}
 static void bypass(SGSingStream *s, SGSingStopReason reason) {
     unsigned expected = SGSingStopNone;
     atomic_compare_exchange_strong(&s->stopReason, &expected, reason);

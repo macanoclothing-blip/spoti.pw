@@ -5,6 +5,7 @@
 
 enum { block = 441, capacity = 44100 * 4 };
 static float dry[block * 2], vocal[block * 2], output[block * 2];
+static unsigned spatialCalls;
 static SGAudioStamp stamp(uint64_t at) { return (SGAudioStamp){7, 12, at, 1, block}; }
 static float signal(uint64_t sample) { return .25f + .125f * sinf((float)(sample % 44100) * .013f); }
 static void fill(uint64_t at) {
@@ -18,6 +19,72 @@ static void verify(uint64_t at, uint32_t count, float gain) {
         assert(fabsf(output[i*2] - signal(at+i)*gain) < 1e-6);
         assert(fabsf(output[i*2] + output[i*2+1]) < 1e-6);
     }
+}
+static bool doubledVoice(void *context, const float *input, float *output, uint32_t frames, uint64_t sourceFrame) {
+    (void)context; (void)sourceFrame;
+    spatialCalls++;
+    for (uint32_t i = 0; i < frames * 2; i++) output[i] = input[i] * 2;
+    return true;
+}
+static bool failedVoice(void *context, const float *input, float *output, uint32_t frames, uint64_t sourceFrame) {
+    (void)context; (void)input; (void)output; (void)frames; (void)sourceFrame;
+    spatialCalls++;
+    return false;
+}
+static void spatialMixing(void) {
+    SGSingTimeline *t = SGSingTimelineCreate(block * 40, block * 2);
+    assert(t);
+    SGSingTimelineBegin(t, stamp(0), 1);
+    SGSingTimelineSetVoiceRenderer(t, doubledVoice, NULL);
+    for (unsigned i = 0; i < 32; i++) {
+        fill((uint64_t)i * block);
+        assert(SGSingTimelineCapture(t, stamp((uint64_t)i * block), dry));
+        assert(SGSingTimelineVocals(t, stamp((uint64_t)i * block), vocal));
+    }
+    spatialCalls = 0;
+    for (unsigned i = 0; i < 4; i++) assert(SGSingTimelineRead(t, output, block) == block);
+    assert(spatialCalls > 0);
+    for (unsigned i = 0; i < block; i++) {
+        float expected = signal((uint64_t)3 * block + i) * .8f;
+        assert(fabsf(output[i*2] - expected) < 1e-5f);
+    }
+    SGSingTimelineDestroy(t);
+
+    t = SGSingTimelineCreate(block * 40, block * 2);
+    assert(t);
+    SGSingTimelineBegin(t, stamp(0), 0);
+    SGSingTimelineSetVoiceRenderer(t, doubledVoice, NULL);
+    for (unsigned i = 0; i < 32; i++) {
+        fill((uint64_t)i * block);
+        assert(SGSingTimelineCapture(t, stamp((uint64_t)i * block), dry));
+        assert(SGSingTimelineVocals(t, stamp((uint64_t)i * block), vocal));
+    }
+    spatialCalls = 0;
+    for (unsigned i = 0; i < 4; i++) assert(SGSingTimelineRead(t, output, block) == block);
+    assert(spatialCalls == 0);
+    for (unsigned i = 0; i < block; i++) {
+        float expected = signal((uint64_t)3 * block + i) * .6f;
+        assert(fabsf(output[i*2] - expected) < 1e-5f);
+    }
+    SGSingTimelineDestroy(t);
+
+    t = SGSingTimelineCreate(block * 40, block * 2);
+    assert(t);
+    SGSingTimelineBegin(t, stamp(0), 1);
+    SGSingTimelineSetVoiceRenderer(t, failedVoice, NULL);
+    for (unsigned i = 0; i < 32; i++) {
+        fill((uint64_t)i * block);
+        assert(SGSingTimelineCapture(t, stamp((uint64_t)i * block), dry));
+        assert(SGSingTimelineVocals(t, stamp((uint64_t)i * block), vocal));
+    }
+    spatialCalls = 0;
+    for (unsigned i = 0; i < 4; i++) assert(SGSingTimelineRead(t, output, block) == block);
+    assert(spatialCalls > 0);
+    for (unsigned i = 0; i < block; i++) {
+        float expected = signal((uint64_t)3 * block + i) * .4f;
+        assert(fabsf(output[i*2] - expected) < 1e-5f);
+    }
+    SGSingTimelineDestroy(t);
 }
 static void recoverWithoutChattering(bool sustained) {
     SGSingTimeline *t = SGSingTimelineCreate(44100 * 8, 88200);
@@ -80,6 +147,11 @@ static void recoverWithoutChattering(bool sustained) {
     #undef ADVANCE
 }
 int main(void) {
+#if defined(SG_TIMELINE_SPATIAL_TEST_ONLY)
+    spatialMixing();
+    puts("sing timeline spatial mix: stereo stem, vocal removal and render fallback passed");
+#else
+    spatialMixing();
     SGSingTimeline *cold = SGSingTimelineCreate(block * 40, block * 2);
     SGSingTimelineBegin(cold, stamp(0), .7f);
     for (unsigned n = 0; n < 32; n++) { fill(n*block); assert(SGSingTimelineCapture(cold,stamp(n*block),dry)); }
@@ -171,4 +243,5 @@ int main(void) {
     assert(consumed == captured && consumed > SGSingRecoveryLimitFrames && SGSingTimelineGetState(t) == SGSingTimelineIdle);
     SGSingTimelineDestroy(t);
     puts("sing timeline: buffering, wraparound, exact source order, dry drain, stale results and worker outage passed");
+#endif
 }

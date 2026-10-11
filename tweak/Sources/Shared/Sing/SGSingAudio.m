@@ -1,4 +1,5 @@
 #include "SGSingAudio.h"
+#include "SGSingSpatializer.h"
 #include "Shared/Audio/SGAudioPipeline.h"
 #include <stdlib.h>
 #include <stdatomic.h>
@@ -20,6 +21,7 @@ struct SGSingAudio {
     struct { uint64_t track, frame; } markers[kMarkers];
     atomic_uint markerHead, markerTail;
     SGSingStream *stream;
+    SGSingSpatializer *spatializer;
     const AudioTimeStamp *time; // borrowed only within the current render call
     float planar[2][SGSingStreamMaximumRenderFrames];
     float mixed[2 * SGSingStreamMaximumRenderFrames];
@@ -97,9 +99,22 @@ SGSingAudio *SGSingAudioCreate(SGAudioStamp origin, uint32_t window, uint32_t ho
     a->lastBoundary = UINT64_MAX;
     a->stream = SGSingStreamCreate(origin, window, hop, level);
     if (!a->stream) { free(a); return NULL; }
+    a->spatializer = SGSingSpatializerCreate();
+    if (a->spatializer) SGSingStreamSetVoiceRenderer(a->stream, SGSingSpatializerRender, a->spatializer);
     return a;
 }
 SGSingStream *SGSingAudioStream(SGSingAudio *a) { return a ? a->stream : NULL; }
+bool SGSingAudioPrepareSpatial(SGSingAudio *a) {
+    return a && SGSingSpatializerPrepare(a->spatializer);
+}
+bool SGSingAudioSetSpatialEnabled(SGSingAudio *a, bool enabled) {
+    return SGSingSpatializerSetEnabled(a ? a->spatializer : NULL, enabled);
+}
+bool SGSingAudioSpatialReady(const SGSingAudio *a) { return SGSingSpatializerReady(a ? a->spatializer : NULL); }
+bool SGSingAudioSpatialFailed(const SGSingAudio *a) { return !a || !a->spatializer || SGSingSpatializerFailed(a->spatializer); }
+bool SGSingAudioHeadTrackingConfigured(const SGSingAudio *a) {
+    return a && SGSingSpatializerHeadTrackingConfigured(a->spatializer);
+}
 bool SGSingAudioAttach(SGSingAudio *a) {
     AudioStreamBasicDescription format = {0};
     if (!a || a->epoch != atomic_load(&epoch) || !SGAudioPipelineSourceFormat(&format) || format.mSampleRate != SGSingSampleRate || format.mChannelsPerFrame != 2 ||
@@ -115,7 +130,9 @@ void SGSingAudioDetach(SGSingAudio *a) {
 }
 void SGSingAudioDestroy(SGSingAudio *a) {
     if (!a) return;
-    SGSingStreamDestroy(a->stream); free(a);
+    SGSingStreamDestroy(a->stream);
+    SGSingSpatializerDestroy(a->spatializer);
+    free(a);
 }
 
 void SGSingAudioInvalidate(void) { atomic_fetch_add(&epoch, 1); }

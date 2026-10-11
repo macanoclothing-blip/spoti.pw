@@ -4,7 +4,7 @@
 // Colours are white over the artwork field (SGRField.h), whose colour is kept dark enough that
 // SGRPrimary and SGRSecondary both pass WCAG AA on it. Type is the system font (SF Pro) sized by the
 // text style and capped, since Spotify's pages lay out for a fixed header height. Motion is springs,
-// critically damped for layout and a little bounce for press feedback; under Reduce Motion both
+// critically damped for layout and press feedback; under Reduce Motion both
 // become instant, while crossfades stay, a fade not being motion.
 //
 // Threading: the constants and the colours are safe anywhere; fonts, SGRAnimate and the
@@ -48,7 +48,7 @@ BOOL SGRIncreaseContrast(void);
 
 typedef NS_ENUM(NSInteger, SGRMotion) {
     SGRMotionLayout,   // a spring with no overshoot, for anything moving or resizing
-    SGRMotionPress,    // a spring with a little bounce, for press feedback
+    SGRMotionPress,    // a brief, critically damped spring for press feedback
     SGRMotionFade,     // an ease in and out over SGRCrossfade, kept under Reduce Motion
 };
 // Runs `animations` with the motion's timing, or at once under Reduce Motion (except a fade), and

@@ -4,8 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { kVoiceRenderChunkFrames = 1024 };
+
 struct SGSingTimeline {
-    float *dry, *vocals;
+    float *dry, *vocals, *spatialVocals;
     uint32_t capacity, reserve;
     uint64_t captured, processed, consumed;
     uint64_t recoveryStart, recoveredAt;
@@ -13,6 +15,8 @@ struct SGSingTimeline {
     SGAudioStamp origin;
     SGSingTimelineState state;
     SGSingMixer mixer;
+    SGSingVoiceRenderer voiceRenderer;
+    void *voiceRendererContext;
 };
 
 SGSingTimeline *SGSingTimelineCreate(uint32_t capacity, uint32_t reserve) {
@@ -21,12 +25,18 @@ SGSingTimeline *SGSingTimelineCreate(uint32_t capacity, uint32_t reserve) {
     if (!t) return NULL;
     t->dry = calloc((size_t)capacity * 2, sizeof(float));
     t->vocals = calloc((size_t)capacity * 2, sizeof(float));
-    if (!t->dry || !t->vocals) { SGSingTimelineDestroy(t); return NULL; }
+    t->spatialVocals = calloc((size_t)kVoiceRenderChunkFrames * 2, sizeof(float));
+    if (!t->dry || !t->vocals || !t->spatialVocals) { SGSingTimelineDestroy(t); return NULL; }
     t->capacity = capacity; t->reserve = reserve;
     return t;
 }
 void SGSingTimelineDestroy(SGSingTimeline *t) {
-    if (t) { free(t->dry); free(t->vocals); free(t); }
+    if (t) { free(t->dry); free(t->vocals); free(t->spatialVocals); free(t); }
+}
+void SGSingTimelineSetVoiceRenderer(SGSingTimeline *t, SGSingVoiceRenderer renderer, void *context) {
+    if (!t) return;
+    t->voiceRenderer = renderer;
+    t->voiceRendererContext = context;
 }
 void SGSingTimelineBegin(SGSingTimeline *t, SGAudioStamp origin, float level) {
     t->origin = origin;
@@ -131,21 +141,44 @@ uint32_t SGSingTimelineRead(SGSingTimeline *t, float *out, uint32_t frames) {
     }
     uint64_t queued = SGSingTimelineQueued(t);
     if (frames > queued) frames = (uint32_t)queued;
-    for (uint32_t i = 0; i < frames; i++, t->consumed++) {
-        size_t at = (t->consumed % t->capacity) * 2;
-        float dry[2] = {t->dry[at], t->dry[at+1]}, result[2];
+    for (uint32_t done = 0; done < frames;) {
+        uint32_t ringFrame = (uint32_t)(t->consumed % t->capacity);
+        uint32_t count = frames - done;
+        if (count > t->capacity - ringFrame) count = t->capacity - ringFrame;
         if (t->consumed < t->processed) {
-            SGSingMixerProcess(&t->mixer, dry, t->vocals + at, result, 1);
+            uint32_t covered = count;
+            uint64_t ready = t->processed - t->consumed;
+            if (covered > ready) covered = (uint32_t)ready;
+            for (uint32_t offset = 0; offset < covered;) {
+                uint32_t chunk = covered - offset;
+                if (chunk > kVoiceRenderChunkFrames) chunk = kVoiceRenderChunkFrames;
+                size_t at = ((size_t)ringFrame + offset) * 2;
+                const float *dry = t->dry + at;
+                const float *vocals = t->vocals + at;
+                const float *spatial = NULL;
+                if (t->voiceRenderer && (t->mixer.level > SGSingOriginalMixLevel ||
+                                         t->mixer.targetLevel > SGSingOriginalMixLevel) &&
+                    t->voiceRenderer(t->voiceRendererContext, vocals, t->spatialVocals, chunk,
+                                     t->consumed + offset)) {
+                    spatial = t->spatialVocals;
+                }
+                SGSingMixerProcessSpatial(&t->mixer, dry, vocals, spatial, out + (done + offset) * 2, chunk);
+                offset += chunk;
+            }
+            t->consumed += covered;
+            done += covered;
         } else {
             // Bypass completes before the last aligned vocal runs out. Never extrapolate a
             // missing stem from its last sample: that would add a DC offset to the original.
-            result[0] = dry[0]; result[1] = dry[1];
+            size_t at = (size_t)ringFrame * 2;
+            memcpy(out + done * 2, t->dry + at, (size_t)count * 2 * sizeof(float));
             // A short last vocal packet can exhaust coverage inside a large render quantum.
             // Keep the mixer's next recovery ramp anchored to the original mix actually emitted.
             if (t->mixer.level != SGSingOriginalMixLevel || t->mixer.remaining)
                 SGSingMixerInit(&t->mixer, SGSingSampleRate, SGSingOriginalMixLevel);
+            t->consumed += count;
+            done += count;
         }
-        out[i*2] = result[0]; out[i*2+1] = result[1];
     }
     if (t->state == SGSingTimelineDraining && t->consumed == t->captured) t->state = SGSingTimelineIdle;
     return frames;

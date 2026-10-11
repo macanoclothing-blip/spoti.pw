@@ -15,5 +15,9 @@ void SGSingMixerSetLevel(SGSingMixer *mixer, float level); // a 30 ms ramp to th
 // Stereo interleaved. Original and vocals must have identical generation, format and source index.
 // Bottom is instrumental, center is original, top is vocals.
 void SGSingMixerProcess(SGSingMixer *mixer, const float *original, const float *vocals, float *output, uint32_t frames);
+// Like Process, but use spatialVocals only when mixing above the original-mix point. Vocal removal
+// always uses the aligned, unmodified stem so spatialization cannot leave the original vocal behind.
+void SGSingMixerProcessSpatial(SGSingMixer *mixer, const float *original, const float *vocals,
+                               const float *spatialVocals, float *output, uint32_t frames);
 // A 120 ms ramp to the aligned original mix, no clock change: SGSingReserveFrames at 44.1 kHz.
 void SGSingMixerBypass(SGSingMixer *mixer);

@@ -17,6 +17,8 @@ void SGSingStreamDestroy(SGSingStream *stream);
 void SGSingStreamPause(SGSingStream *stream, bool paused);
 void SGSingStreamBypass(SGSingStream *stream);
 void SGSingStreamSetLevel(SGSingStream *stream, float level);
+// Set once before attaching the render endpoint.
+void SGSingStreamSetVoiceRenderer(SGSingStream *stream, SGSingVoiceRenderer renderer, void *context);
 // Disable before attaching a cold model; enable once Ready. The render owner seeds the worker
 // from retained live PCM, so a slow model load cannot fill an unused input queue.
 void SGSingStreamSetModelReady(SGSingStream *stream, bool ready);

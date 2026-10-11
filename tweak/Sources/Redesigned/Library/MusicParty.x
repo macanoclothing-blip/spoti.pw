@@ -92,10 +92,12 @@ static NSArray *partyShuffle(NSArray *items) {
 @implementation SGRMusicPartyViewController {
     UILabel *_sourceLabel, *_statusLabel, *_gameStatusLabel, *_promptLabel, *_clueLabel, *_scoreLabel, *_turnLabel;
     UITextField *_artistSearch;
-    UIStackView *_artistResults, *_modeGrid, *_answers;
+    UITextField *_playerNameField;
+    UIStackView *_artistResults, *_modeGrid, *_answers, *_playerRoster, *_playerScoreboard;
+    UILabel *_playerRosterStatus;
     UISegmentedControl *_teams;
     UIButton *_startButton, *_clipButton, *_nextButton;
-    UIView *_setupView, *_gameView, *_coverView;
+    UIView *_setupView, *_gameView, *_coverView, *_playersPanel;
     UIImageView *_coverImage;
     SGRPartyMode _mode;
     NSArray<NSDictionary *> *_history;
@@ -111,7 +113,9 @@ static NSArray *partyShuffle(NSArray *items) {
     NSString *_clipTrackURI;
     double _clipRestorePosition;
     BOOL _clipWasPlaying, _clipActive, _sessionActive, _roundAnswered, _waitingForLyrics;
-    NSUInteger _round, _scoreOne, _scoreTwo;
+    NSMutableArray<NSString *> *_playerNames;
+    NSMutableArray<NSNumber *> *_playerScores;
+    NSUInteger _round, _roundLimit, _scoreOne, _scoreTwo, _activePlayerIndex;
 }
 
 - (void)viewDidLoad {
@@ -121,6 +125,8 @@ static NSArray *partyShuffle(NSArray *items) {
     self.modalPresentationStyle = UIModalPresentationFullScreen;
     _history = SGRMusicUniverseHistoryEvents();
     _usedTrackKeys = [NSMutableSet set];
+    _playerNames = [NSMutableArray array];
+    _playerScores = [NSMutableArray array];
     _mode = SGRPartyModeSong;
     [self buildInterface];
     [self rebuildPool];
@@ -132,7 +138,8 @@ static NSArray *partyShuffle(NSArray *items) {
 - (UILabel *)label:(NSString *)text size:(CGFloat)size weight:(UIFontWeight)weight color:(UIColor *)color {
     UILabel *label = [UILabel new];
     label.text = text;
-    label.font = [UIFont systemFontOfSize:size weight:weight];
+    label.font = [UIFontMetrics.defaultMetrics scaledFontForFont:[UIFont systemFontOfSize:size weight:weight]];
+    label.adjustsFontForContentSizeCategory = YES;
     label.textColor = color;
     return label;
 }
@@ -264,11 +271,54 @@ static NSArray *partyShuffle(NSArray *items) {
 
     UILabel *teamHeading = [self label:@"COME GIOCATE" size:12 weight:UIFontWeightBold color:SGRTertiary()];
     [setup addArrangedSubview:teamHeading];
-    _teams = [[UISegmentedControl alloc] initWithItems:@[@"Un giocatore", @"Due squadre"]];
+    _teams = [[UISegmentedControl alloc] initWithItems:@[@"Singolo", @"Squadre", @"Giocatori"]];
     _teams.selectedSegmentIndex = 0;
     _teams.selectedSegmentTintColor = [SGRAccent() colorWithAlphaComponent:0.8];
     [_teams addTarget:self action:@selector(teamModeChanged) forControlEvents:UIControlEventValueChanged];
     [setup addArrangedSubview:_teams];
+    _playersPanel = [self card];
+    UIStackView *playersContent = [UIStackView new];
+    playersContent.translatesAutoresizingMaskIntoConstraints = NO;
+    playersContent.axis = UILayoutConstraintAxisVertical;
+    playersContent.spacing = 10;
+    [_playersPanel addSubview:playersContent];
+    [NSLayoutConstraint activateConstraints:@[
+        [playersContent.topAnchor constraintEqualToAnchor:_playersPanel.topAnchor constant:14],
+        [playersContent.leadingAnchor constraintEqualToAnchor:_playersPanel.leadingAnchor constant:14],
+        [playersContent.trailingAnchor constraintEqualToAnchor:_playersPanel.trailingAnchor constant:-14],
+        [playersContent.bottomAnchor constraintEqualToAnchor:_playersPanel.bottomAnchor constant:-14],
+    ]];
+    UILabel *playersTitle = [self label:@"GIOCATORI · MAX 8" size:12 weight:UIFontWeightBold color:SGRTertiary()];
+    [playersContent addArrangedSubview:playersTitle];
+    _playerRoster = [UIStackView new];
+    _playerRoster.axis = UILayoutConstraintAxisVertical;
+    _playerRoster.spacing = 6;
+    [playersContent addArrangedSubview:_playerRoster];
+    UIStackView *addPlayerRow = [UIStackView new];
+    addPlayerRow.axis = UILayoutConstraintAxisHorizontal;
+    addPlayerRow.spacing = 8;
+    _playerNameField = [UITextField new];
+    _playerNameField.translatesAutoresizingMaskIntoConstraints = NO;
+    _playerNameField.placeholder = @"Nome giocatore";
+    _playerNameField.textColor = SGRPrimary();
+    _playerNameField.tintColor = SGRAccent();
+    _playerNameField.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    _playerNameField.layer.cornerRadius = 12;
+    _playerNameField.clearButtonMode = UITextFieldViewModeWhileEditing;
+    _playerNameField.returnKeyType = UIReturnKeyDone;
+    _playerNameField.delegate = self;
+    [addPlayerRow addArrangedSubview:_playerNameField];
+    [_playerNameField.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    UIButton *addPlayer = [self button:@"Aggiungi" symbol:@"person.badge.plus" action:@selector(addPartyPlayer)];
+    [addPlayerRow addArrangedSubview:addPlayer];
+    [playersContent addArrangedSubview:addPlayerRow];
+    _playerRosterStatus = [self label:@"Aggiungi almeno due nomi per attivare la sfida individuale." size:12
+                                weight:UIFontWeightRegular color:SGRSecondary()];
+    _playerRosterStatus.numberOfLines = 0;
+    [playersContent addArrangedSubview:_playerRosterStatus];
+    _playersPanel.hidden = YES;
+    [setup addArrangedSubview:_playersPanel];
+    [self renderPartyPlayers];
     _statusLabel = [self label:@"" size:12 weight:UIFontWeightRegular color:SGRTertiary()];
     _statusLabel.numberOfLines = 0;
     [setup addArrangedSubview:_statusLabel];
@@ -295,17 +345,28 @@ static NSArray *partyShuffle(NSArray *items) {
     scoreRow.axis = UILayoutConstraintAxisHorizontal;
     scoreRow.distribution = UIStackViewDistributionEqualSpacing;
     scoreRow.alignment = UIStackViewAlignmentCenter;
-    [scoreCard addSubview:scoreRow];
+    UIStackView *scoreContent = [UIStackView new];
+    scoreContent.translatesAutoresizingMaskIntoConstraints = NO;
+    scoreContent.axis = UILayoutConstraintAxisVertical;
+    scoreContent.spacing = 12;
+    [scoreCard addSubview:scoreContent];
     [NSLayoutConstraint activateConstraints:@[
-        [scoreRow.topAnchor constraintEqualToAnchor:scoreCard.topAnchor constant:13],
-        [scoreRow.bottomAnchor constraintEqualToAnchor:scoreCard.bottomAnchor constant:-13],
-        [scoreRow.leadingAnchor constraintEqualToAnchor:scoreCard.leadingAnchor constant:16],
-        [scoreRow.trailingAnchor constraintEqualToAnchor:scoreCard.trailingAnchor constant:-16],
+        [scoreContent.topAnchor constraintEqualToAnchor:scoreCard.topAnchor constant:13],
+        [scoreContent.bottomAnchor constraintEqualToAnchor:scoreCard.bottomAnchor constant:-13],
+        [scoreContent.leadingAnchor constraintEqualToAnchor:scoreCard.leadingAnchor constant:16],
+        [scoreContent.trailingAnchor constraintEqualToAnchor:scoreCard.trailingAnchor constant:-16],
     ]];
     _turnLabel = [self label:@"ROUND 1 / 10" size:12 weight:UIFontWeightBold color:SGRAccent()];
     _scoreLabel = [self label:@"0 punti" size:14 weight:UIFontWeightSemibold color:SGRPrimary()];
+    _scoreLabel.textAlignment = NSTextAlignmentRight;
     [scoreRow addArrangedSubview:_turnLabel];
     [scoreRow addArrangedSubview:_scoreLabel];
+    [scoreContent addArrangedSubview:scoreRow];
+    _playerScoreboard = [UIStackView new];
+    _playerScoreboard.axis = UILayoutConstraintAxisVertical;
+    _playerScoreboard.spacing = 4;
+    _playerScoreboard.hidden = YES;
+    [scoreContent addArrangedSubview:_playerScoreboard];
     [game addArrangedSubview:scoreCard];
 
     _coverView = [UIView new];
@@ -426,7 +487,77 @@ static NSArray *partyShuffle(NSArray *items) {
 }
 
 - (void)teamModeChanged {
+    _playersPanel.hidden = _teams.selectedSegmentIndex != 2;
     [self refreshStatus];
+}
+
+- (void)addPartyPlayer {
+    NSString *name = [_playerNameField.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!name.length) {
+        _playerRosterStatus.text = @"Scrivi un nome prima di aggiungerlo.";
+        _playerRosterStatus.textColor = UIColor.systemOrangeColor;
+        return;
+    }
+    if (_playerNames.count >= 8) {
+        _playerRosterStatus.text = @"Puoi aggiungere al massimo 8 giocatori.";
+        _playerRosterStatus.textColor = UIColor.systemOrangeColor;
+        return;
+    }
+    for (NSString *existing in _playerNames) {
+        if ([partyNormalize(existing) isEqualToString:partyNormalize(name)]) {
+            _playerRosterStatus.text = @"Questo nome è già nella partita.";
+            _playerRosterStatus.textColor = UIColor.systemOrangeColor;
+            return;
+        }
+    }
+    [_playerNames addObject:name];
+    _playerNameField.text = @"";
+    _playerRosterStatus.textColor = SGRSecondary();
+    [self renderPartyPlayers];
+    [self refreshStatus];
+}
+
+- (void)removePartyPlayer:(UIButton *)sender {
+    if (sender.tag >= _playerNames.count) return;
+    [_playerNames removeObjectAtIndex:sender.tag];
+    _playerRosterStatus.textColor = SGRSecondary();
+    [self renderPartyPlayers];
+    [self refreshStatus];
+}
+
+- (void)renderPartyPlayers {
+    for (UIView *view in _playerRoster.arrangedSubviews) {
+        [_playerRoster removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+    for (NSUInteger index = 0; index < _playerNames.count; index++) {
+        NSString *name = _playerNames[index];
+        UIStackView *row = [UIStackView new];
+        row.axis = UILayoutConstraintAxisHorizontal;
+        row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 8;
+        row.layoutMargins = UIEdgeInsetsMake(4, 10, 4, 4);
+        row.layoutMarginsRelativeArrangement = YES;
+        row.backgroundColor = [UIColor colorWithWhite:1 alpha:0.055];
+        row.layer.cornerRadius = 12;
+        UILabel *nameLabel = [self label:name size:15 weight:UIFontWeightSemibold color:SGRPrimary()];
+        [row addArrangedSubview:nameLabel];
+        UIButton *remove = [UIButton buttonWithType:UIButtonTypeSystem];
+        [remove setImage:[UIImage systemImageNamed:@"xmark.circle.fill"] forState:UIControlStateNormal];
+        remove.tintColor = SGRSecondary();
+        remove.accessibilityLabel = [NSString stringWithFormat:@"Rimuovi %@", name];
+        remove.tag = index;
+        [remove addTarget:self action:@selector(removePartyPlayer:) forControlEvents:UIControlEventTouchUpInside];
+        [remove.widthAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+        [remove.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+        [row addArrangedSubview:remove];
+        [_playerRoster addArrangedSubview:row];
+    }
+    _playerRosterStatus.text = _playerNames.count < 2
+        ? @"Aggiungi almeno due nomi per attivare la sfida individuale."
+        : [NSString stringWithFormat:@"%lu giocatori · turno a rotazione · punto a ogni risposta esatta.",
+           (unsigned long)_playerNames.count];
+    _playerRosterStatus.textColor = SGRSecondary();
 }
 
 - (void)rebuildPool {
@@ -522,8 +653,10 @@ static NSArray *partyShuffle(NSArray *items) {
     BOOL hasCurrent = partyIsPlayerTrack(state.track);
     BOOL ready = YES;
     NSString *message = _teams.selectedSegmentIndex == 1
-        ? @"Squadre A e B giocano a turno sullo stesso iPhone: passatevi il telefono dopo ogni round."
-        : @"Partita singola da 10 round. Rispondete tutti dallo stesso iPhone.";
+        ? @"Squadre A e B si alternano: passatevi il telefono dopo ogni round."
+        : (_teams.selectedSegmentIndex == 2
+           ? @"I giocatori si alternano automaticamente: passate il telefono a chi è indicato nel turno."
+           : @"Partita singola da 10 round sullo stesso iPhone.");
     if (_mode == SGRPartyModeSong && !hasCurrent) {
         message = @"Per la modalità audio, fai partire Spotify da una playlist, un album o la radio di un artista e torna qui.";
         ready = NO;
@@ -573,6 +706,10 @@ static NSArray *partyShuffle(NSArray *items) {
             message = @"Aggiungi almeno un brano alla coda futura di Spotify per usare questa modalità.";
             ready = NO;
         }
+    }
+    if (_teams.selectedSegmentIndex == 2 && _playerNames.count < 2) {
+        message = @"Aggiungi almeno due giocatori nella lista qui sopra per iniziare la sfida.";
+        ready = NO;
     }
     _statusLabel.text = message;
     _startButton.enabled = ready;
@@ -638,6 +775,10 @@ static NSArray *partyShuffle(NSArray *items) {
 }
 
 - (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    if (textField == _playerNameField) {
+        [self addPartyPlayer];
+        return YES;
+    }
     [textField resignFirstResponder];
     return YES;
 }
@@ -647,6 +788,14 @@ static NSArray *partyShuffle(NSArray *items) {
     [_usedTrackKeys removeAllObjects];
     _round = 0;
     _scoreOne = _scoreTwo = 0;
+    _roundLimit = 10;
+    _activePlayerIndex = 0;
+    [_playerScores removeAllObjects];
+    if (_teams.selectedSegmentIndex == 2) {
+        NSUInteger playerCount = _playerNames.count;
+        _roundLimit = ((10 + playerCount - 1) / playerCount) * playerCount;
+        for (NSUInteger i = 0; i < playerCount; i++) [_playerScores addObject:@0];
+    }
     _sessionActive = YES;
     _roundAnswered = NO;
     _setupView.hidden = YES;
@@ -677,12 +826,16 @@ static NSArray *partyShuffle(NSArray *items) {
     _answerRecords = @[];
     _lyricLines = nil;
     _waitingForLyrics = NO;
-    if (_round >= 10) {
+    if (_round >= _roundLimit) {
         [self finishGame];
         return;
     }
     _round++;
+    if (_teams.selectedSegmentIndex == 2) _activePlayerIndex = (_round - 1) % _playerNames.count;
     [self updateScore];
+    if (_teams.selectedSegmentIndex == 2) {
+        _gameStatusLabel.text = [NSString stringWithFormat:@"Turno di %@ · passate il telefono prima di rispondere.", _playerNames[_activePlayerIndex]];
+    }
     SPTPlayerState *state = SGPlayerState();
     NSDictionary *current = partyRecord(state.track);
     NSArray<NSDictionary *> *eligible = [self eligibleTracks];
@@ -1035,8 +1188,13 @@ static NSArray *partyShuffle(NSArray *items) {
     NSDictionary *chosen = _answerRecords[sender.tag];
     BOOL correct = [chosen[@"correct"] boolValue];
     if (correct) {
-        if (_teams.selectedSegmentIndex == 1 && (_round % 2 == 0)) _scoreTwo++;
-        else _scoreOne++;
+        if (_teams.selectedSegmentIndex == 2) {
+            _playerScores[_activePlayerIndex] = @([_playerScores[_activePlayerIndex] unsignedIntegerValue] + 1);
+        } else if (_teams.selectedSegmentIndex == 1 && (_round % 2 == 0)) {
+            _scoreTwo++;
+        } else {
+            _scoreOne++;
+        }
     }
     for (NSUInteger i = 0; i < _answers.arrangedSubviews.count; i++) {
         UIButton *button = _answers.arrangedSubviews[i];
@@ -1051,15 +1209,22 @@ static NSArray *partyShuffle(NSArray *items) {
         button.enabled = NO;
     }
     NSString *answer = chosen[@"label"];
-    _gameStatusLabel.text = correct ? [NSString stringWithFormat:@"Esatto! %@ guadagna un punto.", _teams.selectedSegmentIndex == 1 && (_round % 2 == 0) ? @"Squadra B" : @"Squadra A"]
-                                    : [NSString stringWithFormat:@"La risposta era: %@", answer];
+    NSString *scorer = _teams.selectedSegmentIndex == 2
+        ? _playerNames[_activePlayerIndex]
+        : (_teams.selectedSegmentIndex == 1
+           ? ((_round % 2 == 0) ? @"Squadra B" : @"Squadra A")
+           : nil);
+    _gameStatusLabel.text = correct
+        ? (scorer ? [NSString stringWithFormat:@"Esatto! %@ guadagna un punto.", scorer] : @"Esatto! Hai guadagnato un punto.")
+        : (scorer ? [NSString stringWithFormat:@"%@: la risposta era %@.", scorer, answer]
+                  : [NSString stringWithFormat:@"La risposta era: %@", answer]);
     [self updateScore];
     _nextButton.hidden = NO;
 }
 
 - (void)nextRound {
     if (!_sessionActive) return;
-    if (_round >= 10) { [self finishGame]; return; }
+    if (_round >= _roundLimit) { [self finishGame]; return; }
     if (_mode == SGRPartyModeSong || _mode == SGRPartyModeCover || _mode == SGRPartyModeLyrics || _mode == SGRPartyModeNext) {
         id player = SGKaraokePlayer();
         if (![player respondsToSelector:@selector(skipToNextTrackWithOptions:)]) {
@@ -1079,9 +1244,26 @@ static NSArray *partyShuffle(NSArray *items) {
 }
 
 - (void)updateScore {
-    _turnLabel.text = [NSString stringWithFormat:@"ROUND %lu / 10", (unsigned long)_round];
+    _turnLabel.text = [NSString stringWithFormat:@"ROUND %lu / %lu", (unsigned long)_round, (unsigned long)_roundLimit];
+    _playerScoreboard.hidden = _teams.selectedSegmentIndex != 2;
+    for (UIView *view in _playerScoreboard.arrangedSubviews) {
+        [_playerScoreboard removeArrangedSubview:view];
+        [view removeFromSuperview];
+    }
+    if (_teams.selectedSegmentIndex == 2) {
+        for (NSUInteger index = 0; index < _playerNames.count; index++) {
+            NSString *suffix = index == _activePlayerIndex && _round < _roundLimit ? @"  ·  TURNO" : @"";
+            NSString *text = [NSString stringWithFormat:@"%@%@  —  %@ punti",
+                              _playerNames[index], suffix, _playerScores[index]];
+            UILabel *playerScore = [self label:text size:13 weight:index == _activePlayerIndex ? UIFontWeightSemibold : UIFontWeightRegular
+                                                       color:index == _activePlayerIndex ? SGRAccent() : SGRSecondary()];
+            [_playerScoreboard addArrangedSubview:playerScore];
+        }
+    }
     if (_teams.selectedSegmentIndex == 1) {
         _scoreLabel.text = [NSString stringWithFormat:@"A %lu  ·  B %lu", (unsigned long)_scoreOne, (unsigned long)_scoreTwo];
+    } else if (_teams.selectedSegmentIndex == 2) {
+        _scoreLabel.text = [NSString stringWithFormat:@"%lu giocatori", (unsigned long)_playerNames.count];
     } else {
         _scoreLabel.text = [NSString stringWithFormat:@"%lu punti", (unsigned long)_scoreOne];
     }
@@ -1090,9 +1272,29 @@ static NSArray *partyShuffle(NSArray *items) {
 - (void)finishGame {
     _sessionActive = NO;
     _promptLabel.text = @"Partita terminata!";
-    _clueLabel.text = _teams.selectedSegmentIndex == 1
-        ? (_scoreOne == _scoreTwo ? @"Pareggio! Rivincita?" : [NSString stringWithFormat:@"%@ vince!", _scoreOne > _scoreTwo ? @"Squadra A" : @"Squadra B"])
-        : [NSString stringWithFormat:@"Hai totalizzato %lu punti su 10.", (unsigned long)_scoreOne];
+    if (_teams.selectedSegmentIndex == 2) {
+        NSUInteger highestScore = 0;
+        NSMutableArray<NSString *> *winners = [NSMutableArray array];
+        for (NSUInteger index = 0; index < _playerScores.count; index++) {
+            NSUInteger score = [_playerScores[index] unsignedIntegerValue];
+            if (score > highestScore) {
+                highestScore = score;
+                [winners removeAllObjects];
+                [winners addObject:_playerNames[index]];
+            } else if (score == highestScore) {
+                [winners addObject:_playerNames[index]];
+            }
+        }
+        _clueLabel.text = winners.count == 1
+            ? [NSString stringWithFormat:@"%@ vince con %lu punti!", winners.firstObject, (unsigned long)highestScore]
+            : [NSString stringWithFormat:@"Pareggio tra %@ con %lu punti.", [winners componentsJoinedByString:@", "], (unsigned long)highestScore];
+    } else if (_teams.selectedSegmentIndex == 1) {
+        _clueLabel.text = _scoreOne == _scoreTwo
+            ? @"Pareggio! Rivincita?"
+            : [NSString stringWithFormat:@"%@ vince!", _scoreOne > _scoreTwo ? @"Squadra A" : @"Squadra B"];
+    } else {
+        _clueLabel.text = [NSString stringWithFormat:@"Hai totalizzato %lu punti su 10.", (unsigned long)_scoreOne];
+    }
     _clipButton.hidden = YES;
     _nextButton.hidden = YES;
     UIButton *again = [self button:@"Nuova partita" symbol:@"arrow.counterclockwise" action:@selector(returnToSetup)];

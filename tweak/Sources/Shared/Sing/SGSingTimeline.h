@@ -13,9 +13,14 @@ typedef enum {
 } SGSingTimelineState;
 enum { SGSingRecoveryLimitFrames = SGSingSampleRate * 8 };
 typedef struct SGSingTimeline SGSingTimeline;
+typedef bool (*SGSingVoiceRenderer)(void *context, const float *inputStereo, float *outputStereo,
+                                    uint32_t frames, uint64_t sourceFrame);
 
 SGSingTimeline *SGSingTimelineCreate(uint32_t capacityFrames, uint32_t reserveFrames);
 void SGSingTimelineDestroy(SGSingTimeline *timeline); // both endpoints stopped
+// Set once before the render endpoint is attached. Renderers must be bounded, allocation-free,
+// and leave input untouched; returning false uses the unmodified vocal stem for that chunk.
+void SGSingTimelineSetVoiceRenderer(SGSingTimeline *timeline, SGSingVoiceRenderer renderer, void *context);
 // Begin also invalidates all retained audio. The caller must change generation before a seek.
 void SGSingTimelineBegin(SGSingTimeline *timeline, SGAudioStamp origin, float mixLevel);
 void SGSingTimelineSetLevel(SGSingTimeline *timeline, float level);

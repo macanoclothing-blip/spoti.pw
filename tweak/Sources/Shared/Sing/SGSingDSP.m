@@ -19,6 +19,10 @@ void SGSingMixerSetLevel(SGSingMixer *m, float level) {
 }
 void SGSingMixerBypass(SGSingMixer *m) { ramp(m, SGSingOriginalMixLevel, kBypassRampSeconds); }
 void SGSingMixerProcess(SGSingMixer *m, const float *original, const float *vocals, float *out, uint32_t frames) {
+    SGSingMixerProcessSpatial(m, original, vocals, NULL, out, frames);
+}
+void SGSingMixerProcessSpatial(SGSingMixer *m, const float *original, const float *vocals,
+                               const float *spatialVocals, float *out, uint32_t frames) {
     for (uint32_t i = 0; i < frames; i++) {
         if (m->remaining) {
             m->level += m->step;
@@ -27,7 +31,8 @@ void SGSingMixerProcess(SGSingMixer *m, const float *original, const float *voca
         for (unsigned c = 0; c < 2; c++) {
             size_t at = (size_t)i * 2 + c;
             float source = isfinite(original[at]) ? original[at] : 0;
-            float vocal = isfinite(vocals[at]) ? vocals[at] : 0;
+            const float *stem = spatialVocals && m->level > SGSingOriginalMixLevel ? spatialVocals : vocals;
+            float vocal = isfinite(stem[at]) ? stem[at] : 0;
             float value = m->level <= SGSingOriginalMixLevel
                 ? source - (1 - 2 * m->level) * vocal
                 : source + (2 * m->level - 1) * (vocal - source);

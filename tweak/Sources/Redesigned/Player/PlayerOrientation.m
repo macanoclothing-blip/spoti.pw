@@ -1,8 +1,11 @@
 #import "Core/SGCore.h"
 #import "PlayerOrientation.h"
+#import <objc/runtime.h>
 
 static char kOrientationHookKey;
 static NSString *const kPlayerClass = @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController";
+
+#pragma mark - Ricerca del player nell'albero dei controller
 
 static BOOL visibleControllerTreeContainsPlayer(UIViewController *controller, UIWindow *window, NSUInteger depth) {
     if (!controller || !window || depth > 32) return NO;
@@ -30,6 +33,8 @@ static BOOL playerVisibleInWindow(UIWindow *window) {
     return visibleControllerTreeContainsPlayer(window.rootViewController, window, 0);
 }
 
+#pragma mark - Richiesta di rotazione alla scena
+
 static void requestWindowOrientationIfNeeded(UIWindow *window) {
     if (@available(iOS 16.0, *)) {
         UIWindowScene *windowScene = window.windowScene;
@@ -50,6 +55,8 @@ static void requestWindowOrientationIfNeeded(UIWindow *window) {
         }
     }
 }
+
+#pragma mark - Hook sul delegate dell'app
 
 static void installOnDelegate(id delegate) {
     if (!delegate) return;
@@ -103,6 +110,8 @@ static void installOnDelegate(id delegate) {
     SGLog(@"redesign player: landscape orientation enabled only while the full-screen player is visible (%@)", NSStringFromClass(cls));
 }
 
+#pragma mark - API pubbliche
+
 void SGRPlayerInstallOrientationPolicy(void) {
     NSCAssert(NSThread.isMainThread, @"Orientation policy must be installed on the main thread");
     installOnDelegate(UIApplication.sharedApplication.delegate);
@@ -145,6 +154,8 @@ void SGRPlayerRefreshOrientationPolicy(void) {
         }
     });
 }
+
+#pragma mark - Avvio
 
 __attribute__((constructor)) static void SGRPlayerOrientationStart(void) {
     if (!SGRedesignedUI()) return;

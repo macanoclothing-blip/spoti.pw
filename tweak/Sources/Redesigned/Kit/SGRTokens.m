@@ -15,9 +15,9 @@ const CGFloat SGRActionSpacing = 12;
 const CGFloat SGRGlassSpacing = 16;
 const NSTimeInterval SGRCrossfade = 0.35;
 
-// A layout spring settles in about this long without overshooting; a press gives a little back.
-static const NSTimeInterval kLayoutDuration = 0.45, kPressDuration = 0.32;
-static const CGFloat kPressDamping = 0.62;
+// Layout settles without overshooting; press feedback is brief and critically damped.
+static const NSTimeInterval kLayoutDuration = 0.45, kPressDuration = 0.2;
+static const CGFloat kPressDamping = 1.0;
 
 UIColor *SGRPrimary(void) {
     return UIColor.whiteColor;

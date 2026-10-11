@@ -61,6 +61,15 @@ static void setFrame(UIView *view, CGRect frame) {
     if (view && !CGRectIsEmpty(frame) && !CGRectEqualToRect(view.frame, frame)) view.frame = frame;
 }
 
+static CGFloat topOverscrollFor(UIView *view) {
+    for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        if (![ancestor isKindOfClass:UIScrollView.class]) continue;
+        UIScrollView *scroll = (UIScrollView *)ancestor;
+        return MAX(0, -(scroll.contentOffset.y + scroll.adjustedContentInset.top));
+    }
+    return 0;
+}
+
 static NSString *trimmed(NSString *text) {
     NSString *clean = [text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     return clean.length ? clean : nil;
@@ -221,7 +230,8 @@ static void applyHero(UIView *container, UIView *artwork, CGFloat bottom) {
         SGLog(@"redesign artist: hero %.0fpt across the top of the page", height);
     }
     if (height < kMinHero) return;
-    setFrame(hero, CGRectMake(0, 0, container.bounds.size.width, height));
+    CGFloat overscroll = topOverscrollFor(container);
+    setFrame(hero, CGRectMake(0, -overscroll, container.bounds.size.width, height + overscroll));
     hero.fieldColor = SGRArtistFieldColor(container);
     [hero followArtwork:photoIn(artwork)];
 }

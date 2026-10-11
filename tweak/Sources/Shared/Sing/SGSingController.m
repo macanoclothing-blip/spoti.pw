@@ -1,4 +1,5 @@
 #import "Core/SGCore.h"
+#import "Core/SGPrefs.h"
 #import "SGSingController.h"
 #import "SGSingAudio.h"
 #import "SGSingFormat.h"
@@ -26,6 +27,14 @@ static NSString *trackOf(SPTPlayerState *state) { return SGURIString(state.track
 static BOOL isSong(NSString *uri) { return [uri hasPrefix:@"spotify:track:"]; }
 static BOOL notPlaying(SPTPlayerState *state) { return state.isPaused || !state.isPlaying; }
 static BOOL overheated(void) { return NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious; }
+static dispatch_queue_t spatialPreparationQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("spotifyglass.sing.spatial-setup", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
 // Everything between the source and the ear, in source seconds: the output route, and speed and pitch's unit.
 static double downstreamLatency(void) {
     return (AVAudioSession.sharedInstance.outputLatency + SGPlayerAudioLatency()) * SGPlayerSpeed();
@@ -37,6 +46,7 @@ static double downstreamLatency(void) {
 @property (nonatomic) SGSingAudio *audio;
 @property (nonatomic) void *worker;
 @property (nonatomic) BOOL attached, finished, retiring, loading, ready;
+@property (nonatomic) BOOL spatialFailureReported;
 @property (nonatomic) CFTimeInterval attachDeadline;
 @property (nonatomic) NSString *track;
 @property (nonatomic) NSString *nextTrack;
@@ -66,6 +76,7 @@ static double downstreamLatency(void) {
 - (void)workerStatus:(int32_t)status session:(SGSingSession *)session;
 - (void)reconcile;
 - (void)stop:(BOOL)discard unload:(BOOL)unload;
+- (void)prepareSpatialForSession:(SGSingSession *)session;
 @end
 static SGSingController *sg_controller;
 
@@ -122,6 +133,25 @@ static void workerStatus(void *context, int32_t status) {
     [nc addObserver:self selector:@selector(route:) name:AVAudioSessionRouteChangeNotification object:nil];
     [nc addObserver:self selector:@selector(interruption:) name:AVAudioSessionInterruptionNotification object:nil];
     return self;
+}
+- (void)prepareSpatialForSession:(SGSingSession *)session {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(spatialPreparationQueue(), ^{
+        BOOL prepared = SGSingAudioPrepareSpatial(session.audio);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SGSingController *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (strongSelf.session != session || !SGSingSpatialEnabled()) {
+                SGSingAudioSetSpatialEnabled(session.audio, NO);
+                return;
+            }
+            if (!prepared || !SGSingAudioSetSpatialEnabled(session.audio, YES)) {
+                session.spatialFailureReported = YES;
+                SGLog(@"Sing spatial renderer unavailable; using the regular vocal stem");
+            }
+            [NSNotificationCenter.defaultCenter postNotificationName:SGSingDidChangeNotification object:nil];
+        });
+    });
 }
 - (void)publish:(SGSingState)state explanation:(NSString *)explanation {
     // Retained audio still draining after the model went must not bring the microphone back.
@@ -197,6 +227,7 @@ static void workerStatus(void *context, int32_t status) {
     if (!session.audio) { _blockedTrack = session.track; [self publish:SGSingFailed explanation:@"There is not enough memory to start Sing."]; return; }
     SGSingStreamSetModelReady(stream(session), false);
     _session = session;
+    if (SGSingSpatialEnabled()) [self prepareSpatialForSession:session];
     [self prepareNextTrack:state];
     session.finished = NO;
     void *context = (__bridge_retained void *)session;
@@ -299,6 +330,12 @@ static void workerStatus(void *context, int32_t status) {
 - (void)reconcile {
     SGSingSession *session = _session;
     if (session) {
+        if (SGSingSpatialEnabled() && SGSingAudioSpatialFailed(session.audio) && !session.spatialFailureReported) {
+            session.spatialFailureReported = YES;
+            SGSingAudioSetSpatialEnabled(session.audio, NO);
+            SGLog(@"Sing spatial render failed; using the regular vocal stem");
+            [NSNotificationCenter.defaultCenter postNotificationName:SGSingDidChangeNotification object:nil];
+        }
         SPTPlayerState *state = SGPlayerState();
         SGSingStreamPause(stream(session), notPlaying(state) || _interrupted);
         [self attachSession:session];
@@ -453,6 +490,27 @@ BOOL SGSingCanRetry(void) {
         !sg_controller.retired.count && ![sg_controller restriction] && !SGPlayerState().isLoading;
 }
 BOOL SGSingEnabled(void) { return sg_configured && sg_controller.wanted; }
+BOOL SGSingSpatialEnabled(void) { return SGFlag(SGKeySingSpatial, NO); }
+void SGSingSetSpatialEnabled(BOOL enabled) {
+    SGSetEnabled(SGKeySingSpatial, enabled);
+    SGSingController *controller = sg_controller;
+    SGSingSession *session = controller.session;
+    if (session) {
+        if (enabled) [controller prepareSpatialForSession:session];
+        else SGSingAudioSetSpatialEnabled(session.audio, NO);
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:SGSingDidChangeNotification object:nil];
+}
+NSString *SGSingSpatialStatus(void) {
+    if (!SGSingSpatialEnabled()) return @"Off";
+    SGSingSession *session = sg_controller.session;
+    if (!session) return SGSingEnabled() ? @"Preparing with Sing" : @"Starts with Sing";
+    if (SGSingAudioSpatialFailed(session.audio)) return @"Unavailable; regular Sing mix continues";
+    if (!SGSingAudioSpatialReady(session.audio)) return @"Preparing spatial renderer";
+    return SGSingAudioHeadTrackingConfigured(session.audio)
+        ? @"Ready; AirPods head tracking where supported"
+        : @"Ready; spatial audio without head tracking";
+}
 float SGSingVocalLevel(void) { return sg_controller.level; }
 float SGSingReducedLevel(void) { return sg_controller.reduced; }
 void SGSingSetVocalLevel(float level) {

@@ -7,6 +7,11 @@ typedef struct SGSingAudio SGSingAudio;
 SGSingAudio *SGSingAudioCreate(SGAudioStamp origin, uint32_t windowFrames, uint32_t hopFrames, float level);
 SGSingStream *SGSingAudioStream(SGSingAudio *audio);
 bool SGSingAudioAttach(SGSingAudio *audio);
+bool SGSingAudioPrepareSpatial(SGSingAudio *audio); // serialized control queue only
+bool SGSingAudioSetSpatialEnabled(SGSingAudio *audio, bool enabled); // lock-free, any thread
+bool SGSingAudioSpatialReady(const SGSingAudio *audio);
+bool SGSingAudioSpatialFailed(const SGSingAudio *audio);
+bool SGSingAudioHeadTrackingConfigured(const SGSingAudio *audio);
 void SGSingAudioDetach(SGSingAudio *audio);
 void SGSingAudioDestroy(SGSingAudio *audio);
 

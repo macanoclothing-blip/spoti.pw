@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #include "SGSingLevel.h"
 @class SPTPlayerState;
+#define SGKeySingSpatial @"spotifyglass.sing.spatial"
 extern NSString *const SGSingDidChangeNotification;
 typedef NS_ENUM(NSUInteger, SGSingState) {
     SGSingUnavailable, SGSingIdle, SGSingPreparing, SGSingActive, SGSingDraining, SGSingFailed,
@@ -28,6 +29,9 @@ float SGSingVocalLevel(void);
 float SGSingReducedLevel(void); // the last level below 100 %, which turning Sing on goes back to
 void SGSingSetVocalLevel(float level);
 void SGSingSetEnabled(BOOL enabled);
+BOOL SGSingSpatialEnabled(void);
+void SGSingSetSpatialEnabled(BOOL enabled);
+NSString *SGSingSpatialStatus(void);
 // Before/after an explicit seek or skip. The first invalidates render output immediately.
 void SGSingPlaybackWillChange(void);
 void SGSingPlaybackDidChange(void);

@@ -291,6 +291,18 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         dispatch_async(dispatch_get_main_queue(), ^{ [self playerStateDidChange:state]; });
         return;
     }
+    if (!self.edges.count) {
+        NSString *noLinks = @"Nessun collegamento ricorrente ancora";
+        NSDictionary *attributes = @{NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium],
+                                     NSForegroundColorAttributeName: SGRSecondary()};
+        CGSize size = [noLinks sizeWithAttributes:attributes];
+        CGRect pill = CGRectMake(MAX(8, (bounds.size.width - size.width - 24) / 2), 12,
+                                 MIN(bounds.size.width - 16, size.width + 24), 28);
+        [[UIColor.blackColor colorWithAlphaComponent:0.66] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:14] fill];
+        [noLinks drawAtPoint:CGPointMake(CGRectGetMidX(pill) - size.width / 2,
+                                         CGRectGetMidY(pill) - size.height / 2) withAttributes:attributes];
+    }
     NSString *uri = SGURIString(state.track.URI);
     NSString *activeURI = _activeTrack[kTrackURIKey];
     if (_activeTrack && (!state.isPlaying || ![uri isEqualToString:activeURI])) {
@@ -410,19 +422,24 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 
 @end
 
-@interface SGRUniverseMapView : UIView
+@interface SGRUniverseMapView : UIView <UIGestureRecognizerDelegate>
 @property (nonatomic, copy) NSArray<NSDictionary *> *nodes;
 @property (nonatomic, copy) NSArray<NSDictionary *> *edges;
 @property (nonatomic, copy) NSString *selectedArtist;
 @property (nonatomic, copy) void (^artistPicked)(NSDictionary *artist);
 @property (nonatomic, copy) dispatch_block_t artworkDidLoad;
+@property (nonatomic, readonly) UIPanGestureRecognizer *explorationPanGestureRecognizer;
 - (void)setArtwork:(UIImage *)image forArtist:(NSDictionary *)artist;
 - (UIImage *)thumbnailForArtist:(NSDictionary *)artist diameter:(CGFloat)diameter;
+- (void)focusArtist:(NSString *)artist;
+- (void)resetView;
 @end
 
 @implementation SGRUniverseMapView {
     CGFloat _zoom;
     CGPoint _pan;
+    CGPoint _pinchBasePoint;
+    UIPanGestureRecognizer *_explorationPanGestureRecognizer;
     NSMutableDictionary<NSString *, UIImage *> *_artworkImages;
     NSMutableDictionary<NSString *, NSString *> *_artworkURLs;
     NSMutableDictionary<NSString *, NSString *> *_failedArtworkURLs;
@@ -432,21 +449,34 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.backgroundColor = UIColor.clearColor;
-    self.accessibilityLabel = @"Interactive map of listening history. Move with two fingers, pinch to zoom, tap an artist.";
+    self.accessibilityLabel = @"Mappa interattiva della cronologia. Trascina con un dito, pizzica per zoomare e tocca un artista.";
     _zoom = 1;
     _artworkImages = [NSMutableDictionary dictionary];
     _artworkURLs = [NSMutableDictionary dictionary];
     _failedArtworkURLs = [NSMutableDictionary dictionary];
     _loadingArtwork = [NSMutableSet set];
-    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panned:)];
-    pan.minimumNumberOfTouches = 2;
-    [self addGestureRecognizer:pan];
+    _explorationPanGestureRecognizer = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panned:)];
+    _explorationPanGestureRecognizer.minimumNumberOfTouches = 1;
+    _explorationPanGestureRecognizer.delegate = self;
+    _explorationPanGestureRecognizer.accessibilityLabel = @"Sposta la mappa degli artisti";
+    [self addGestureRecognizer:_explorationPanGestureRecognizer];
     UIPinchGestureRecognizer *pinch = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(pinched:)];
+    pinch.delegate = self;
     [self addGestureRecognizer:pinch];
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)];
-    [tap requireGestureRecognizerToFail:pan];
+    [tap requireGestureRecognizerToFail:_explorationPanGestureRecognizer];
     [self addGestureRecognizer:tap];
     return self;
+}
+
+- (UIPanGestureRecognizer *)explorationPanGestureRecognizer {
+    return _explorationPanGestureRecognizer;
+}
+
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+        shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return (gestureRecognizer == _explorationPanGestureRecognizer && [otherGestureRecognizer isKindOfClass:UIPinchGestureRecognizer.class]) ||
+           (otherGestureRecognizer == _explorationPanGestureRecognizer && [gestureRecognizer isKindOfClass:UIPinchGestureRecognizer.class]);
 }
 
 - (void)setNodes:(NSArray<NSDictionary *> *)nodes {
@@ -539,6 +569,49 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     return CGPointMake(base.x * _zoom + _pan.x, base.y * _zoom + _pan.y);
 }
 
+- (void)clampPan {
+    if (!self.nodes.count || CGRectIsEmpty(self.bounds)) return;
+    CGFloat minX = CGFLOAT_MAX, minY = CGFLOAT_MAX, maxX = -CGFLOAT_MAX, maxY = -CGFLOAT_MAX;
+    for (NSUInteger i = 0; i < self.nodes.count; i++) {
+        CGPoint point = [self basePointForIndex:i count:self.nodes.count];
+        CGFloat radius = 25;
+        minX = MIN(minX, point.x - radius);
+        minY = MIN(minY, point.y - radius);
+        maxX = MAX(maxX, point.x + radius);
+        maxY = MAX(maxY, point.y + radius);
+    }
+    CGFloat lowX = CGRectGetMaxX(self.bounds) - maxX * _zoom;
+    CGFloat highX = CGRectGetMinX(self.bounds) - minX * _zoom;
+    CGFloat lowY = CGRectGetMaxY(self.bounds) - maxY * _zoom;
+    CGFloat highY = CGRectGetMinY(self.bounds) - minY * _zoom;
+    if (lowX > highX) lowX = highX = CGRectGetMidX(self.bounds) - (minX + maxX) * _zoom / 2;
+    if (lowY > highY) lowY = highY = CGRectGetMidY(self.bounds) - (minY + maxY) * _zoom / 2;
+    _pan.x = MIN(highX, MAX(lowX, _pan.x));
+    _pan.y = MIN(highY, MAX(lowY, _pan.y));
+}
+
+- (void)focusArtist:(NSString *)artist {
+    NSString *wanted = normalizedArtist(artist ?: @"");
+    NSUInteger index = [self.nodes indexOfObjectPassingTest:^BOOL(NSDictionary *node, NSUInteger idx, BOOL *stop) {
+        (void)idx;
+        (void)stop;
+        return [normalizedArtist(node[kArtistKey] ?: @"") isEqualToString:wanted];
+    }];
+    if (index == NSNotFound) return;
+    _zoom = MAX(_zoom, 1.25);
+    CGPoint base = [self basePointForIndex:index count:self.nodes.count];
+    _pan = CGPointMake(CGRectGetMidX(self.bounds) - base.x * _zoom,
+                       CGRectGetMidY(self.bounds) - base.y * _zoom);
+    [self clampPan];
+    [self setNeedsDisplay];
+}
+
+- (void)resetView {
+    _zoom = 1;
+    _pan = CGPointZero;
+    [self setNeedsDisplay];
+}
+
 - (void)drawRect:(CGRect)rect {
     (void)rect;
     CGContextRef context = UIGraphicsGetCurrentContext();
@@ -580,14 +653,25 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 
     NSMutableDictionary<NSString *, NSNumber *> *indexes = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < count; i++) indexes[normalizedArtist(self.nodes[i][kArtistKey])] = @(i);
+    NSMutableSet<NSString *> *connectedToSelection = [NSMutableSet set];
+    NSString *selectedKey = normalizedArtist(self.selectedArtist ?: @"");
     for (NSDictionary *edge in self.edges) {
+        if ([edge[@"weight"] unsignedIntegerValue] < 2) continue;
+        if ([edge[@"from"] isEqualToString:selectedKey]) [connectedToSelection addObject:edge[@"to"]];
+        if ([edge[@"to"] isEqualToString:selectedKey]) [connectedToSelection addObject:edge[@"from"]];
+    }
+    for (NSDictionary *edge in self.edges) {
+        if ([edge[@"weight"] unsignedIntegerValue] < 2) continue;
         NSNumber *a = indexes[edge[@"from"]], *b = indexes[edge[@"to"]];
         if (!a || !b) continue;
         CGPoint start = [self pointForIndex:a.unsignedIntegerValue count:count];
         CGPoint end = [self pointForIndex:b.unsignedIntegerValue count:count];
-        CGFloat alpha = MIN(0.34, 0.08 + [edge[@"weight"] doubleValue] * 0.025);
+        BOOL selectedConnection = selectedKey.length &&
+            ([edge[@"from"] isEqualToString:selectedKey] || [edge[@"to"] isEqualToString:selectedKey]);
+        CGFloat alpha = selectedKey.length ? (selectedConnection ? 0.72 : 0.08)
+                                           : MIN(0.45, 0.18 + [edge[@"weight"] doubleValue] * 0.035);
         CGContextSetStrokeColorWithColor(context, [SGRAccent() colorWithAlphaComponent:alpha].CGColor);
-        CGContextSetLineWidth(context, 0.7 + MIN(1.2, [edge[@"weight"] doubleValue] * 0.08));
+        CGContextSetLineWidth(context, (selectedConnection ? 1.6 : 0.8) + MIN(1.4, [edge[@"weight"] doubleValue] * 0.08));
         CGContextMoveToPoint(context, start.x, start.y);
         CGContextAddLineToPoint(context, end.x, end.y);
         CGContextStrokePath(context);
@@ -597,7 +681,9 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         NSDictionary *artist = self.nodes[i];
         CGPoint point = [self pointForIndex:i count:count];
         CGFloat radius = 17 + MIN(8, sqrt([artist[@"ms"] doubleValue] / 60000.0) * 0.4);
-        BOOL selected = [normalizedArtist(artist[kArtistKey]) isEqualToString:normalizedArtist(self.selectedArtist ?: @"")];
+        NSString *artistKey = normalizedArtist(artist[kArtistKey] ?: @"");
+        BOOL selected = [artistKey isEqualToString:selectedKey];
+        BOOL connected = [connectedToSelection containsObject:artistKey];
         CGRect circle = CGRectMake(point.x - radius, point.y - radius, radius * 2, radius * 2);
         CGContextSaveGState(context);
         CGContextAddEllipseInRect(context, circle);
@@ -621,17 +707,18 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
                                               CGRectGetMidY(circle) - letterSize.height / 2) withAttributes:letterStyle];
         }
         CGContextRestoreGState(context);
-        CGContextSetStrokeColorWithColor(context, [UIColor.whiteColor colorWithAlphaComponent:selected ? 0.95 : 0.52].CGColor);
-        CGContextSetLineWidth(context, selected ? 2.5 : 1);
+        CGContextSetStrokeColorWithColor(context, [UIColor.whiteColor colorWithAlphaComponent:selected ? 0.98 : (connected ? 0.85 : 0.45)].CGColor);
+        CGContextSetLineWidth(context, selected ? 2.5 : (connected ? 1.8 : 1));
         CGContextStrokeEllipseInRect(context, circle);
         if (selected) {
             CGContextSetStrokeColorWithColor(context, [SGRAccent() colorWithAlphaComponent:0.75].CGColor);
             CGContextSetLineWidth(context, 2);
             CGContextStrokeEllipseInRect(context, CGRectInset(circle, -4, -4));
         }
-        if (i < 18 || selected) {
+        if (i < 14 || selected || connected) {
             NSString *name = artist[kArtistKey];
-            UIFont *font = [UIFont systemFontOfSize:selected ? 11 : 9 weight:selected ? UIFontWeightSemibold : UIFontWeightMedium];
+            UIFont *font = [UIFont systemFontOfSize:(selected || connected) ? 11 : 10
+                                             weight:selected ? UIFontWeightBold : UIFontWeightMedium];
             NSDictionary *attributes = @{NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.whiteColor};
             CGSize size = [name sizeWithAttributes:attributes];
             CGRect label = CGRectMake(point.x + radius + 5, point.y - 10, size.width + 12, 20);
@@ -647,11 +734,16 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     CGPoint delta = [gesture translationInView:self];
     _pan = CGPointMake(_pan.x + delta.x, _pan.y + delta.y);
     [gesture setTranslation:CGPointZero inView:self];
+    [self clampPan];
     [self setNeedsDisplay];
 }
 
 - (void)pinched:(UIPinchGestureRecognizer *)gesture {
-    _zoom = MIN(2.6, MAX(0.65, _zoom * gesture.scale));
+    CGPoint anchor = [gesture locationInView:self];
+    _pinchBasePoint = CGPointMake((anchor.x - _pan.x) / _zoom, (anchor.y - _pan.y) / _zoom);
+    _zoom = MIN(3.2, MAX(0.55, _zoom * gesture.scale));
+    _pan = CGPointMake(anchor.x - _pinchBasePoint.x * _zoom, anchor.y - _pinchBasePoint.y * _zoom);
+    [self clampPan];
     gesture.scale = 1;
     [self setNeedsDisplay];
 }
@@ -680,7 +772,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     UITextField *_search;
     UILabel *_period, *_summary, *_selectionTitle, *_selectionDetail, *_insight, *_status;
     UIStackView *_artistList;
-    UIButton *_openArtist;
+    UIButton *_openArtist, *_centerMapButton;
     NSDictionary *_selectedArtist;
     NSArray<NSDictionary *> *_events;
     NSArray<NSDictionary *> *_visibleArtists;
@@ -786,12 +878,30 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     _map.layer.masksToBounds = YES;
     [content addArrangedSubview:_map];
     [_map.heightAnchor constraintEqualToConstant:320].active = YES;
+    [scroll.panGestureRecognizer requireGestureRecognizerToFail:_map.explorationPanGestureRecognizer];
     __weak typeof(self) weakSelf = self;
     _map.artistPicked = ^(NSDictionary *artist) { [weakSelf selectArtist:artist]; };
     _map.artworkDidLoad = ^{
         [weakSelf updateArtistList];
         [weakSelf updateSelectedArtwork];
     };
+    UILabel *mapHint = [self label:@"Trascina per esplorare · pizzica per zoomare · tocca un artista per seguirne i collegamenti."
+                              style:UIFontTextStyleCaption1 weight:UIFontWeightRegular color:SGRSecondary()];
+    mapHint.numberOfLines = 0;
+    mapHint.accessibilityLabel = @"Trascina con un dito per esplorare la mappa, pizzica per ingrandire e tocca un artista per vedere i collegamenti ricorrenti.";
+    [content addArrangedSubview:mapHint];
+    UIStackView *mapActions = [UIStackView new];
+    mapActions.axis = UILayoutConstraintAxisHorizontal;
+    mapActions.spacing = 10;
+    mapActions.distribution = UIStackViewDistributionFillEqually;
+    UIButton *centerMap = [self button:@"Centra artista" symbol:@"scope" action:@selector(centerSelectedArtist)];
+    centerMap.enabled = NO;
+    centerMap.alpha = 0.55;
+    UIButton *resetMap = [self button:@"Vista iniziale" symbol:@"arrow.counterclockwise" action:@selector(resetMapView)];
+    [mapActions addArrangedSubview:centerMap];
+    [mapActions addArrangedSubview:resetMap];
+    [content addArrangedSubview:mapActions];
+    _centerMapButton = centerMap;
 
     UILabel *timeTitle = [self sectionTitle:@"ESPLORA NEL TEMPO"];
     [content addArrangedSubview:timeTitle];
@@ -1102,6 +1212,8 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         return [a[kTimestampKey] compare:b[kTimestampKey]];
     }];
     NSDictionary *previous = nil;
+    NSMutableSet<NSString *> *sessionConnections = [NSMutableSet set];
+    NSUInteger sessionIndex = 0;
     for (NSDictionary *event in sorted) {
         NSString *name = event[kArtistKey];
         NSString *key = normalizedArtist(name);
@@ -1119,26 +1231,34 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         if ([event[kArtworkURLKey] length]) artist[kArtworkURLKey] = event[kArtworkURLKey];
         NSString *artistURI = event[kArtistURIKey];
         if (artistURI.length) artist[@"artistURI"] = artistURI;
-        NSString *session = event[kSessionKey] ?: eventIdentity(event);
+        NSString *session = [NSString stringWithFormat:@"%lu", (unsigned long)sessionIndex];
         if (!sessions[key]) sessions[key] = [NSMutableDictionary dictionary];
-        sessions[key][session] = @YES;
 
         NSString *album = event[kAlbumKey];
         if (album.length) albums[album] = @([albums[album] doubleValue] + [event[kDurationKey] doubleValue]);
 
         NSString *previousKey = normalizedArtist(previous[kArtistKey] ?: @"");
         NSTimeInterval gap = [event[kTimestampKey] doubleValue] - [previous[kTimestampKey] doubleValue];
+        if (previous && (gap < 0 || gap >= 1800)) {
+            [sessionConnections removeAllObjects];
+            sessionIndex++;
+            session = [NSString stringWithFormat:@"%lu", (unsigned long)sessionIndex];
+        }
+        sessions[key][session] = @YES;
         if (previousKey.length && ![previousKey isEqualToString:key] && gap >= 0 && gap < 1800) {
             NSArray<NSString *> *pair = [@[previousKey, key] sortedArrayUsingSelector:@selector(compare:)];
             NSString *edgeKey = [pair componentsJoinedByString:@"|"];
-            NSMutableDictionary *edge = edges[edgeKey];
-            if (!edge) {
-                edge = [@{@"from": pair[0],
-                          @"to": pair[1],
-                          @"weight": @0} mutableCopy];
-                edges[edgeKey] = edge;
+            if (![sessionConnections containsObject:edgeKey]) {
+                NSMutableDictionary *edge = edges[edgeKey];
+                if (!edge) {
+                    edge = [@{@"from": pair[0],
+                              @"to": pair[1],
+                              @"weight": @0} mutableCopy];
+                    edges[edgeKey] = edge;
+                }
+                edge[@"weight"] = @([edge[@"weight"] integerValue] + 1);
+                [sessionConnections addObject:edgeKey];
             }
-            edge[@"weight"] = @([edge[@"weight"] integerValue] + 1);
         }
         previous = event;
     }
@@ -1153,7 +1273,11 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         return [b[@"ms"] compare:a[@"ms"]];
     }];
     _visibleArtists = [nodeList copy];
-    _visibleEdges = [edges.allValues copy];
+    NSMutableArray<NSDictionary *> *recurringEdges = [NSMutableArray array];
+    for (NSDictionary *edge in edges.allValues) {
+        if ([edge[@"weight"] unsignedIntegerValue] >= 2) [recurringEdges addObject:edge];
+    }
+    _visibleEdges = [recurringEdges copy];
     _map.nodes = [_visibleArtists subarrayWithRange:NSMakeRange(0, MIN(60, _visibleArtists.count))];
     _map.edges = _visibleEdges;
     _map.selectedArtist = _selectedArtist[kArtistKey];
@@ -1285,7 +1409,9 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         return [b[@"weight"] compare:a[@"weight"]];
     }];
     NSString *connection = neighbors.firstObject
-        ? [NSString stringWithFormat:@" · Spesso vicino a %@", neighbors.firstObject[@"artist"]] : @"";
+        ? [NSString stringWithFormat:@"\nCollegamenti ricorrenti: %@ (%@ sessioni)",
+           neighbors.firstObject[@"artist"], neighbors.firstObject[@"weight"]]
+        : @"\nNessun collegamento ricorrente per ora. Le linee compaiono dopo transizioni tra questi artisti in almeno due sessioni.";
     _selectionDetail.text = [NSString stringWithFormat:@"%lu ascolti · %@ ascoltati · Ultima traccia: %@%@",
                              (unsigned long)[artist[@"plays"] unsignedIntegerValue],
                              [self formattedDuration:millis],
@@ -1295,6 +1421,17 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
     openConfiguration.title = [artist[@"artistURI"] length] ? @"Apri artista" : @"Apri ultimo brano";
     _openArtist.configuration = openConfiguration;
     _map.selectedArtist = artist[kArtistKey];
+    [_map focusArtist:artist[kArtistKey]];
+    _centerMapButton.enabled = YES;
+    _centerMapButton.alpha = 1;
+}
+
+- (void)centerSelectedArtist {
+    if (_selectedArtist) [_map focusArtist:_selectedArtist[kArtistKey]];
+}
+
+- (void)resetMapView {
+    [_map resetView];
 }
 
 - (void)updateSelectedArtwork {

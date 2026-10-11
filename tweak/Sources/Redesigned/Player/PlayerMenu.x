@@ -407,7 +407,8 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
 
 @implementation SGRReverbPanel {
     UISlider *_amount;
-    UILabel *_title, *_value, *_note;
+    UILabel *_title, *_value;
+    UIImageView *_sourceIcon, *_roomIcon;
 }
 
 - (void)viewDidLoad {
@@ -430,21 +431,26 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
     _amount = [UISlider new];
     _amount.minimumValue = 0;
     _amount.maximumValue = 100;
-    _amount.minimumTrackTintColor = SGRPrimary();
+    _amount.minimumTrackTintColor = SGRAccent();
     _amount.maximumTrackTintColor = [UIColor colorWithWhite:1 alpha:0.22];
+    _amount.accessibilityLabel = @"Reverb";
+    _amount.accessibilityHint = @"Regola la quantità di effetto ambiente";
     BOOL enabled = SGDSPSwitch(SGKeyDSP) && SGDSPSwitch(SGKeyDSPReverb);
     _amount.value = enabled ? (float)SGDSPNumber(SGKeyDSPReverbAmount) : 0;
     [_amount addTarget:self action:@selector(amountChanged:) forControlEvents:UIControlEventValueChanged];
     [self.view addSubview:_amount];
     [self updateValue];
 
-    _note = [UILabel new];
-    _note.text = @"Adjust the room effect; moving above zero enables Audio Effects.";
-    _note.textColor = SGRSecondary();
-    _note.font = [UIFont systemFontOfSize:11];
-    _note.numberOfLines = 2;
-    [self.view addSubview:_note];
-    self.preferredContentSize = CGSizeMake(kPanelWidth, 112);
+    UIImageSymbolConfiguration *iconStyle = [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightMedium];
+    _sourceIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"music.note" withConfiguration:iconStyle]];
+    _roomIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"house.fill" withConfiguration:iconStyle]];
+    for (UIImageView *icon in @[_sourceIcon, _roomIcon]) {
+        icon.tintColor = SGRSecondary();
+        icon.contentMode = UIViewContentModeCenter;
+        icon.accessibilityElementsHidden = YES;
+        [self.view addSubview:icon];
+    }
+    self.preferredContentSize = CGSizeMake(kPanelWidth, 78);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -452,8 +458,10 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
     CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
     _title.frame = CGRectMake(CGRectGetMinX(safe) + 12, CGRectGetMinY(safe) + 10, 120, 24);
     _value.frame = CGRectMake(CGRectGetMaxX(safe) - 64, CGRectGetMinY(safe) + 10, 52, 24);
-    _amount.frame = CGRectMake(CGRectGetMinX(safe) + 10, CGRectGetMinY(safe) + 38, CGRectGetWidth(safe) - 20, 28);
-    _note.frame = CGRectMake(CGRectGetMinX(safe) + 12, CGRectGetMinY(safe) + 70, CGRectGetWidth(safe) - 24, 32);
+    CGFloat trackY = CGRectGetMinY(safe) + 48;
+    _sourceIcon.frame = CGRectMake(CGRectGetMinX(safe) + 12, trackY - 12, 22, 24);
+    _roomIcon.frame = CGRectMake(CGRectGetMaxX(safe) - 34, trackY - 12, 22, 24);
+    _amount.frame = CGRectMake(CGRectGetMinX(safe) + 40, trackY - 14, CGRectGetWidth(safe) - 80, 28);
 }
 
 - (void)updateValue {

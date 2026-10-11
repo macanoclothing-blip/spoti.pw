@@ -206,7 +206,9 @@ Native:
 
 Redesigned:
 
-    Kit/          what the redesign builds on (SGRKit.h lists it), the flags it forces (SGRedesign.h, SGRGlassDesign.x for
+    Kit/          what the redesign builds on (SGRKit.h lists it), shared artwork-led color, typography, spacing and
+                  motion tokens (SGRTokens.m), restrained spring press feedback for its controls (SGRButtonFeedback.x),
+                  the flags it forces (SGRedesign.h, SGRGlassDesign.x for
                   Spotify's own glass design), its repaint hook (SGRRepaint.x), soft top edge, AMOLED black (always on,
                   SGRAmoled.x) and its own accent colour (SGRAccent.x, stored apart from the native look's); and
                   the curtain the playlist, album and artist pages come in behind (SGRReveal.h): black over the
@@ -243,6 +245,14 @@ Redesigned:
                   round the microphone while it prepares or recovers, a white fill for the mix selector while it
                   is on (instrumental at the bottom, original mix in the middle, vocals at the top), glass when
                   it is off and a dimmed microphone when it has stopped
+                  Spatial Voice is an opt-in Karaoke switch (`spotifyglass.sing.spatial`, off by default).
+                  It feeds the separated stem as a mono point source to Apple's Spatial Mixer, requesting
+                  AirPods head tracking where the system supports it and static spatial rendering on other
+                  output routes (Shared/Sing/SGSingSpatializer.m). The unit is created, initialized and warmed
+                  off-render, then synchronously pulled inside Sing's callback. A reported non-zero unit
+                  latency or any render/setup failure bypasses the effect and keeps Sing's regular vocal mix.
+                  This nested AudioUnitRender arrangement is a device-test prototype: verify callback deadlines,
+                  audio continuity and head-tracking response on target iPhones and AirPods before release.
     Lyrics/       the full screen lyrics page on glass with Apple Music style lyrics over it, always on (SGRKaraokeView,
                   which the player shows in itself too, Player/PlayerLyrics.x, where after four seconds untouched while
                   the song plays the controls fade out and the lines take the whole player, until a touch or a pause
@@ -290,10 +300,12 @@ Redesigned:
                   extended streaming-history JSON, then records future playback locally from player state; it draws an
                   explorable artist map with circular artist artwork, listening-sequence connections, time-of-day filters,
                   a timeline, top-artist and
-                  album insights, and can export or erase its private local data (MusicUniverse.x). No history is sent
+                  album insights; map lines appear only for artist transitions repeated across at least two listening
+                  sessions, and the map can be panned and zoomed (MusicUniverse.x). No history is sent
                   off device. Music Party adds pass-and-play music quizzes on the same phone, drawing from Spotify's
                   active queue and locally imported history; artist lookup can use either that history or Spotify's
-                  own search, and no companion app is needed (MusicParty.x). The filter chips under the row stay
+                  own search, and no companion app is needed. It supports solo, two-team, and rotating individual
+                  player games with a roster of up to eight (MusicParty.x). The filter chips under the row stay
                   Spotify's: they were taken out when this was first
                   built and put back in 0.21 (issue #20), since sorting a library is not something the page can do
                   without, and Spotify already draws them on the system's own glass
