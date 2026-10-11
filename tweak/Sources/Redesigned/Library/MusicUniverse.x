@@ -647,7 +647,8 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         CGRect pill = CGRectMake(MAX(8, (CGRectGetWidth(bounds) - size.width - 24) / 2), 12,
                                  MIN(CGRectGetWidth(bounds) - 16, size.width + 24), 28);
         [[UIColor.blackColor colorWithAlphaComponent:0.66] setFill];
-        [UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:14].fill;
+        UIBezierPath *pillPath = [UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:14];
+        [pillPath fill];
         [noLinks drawAtPoint:CGPointMake(CGRectGetMidX(pill) - size.width / 2,
                                          CGRectGetMidY(pill) - size.height / 2) withAttributes:attributes];
     }
