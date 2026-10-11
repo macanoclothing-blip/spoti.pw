@@ -291,18 +291,6 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         dispatch_async(dispatch_get_main_queue(), ^{ [self playerStateDidChange:state]; });
         return;
     }
-    if (!self.edges.count) {
-        NSString *noLinks = @"Nessun collegamento ricorrente ancora";
-        NSDictionary *attributes = @{NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium],
-                                     NSForegroundColorAttributeName: SGRSecondary()};
-        CGSize size = [noLinks sizeWithAttributes:attributes];
-        CGRect pill = CGRectMake(MAX(8, (bounds.size.width - size.width - 24) / 2), 12,
-                                 MIN(bounds.size.width - 16, size.width + 24), 28);
-        [[UIColor.blackColor colorWithAlphaComponent:0.66] setFill];
-        [[UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:14] fill];
-        [noLinks drawAtPoint:CGPointMake(CGRectGetMidX(pill) - size.width / 2,
-                                         CGRectGetMidY(pill) - size.height / 2) withAttributes:attributes];
-    }
     NSString *uri = SGURIString(state.track.URI);
     NSString *activeURI = _activeTrack[kTrackURIKey];
     if (_activeTrack && (!state.isPlaying || ![uri isEqualToString:activeURI])) {
@@ -649,6 +637,19 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         [empty drawAtPoint:CGPointMake(MAX(16, (bounds.size.width - size.width) / 2),
                                       CGRectGetMidY(bounds) - size.height / 2) withAttributes:attributes];
         return;
+    }
+
+    if (!self.edges.count) {
+        NSString *noLinks = @"Nessun collegamento ricorrente ancora";
+        NSDictionary *attributes = @{NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightMedium],
+                                     NSForegroundColorAttributeName: SGRSecondary()};
+        CGSize size = [noLinks sizeWithAttributes:attributes];
+        CGRect pill = CGRectMake(MAX(8, (CGRectGetWidth(bounds) - size.width - 24) / 2), 12,
+                                 MIN(CGRectGetWidth(bounds) - 16, size.width + 24), 28);
+        [[UIColor.blackColor colorWithAlphaComponent:0.66] setFill];
+        [UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:14].fill;
+        [noLinks drawAtPoint:CGPointMake(CGRectGetMidX(pill) - size.width / 2,
+                                         CGRectGetMidY(pill) - size.height / 2) withAttributes:attributes];
     }
 
     NSMutableDictionary<NSString *, NSNumber *> *indexes = [NSMutableDictionary dictionary];
