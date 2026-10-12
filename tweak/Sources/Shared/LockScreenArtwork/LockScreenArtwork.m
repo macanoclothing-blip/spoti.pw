@@ -39,8 +39,10 @@ NSArray<NSString *> *SGAnimatedArtworkKeys(void) {
 }
 
 CGFloat SGAnimatedArtworkAspect(NSString *key) {
-    if ([key isEqualToString:MPNowPlayingInfoProperty3x4AnimatedArtwork]) return 3.0 / 4.0;
-    if ([key isEqualToString:MPNowPlayingInfoProperty1x1AnimatedArtwork]) return 1;
+    if (@available(iOS 26.0, *)) {
+        if ([key isEqualToString:MPNowPlayingInfoProperty3x4AnimatedArtwork]) return 3.0 / 4.0;
+        if ([key isEqualToString:MPNowPlayingInfoProperty1x1AnimatedArtwork]) return 1;
+    }
     return 0;
 }
 
@@ -53,14 +55,17 @@ NSString *SGAnimatedArtworkKey(CGFloat *aspect) {
 
 NSDictionary *SGArtworkInInfo(NSDictionary *info, NSDictionary<NSString *, id> *artworkByKey) {
     if (!info.count) return info;
-    NSMutableDictionary *shown;
-    for (NSString *key in @[MPNowPlayingInfoProperty3x4AnimatedArtwork, MPNowPlayingInfoProperty1x1AnimatedArtwork]) {
-        id artwork = artworkByKey[key];
-        if (artwork && info[key] == artwork) continue;
-        if (!artwork && !info[key]) continue;
-        if (!shown) shown = [info mutableCopy];
-        if (artwork) shown[key] = artwork;
-        else [shown removeObjectForKey:key];
+    if (@available(iOS 26.0, *)) {
+        NSMutableDictionary *shown;
+        for (NSString *key in @[MPNowPlayingInfoProperty3x4AnimatedArtwork, MPNowPlayingInfoProperty1x1AnimatedArtwork]) {
+            id artwork = artworkByKey[key];
+            if (artwork && info[key] == artwork) continue;
+            if (!artwork && !info[key]) continue;
+            if (!shown) shown = [info mutableCopy];
+            if (artwork) shown[key] = artwork;
+            else [shown removeObjectForKey:key];
+        }
+        return shown ?: info;
     }
-    return shown ?: info;
+    return info;
 }
