@@ -461,6 +461,7 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
 @property (nonatomic) UIEdgeInsets appliedInset;
 @property (nonatomic) UIEdgeInsets baseIndicatorInset;
 @property (nonatomic) BOOL hasInset;
+@property (nonatomic) BOOL layingOut;
 @end
 @implementation SGRHomeLyricsListState
 @end
@@ -481,7 +482,7 @@ static SGRHomeLyricsListState *stateFor(UIScrollView *list) {
         state.baseInset = list.contentInset;
         state.appliedInset = list.contentInset;
         state.baseIndicatorInset = list.verticalScrollIndicatorInsets;
-        state.hasInset = YES;
+        state.hasInset = NO;
         objc_setAssociatedObject(list, &kListStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return state;
@@ -489,6 +490,8 @@ static SGRHomeLyricsListState *stateFor(UIScrollView *list) {
 
 static void layoutCard(UIScrollView *list) {
     SGRHomeLyricsListState *state = stateFor(list);
+    if (state.layingOut) return;
+    state.layingOut = YES;
     BOOL enabled = SGFlag(kLyricsEnabled, NO);
     if (!enabled) {
         BOOL wasAtTop = list.contentOffset.y <= state.appliedInset.top + 1;
@@ -497,18 +500,25 @@ static void layoutCard(UIScrollView *list) {
             state.card = nil;
         }
         if (state.hasInset && UIEdgeInsetsEqualToEdgeInsets(list.contentInset, state.appliedInset)) {
-            list.contentInset = state.baseInset;
-            list.verticalScrollIndicatorInsets = state.baseIndicatorInset;
+            if (!UIEdgeInsetsEqualToEdgeInsets(list.contentInset, state.baseInset)) {
+                list.contentInset = state.baseInset;
+            }
+            if (!UIEdgeInsetsEqualToEdgeInsets(list.verticalScrollIndicatorInsets, state.baseIndicatorInset)) {
+                list.verticalScrollIndicatorInsets = state.baseIndicatorInset;
+            }
             if (wasAtTop) [list setContentOffset:CGPointMake(list.contentOffset.x, -state.baseInset.top) animated:NO];
         } else if (state.hasInset && list.contentInset.top >= state.appliedInset.top - 1) {
             UIEdgeInsets inset = list.contentInset;
             inset.top = MAX(0, inset.top - kCardHeight);
-            list.contentInset = inset;
+            if (!UIEdgeInsetsEqualToEdgeInsets(list.contentInset, inset)) list.contentInset = inset;
             UIEdgeInsets indicators = list.verticalScrollIndicatorInsets;
             indicators.top = MAX(0, indicators.top - kCardHeight);
-            list.verticalScrollIndicatorInsets = indicators;
+            if (!UIEdgeInsetsEqualToEdgeInsets(list.verticalScrollIndicatorInsets, indicators)) {
+                list.verticalScrollIndicatorInsets = indicators;
+            }
         }
         state.hasInset = NO;
+        state.layingOut = NO;
         return;
     }
     if (addHistoryTracks() && state.card) [state.card historyTracksDidLoad];
@@ -527,20 +537,24 @@ static void layoutCard(UIScrollView *list) {
         state.card = [[SGRHomeLyricsCard alloc] initWithFrame:CGRectZero];
         [list addSubview:state.card];
     }
-    state.card.frame = CGRectMake(16, -kCardHeight, MAX(0, list.bounds.size.width - 32), kCardHeight);
+    CGRect cardFrame = CGRectMake(16, -kCardHeight, MAX(0, list.bounds.size.width - 32), kCardHeight);
+    if (!CGRectEqualToRect(state.card.frame, cardFrame)) state.card.frame = cardFrame;
     UIEdgeInsets inset = state.baseInset;
     inset.top += kCardHeight;
-    list.contentInset = inset;
     UIEdgeInsets indicatorInset = state.baseIndicatorInset;
     indicatorInset.top += kCardHeight;
-    list.verticalScrollIndicatorInsets = indicatorInset;
+    state.appliedInset = inset;
+    state.hasInset = YES;
+    if (!UIEdgeInsetsEqualToEdgeInsets(list.contentInset, inset)) list.contentInset = inset;
+    if (!UIEdgeInsetsEqualToEdgeInsets(list.verticalScrollIndicatorInsets, indicatorInset)) {
+        list.verticalScrollIndicatorInsets = indicatorInset;
+    }
     BOOL atTop = list.contentOffset.y <= state.baseInset.top + 1;
     if (atTop && list.contentOffset.y > -inset.top + 1) {
         [list setContentOffset:CGPointMake(list.contentOffset.x, -inset.top) animated:NO];
     }
-    state.appliedInset = inset;
-    state.hasInset = YES;
     [list bringSubviewToFront:state.card];
+    state.layingOut = NO;
 }
 
 %hook _TtC16Home_EvoPageImpl33EvoLoadableResourceViewController
