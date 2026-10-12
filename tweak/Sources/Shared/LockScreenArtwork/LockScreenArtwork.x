@@ -193,10 +193,12 @@ static void askCanvaz(NSString *uri, void (^done)(SGCanvas *canvas, NSString *no
         if (value) [request setValue:value forHTTPHeaderField:name];
     }
     [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Content-Type"];
+    [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Accept"];
     [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *answer, NSURLResponse *response, NSError *error) {
-        SGCanvas *canvas = SGCanvazFromBody(answer);
+        NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        SGCanvas *canvas = status >= 200 && status < 300 ? SGCanvazFromBody(answer) : nil;
         NSString *note = [NSString stringWithFormat:@"canvaz status %ld, %lu bytes, error %@",
-                          (long)[(NSHTTPURLResponse *)response statusCode], (unsigned long)answer.length, error.localizedDescription];
+                          (long)status, (unsigned long)answer.length, error.localizedDescription];
         dispatch_async(dispatch_get_main_queue(), ^{ done(canvas, note); });
     }] resume];
 }

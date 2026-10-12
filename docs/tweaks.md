@@ -279,7 +279,8 @@ Redesigned:
                   dimension and places its metadata beside it.
                   Player/PlayerVolume.x inserts iOS's native MPVolumeView below the transport controls and above the
                   lyrics, Connect and queue row, flanked by low and high speaker symbols like the Music app's
-                  volume row in the standard redesign. Vinyl mode keeps its own retro slider styling, raises the volume row and lowers
+                  volume row in the standard redesign, with a flat two-tone track and no thumb. Vinyl mode keeps its
+                  own retro slider styling, raises the volume row and lowers
                   the progress row. The standard player's transport row is centered between the song progress and
                   volume sliders. The slider adjusts the iPhone's output
                   volume, not Spotify Connect's remote

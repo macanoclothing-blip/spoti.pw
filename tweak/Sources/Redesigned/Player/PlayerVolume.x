@@ -5,6 +5,30 @@
 
 static char kVolumeRowKey;
 
+static UIImage *volumeTrackImage(UIColor *color) {
+    CGSize size = CGSizeMake(6, 4);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = 2;
+    format.opaque = NO;
+    UIImage *image = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        [color setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size.width, size.height)
+                                     cornerRadius:size.height / 2] fill];
+    }];
+    return [image resizableImageWithCapInsets:UIEdgeInsetsMake(0, 2, 0, 2)
+                                 resizingMode:UIImageResizingModeStretch];
+}
+
+static UIImage *volumeThumbImage(void) {
+    CGSize size = CGSizeMake(18, 18);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = 2;
+    format.opaque = NO;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format] imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        (void)context;
+    }];
+}
+
 static void installVolumeRow(UIViewController *unit) {
     UIView *unitView = unit.viewIfLoaded, *controls = nil;
     UIStackView *stack = nil;
@@ -22,11 +46,11 @@ static void installVolumeRow(UIViewController *unit) {
         row = [[UIStackView alloc] initWithFrame:CGRectZero];
         row.axis = UILayoutConstraintAxisHorizontal;
         row.alignment = UIStackViewAlignmentCenter;
-        row.spacing = 10;
+        row.spacing = 8;
         row.layoutMarginsRelativeArrangement = YES;
         row.layoutMargins = UIEdgeInsetsMake(0, 24, 0, 24);
         UIImageSymbolConfiguration *iconConfiguration =
-            [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold];
+            [UIImageSymbolConfiguration configurationWithPointSize:16 weight:UIImageSymbolWeightSemibold];
         UIImageView *quiet = [[UIImageView alloc] initWithImage:
             [[UIImage systemImageNamed:@"speaker.fill" withConfiguration:iconConfiguration]
                 imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
@@ -38,8 +62,8 @@ static void installVolumeRow(UIViewController *unit) {
             icon.contentMode = UIViewContentModeScaleAspectFit;
             icon.accessibilityElementsHidden = YES;
         }
-        [quiet.widthAnchor constraintEqualToConstant:24].active = YES;
-        [loud.widthAnchor constraintEqualToConstant:30].active = YES;
+        [quiet.widthAnchor constraintEqualToConstant:20].active = YES;
+        [loud.widthAnchor constraintEqualToConstant:24].active = YES;
         [row addArrangedSubview:quiet];
         MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
 #pragma clang diagnostic push
@@ -47,7 +71,15 @@ static void installVolumeRow(UIViewController *unit) {
         volume.showsRouteButton = NO;
 #pragma clang diagnostic pop
         volume.showsVolumeSlider = YES;
-        volume.tintColor = UIColor.whiteColor;
+        UIImage *minimumTrack = volumeTrackImage([UIColor colorWithWhite:1 alpha:0.82]);
+        UIImage *maximumTrack = volumeTrackImage([UIColor colorWithWhite:1 alpha:0.30]);
+        UIImage *thumb = volumeThumbImage();
+        for (NSNumber *state in @[@(UIControlStateNormal), @(UIControlStateHighlighted), @(UIControlStateDisabled)]) {
+            UIControlState controlState = state.unsignedIntegerValue;
+            [volume setMinimumVolumeSliderImage:minimumTrack forState:controlState];
+            [volume setMaximumVolumeSliderImage:maximumTrack forState:controlState];
+            [volume setVolumeThumbImage:thumb forState:controlState];
+        }
         volume.accessibilityLabel = @"iPhone volume";
         volume.translatesAutoresizingMaskIntoConstraints = NO;
         [volume setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
