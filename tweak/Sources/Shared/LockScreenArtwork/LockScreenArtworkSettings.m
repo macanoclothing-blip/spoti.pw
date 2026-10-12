@@ -1,5 +1,4 @@
-// The Animated artwork rows, put on the Lock screen widget page by Shared/Player/PlayerSettings.m, and
-// the Sources row for an order of these sources (the redesigned player keeps one of its own).
+// The Control Center Canvas rows and its independent source-order option.
 #import "Core/SGCore.h"
 #import "Settings/SGModPage.h"
 #import "Settings/SGOrderPage.h"
@@ -40,12 +39,17 @@ SGModRow *SGArtworkSourcesRow(NSString *key, NSString *note) {
 
 NSArray<SGModRow *> *SGAnimatedArtworkRows(void) {
     if (!SGAnimatedArtworkAvailable())
-        return @[SGStatActionRow(@"Animated artwork", nil, ^NSString *{ return @"Needs iOS 26"; }, ^{ sayWhatIsMissing(); })];
+        return @[SGStatActionRow(@"Spotify Canvas", nil, ^NSString *{ return @"Needs iOS 26"; }, ^{ sayWhatIsMissing(); })];
     SGModRow *order = SGArtworkSourcesRow(SGKeyLockScreenArtworkSources,
         @"Asked top to bottom until one has a clip. Apple Music gets only the artist and album name.");
     order.visible = ^BOOL { return SGFlag(SGKeyLockScreenArtwork, YES); };
     return @[
-        SGSwitchRow(@"Animated artwork", @"A moving Canvas in the system's animated now-playing surfaces", SGKeyLockScreenArtwork),
+        SGSwitchRow(@"Spotify Canvas", @"Show the track's Canvas in iOS now-playing surfaces, including Control Center", SGKeyLockScreenArtwork),
         order,
     ];
+}
+
+UIViewController *SGControlCenterArtworkPage(void) {
+    return [[SGModPage alloc] initWithTitle:@"Control Center Canvas" intro:nil
+        sections:@[SGSection(@"Animated artwork", SGAnimatedArtworkRows())] footer:nil];
 }

@@ -18,12 +18,14 @@
 #import "Settings/SGPageStyle.h"
 #import "Settings/SGModPage.h"
 #import "Native/Home/Home.h"
+#import "Redesigned/Home/Home.h"
 #import "Redesigned/Album/Album.h"
 #import "Redesigned/Lyrics/Sing.h"
 #import "Shared/Sing/SGSingModel.h"
 #import "Shared/Privacy/Privacy.h"
 #import "Shared/Flags/Flags.h"
 #import "Shared/AudioEffects/AudioEffectsPage.h"
+#import "Shared/LockScreenArtwork/LockScreenArtwork.h"
 #import "Shared/LiveActivity/LiveActivity.h"
 #import "App/About/About.h"
 #import "App/Donate/Donate.h"
@@ -63,8 +65,13 @@ static UIViewController *modSettingsPage(void) {
         pageRow(@"Navbar", @"dock.rectangle", ^UIViewController *{ return SGNavbarPage(); }),
         pageRow(@"Player", @"play.circle", ^UIViewController *{ return SGPlayerSettingsPage(); }),
         pageRow(@"Lyrics", @"quote.bubble", ^UIViewController *{ return SGLyricsSettingsPage(); }),
+        pageRow(@"Control Center Canvas", @"waveform", ^UIViewController *{ return SGControlCenterArtworkPage(); }),
         audioEffects,
     ]];
+    if (SGRedesignedUIStored()) {
+        [parts insertObject:pageRow(@"Lyrics nella Home", @"quote.opening",
+            ^UIViewController *{ return SGRHomeLyricsSettingsPage(); }) atIndex:3];
+    }
     if (@available(iOS 17.0, *)) {
         SGModRow *liveActivity = pageRow(@"Live Activity", @"platter.filled.top.iphone", ^UIViewController *{ return SGLiveActivitySettingsPage(); });
         liveActivity.value = ^NSString *{ return SGLiveActivitySummary(); };

@@ -4,7 +4,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
 
-@class SGCanvas, SGModRow, SPTPlayerTrack;
+@class SGCanvas, SGModRow, SPTPlayerTrack, UIViewController;
 
 #define SGKeyLockScreenArtwork @"spotifyglass.lockscreen.animatedartwork"
 #define SGKeyLockScreenArtworkSources @"spotifyglass.lockscreen.artworksources"
@@ -35,5 +35,7 @@ NSString *SGAnimatedArtworkKey(CGFloat *aspect);
 NSDictionary *SGArtworkInInfo(NSDictionary *info, NSDictionary<NSString *, id> *artworkByKey);
 // The rows for the Lock screen widget page; below iOS 26 one row reads out what is missing instead.
 NSArray<SGModRow *> *SGAnimatedArtworkRows(void);
+// A dedicated settings page for the system's now-playing animated artwork (including Control Center).
+UIViewController *SGControlCenterArtworkPage(void);
 // A Sources row for the order under `key`, opening the page it is dragged in with `note` under the list.
 SGModRow *SGArtworkSourcesRow(NSString *key, NSString *note);

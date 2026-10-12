@@ -39,6 +39,7 @@
 - (void)addPlayerObserver:(id)observer;
 - (void)skipToNextTrack;
 - (void)seekTo:(double)seconds;
+- (id)playContext:(id)context options:(id)options;
 // The commands below take Spotify's options object, nil for the defaults, and return the command's
 // pending result.
 - (id)pause:(id)options;
