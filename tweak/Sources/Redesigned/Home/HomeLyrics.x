@@ -156,6 +156,7 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
 - (void)refreshRandom;
 - (void)tracksChanged;
 - (void)historyTracksDidLoad;
+- (void)setPlayButtonTitle:(NSString *)title image:(UIImage *)image;
 - (void)stopPlayback;
 @end
 
@@ -229,9 +230,7 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
     _playButton.layer.cornerRadius = 12;
     _playButton.tintColor = SGRAccent();
     _playButton.titleLabel.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
-    [_playButton setTitle:@"Ascolta il frammento" forState:UIControlStateNormal];
-    [_playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
-    _playButton.imageEdgeInsets = UIEdgeInsetsMake(0, -4, 0, 4);
+    [self setPlayButtonTitle:@"Ascolta il frammento" image:[UIImage systemImageNamed:@"play.fill"]];
     [_playButton addTarget:self action:@selector(playSnippet) forControlEvents:UIControlEventTouchUpInside];
     [self addSubview:_playButton];
 
@@ -269,6 +268,19 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
         if (![mood isEqualToString:@"Tutti"] && ![_selectedTrack[@"moods"] containsObject:mood]) [self refreshRandom];
         else if (![genre isEqualToString:@"Tutti"] && ![_selectedTrack[@"genres"] containsObject:genre]) [self refreshRandom];
     }
+}
+
+- (void)setPlayButtonTitle:(NSString *)title image:(UIImage *)image {
+    UIButtonConfiguration *configuration = [UIButtonConfiguration plainButtonConfiguration];
+    configuration.title = title;
+    configuration.image = image;
+    configuration.imagePlacement = NSDirectionalRectEdgeLeading;
+    configuration.imagePadding = 8;
+    configuration.baseForegroundColor = SGRAccent();
+    configuration.contentInsets = NSDirectionalEdgeInsetsMake(8, 12, 8, 12);
+    configuration.background.backgroundColor = [SGRAccent() colorWithAlphaComponent:0.18];
+    configuration.background.cornerRadius = 12;
+    _playButton.configuration = configuration;
 }
 
 - (void)historyTracksDidLoad {
@@ -396,8 +408,7 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
     [(id<SPTPlayer>)player resume:nil];
     _waitingForPlayer = NO;
     _playingSnippet = YES;
-    [_playButton setTitle:@"Frammento in riproduzione" forState:UIControlStateNormal];
-    [_playButton setImage:[UIImage systemImageNamed:@"speaker.wave.2.fill"] forState:UIControlStateNormal];
+    [self setPlayButtonTitle:@"Frammento in riproduzione" image:[UIImage systemImageNamed:@"speaker.wave.2.fill"]];
     [_snippetTimer invalidate];
     NSTimeInterval duration = (SGKaraokeSungEnd(self.selectedLine) - self.selectedLine.start) / 1000.0;
     _snippetTimer = [NSTimer scheduledTimerWithTimeInterval:duration repeats:NO block:^(NSTimer *timer) {
@@ -425,8 +436,7 @@ static NSArray<NSDictionary *> *shuffled(NSArray<NSDictionary *> *items) {
         if ([player respondsToSelector:@selector(pause:)]) [(id<SPTPlayer>)player pause:nil];
     }
     if (self.selectedTrack && !self->_loading) {
-        [_playButton setTitle:@"Ascolta il frammento" forState:UIControlStateNormal];
-        [_playButton setImage:[UIImage systemImageNamed:@"play.fill"] forState:UIControlStateNormal];
+        [self setPlayButtonTitle:@"Ascolta il frammento" image:[UIImage systemImageNamed:@"play.fill"]];
         _playButton.hidden = NO;
     }
 }
@@ -470,7 +480,7 @@ static SGRHomeLyricsListState *stateFor(UIScrollView *list) {
         state = [SGRHomeLyricsListState new];
         state.baseInset = list.contentInset;
         state.appliedInset = list.contentInset;
-        state.baseIndicatorInset = list.scrollIndicatorInsets;
+        state.baseIndicatorInset = list.verticalScrollIndicatorInsets;
         state.hasInset = YES;
         objc_setAssociatedObject(list, &kListStateKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
@@ -488,15 +498,15 @@ static void layoutCard(UIScrollView *list) {
         }
         if (state.hasInset && UIEdgeInsetsEqualToEdgeInsets(list.contentInset, state.appliedInset)) {
             list.contentInset = state.baseInset;
-            list.scrollIndicatorInsets = state.baseIndicatorInset;
+            list.verticalScrollIndicatorInsets = state.baseIndicatorInset;
             if (wasAtTop) [list setContentOffset:CGPointMake(list.contentOffset.x, -state.baseInset.top) animated:NO];
         } else if (state.hasInset && list.contentInset.top >= state.appliedInset.top - 1) {
             UIEdgeInsets inset = list.contentInset;
             inset.top = MAX(0, inset.top - kCardHeight);
             list.contentInset = inset;
-            UIEdgeInsets indicators = list.scrollIndicatorInsets;
+            UIEdgeInsets indicators = list.verticalScrollIndicatorInsets;
             indicators.top = MAX(0, indicators.top - kCardHeight);
-            list.scrollIndicatorInsets = indicators;
+            list.verticalScrollIndicatorInsets = indicators;
         }
         state.hasInset = NO;
         return;
@@ -504,18 +514,14 @@ static void layoutCard(UIScrollView *list) {
     if (addHistoryTracks() && state.card) [state.card historyTracksDidLoad];
     UIEdgeInsets currentInset = list.contentInset;
     if (state.hasInset && !UIEdgeInsetsEqualToEdgeInsets(currentInset, state.appliedInset)) {
-        state.baseInset.top = MAX(0, currentInset.top - kCardHeight);
-        state.baseInset.left = currentInset.left;
-        state.baseInset.bottom = currentInset.bottom;
-        state.baseInset.right = currentInset.right;
-        UIEdgeInsets indicatorInset = list.scrollIndicatorInsets;
-        state.baseIndicatorInset.top = MAX(0, indicatorInset.top - kCardHeight);
-        state.baseIndicatorInset.left = indicatorInset.left;
-        state.baseIndicatorInset.bottom = indicatorInset.bottom;
-        state.baseIndicatorInset.right = indicatorInset.right;
+        state.baseInset = UIEdgeInsetsMake(MAX(0, currentInset.top - kCardHeight),
+            currentInset.left, currentInset.bottom, currentInset.right);
+        UIEdgeInsets indicatorInset = list.verticalScrollIndicatorInsets;
+        state.baseIndicatorInset = UIEdgeInsetsMake(MAX(0, indicatorInset.top - kCardHeight),
+            indicatorInset.left, indicatorInset.bottom, indicatorInset.right);
     } else if (!state.hasInset) {
         state.baseInset = currentInset;
-        state.baseIndicatorInset = list.scrollIndicatorInsets;
+        state.baseIndicatorInset = list.verticalScrollIndicatorInsets;
     }
     if (!state.card) {
         state.card = [[SGRHomeLyricsCard alloc] initWithFrame:CGRectZero];
@@ -527,7 +533,7 @@ static void layoutCard(UIScrollView *list) {
     list.contentInset = inset;
     UIEdgeInsets indicatorInset = state.baseIndicatorInset;
     indicatorInset.top += kCardHeight;
-    list.scrollIndicatorInsets = indicatorInset;
+    list.verticalScrollIndicatorInsets = indicatorInset;
     BOOL atTop = list.contentOffset.y <= state.baseInset.top + 1;
     if (atTop && list.contentOffset.y > -inset.top + 1) {
         [list setContentOffset:CGPointMake(list.contentOffset.x, -inset.top) animated:NO];
