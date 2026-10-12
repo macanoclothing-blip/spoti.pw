@@ -12,6 +12,7 @@
 #import <stdlib.h>
 
 static NSString *const kLyricsEnabled = @"spotifyglass.redesign.homeLyrics";
+static NSString *const kHomeLyricsSafetyResetKey = @"spotifyglass.redesign.homeLyrics.safetyReset";
 static NSString *const kMoodKey = @"spotifyglass.redesign.homeLyricsMood";
 static NSString *const kGenreKey = @"spotifyglass.redesign.homeLyricsGenre";
 static NSNotificationName const kTracksChanged = @"spotifyglass.redesign.homeLyrics.tracksChanged";
@@ -589,6 +590,13 @@ static void layoutCard(UIScrollView *list) {
 %end
 
 %ctor {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (![defaults boolForKey:kHomeLyricsSafetyResetKey]) {
+        SGSetEnabled(kLyricsEnabled, NO);
+        [defaults setBool:YES forKey:kHomeLyricsSafetyResetKey];
+        [defaults synchronize];
+        SGLog(@"home lyrics: disabled the saved setting once after the startup crash report");
+    }
     if (!SGRedesignedUI()) return;
     %init;
     SGRequireClasses(@[
