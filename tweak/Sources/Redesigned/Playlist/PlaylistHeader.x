@@ -171,6 +171,19 @@ static UIView *firstOfClass(UIView *root, Class wanted) {
 // whose artwork is still being fetched while the page is already on screen. The log line says once that the
 // watch, and not one of the header's passes, is what filled the hero.
 - (void)takeCover:(UIImageView *)source late:(BOOL)late {
+    NSArray<UIImage *> *frames = source.animationImages;
+    if (frames.count > 1) {
+        if (![_picture.animationImages isEqualToArray:frames]) {
+            _picture.animationImages = frames;
+            _picture.animationDuration = source.animationDuration;
+            _picture.animationRepeatCount = source.animationRepeatCount;
+        }
+        if (source.isAnimating && !_picture.isAnimating) [_picture startAnimating];
+        else if (!source.isAnimating && _picture.isAnimating) [_picture stopAnimating];
+    } else if (_picture.isAnimating || _picture.animationImages.count) {
+        [_picture stopAnimating];
+        _picture.animationImages = nil;
+    }
     UIImage *image = source.image;
     if (!image || source.bounds.size.width < kMinHero || _picture.image == image) return;
 
@@ -229,7 +242,7 @@ static void applyHero(UIView *layout, UIView *cover, UIView *plane, UIView *bloc
     CGFloat bottom = MAX(kMinHero, round(height + reach)) + stretch;
     // Flexible height as well, for a plane resized after this pass in the same frame.
     hero.autoresizingMask = UIViewAutoresizingFlexibleHeight;
-    CGRect frame = CGRectMake(0, 0, plane.bounds.size.width, bottom);
+    CGRect frame = CGRectMake(0, -stretch, plane.bounds.size.width, bottom + stretch);
     if (!CGRectEqualToRect(hero.frame, frame)) hero.frame = frame;
 
     [hero followCover:coverImageIn(cover)];

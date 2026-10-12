@@ -2,8 +2,6 @@
 // controls and footer. This adjusts the iPhone's system output, not a Spotify Connect device.
 #import "Core/SGCore.h"
 #import <MediaPlayer/MediaPlayer.h>
-#import "Redesigned/Kit/SGRTokens.h"
-#import "PlayerVinyl.h"
 
 static char kVolumeRowKey;
 
@@ -24,34 +22,22 @@ static void installVolumeRow(UIViewController *unit) {
         row = [[UIStackView alloc] initWithFrame:CGRectZero];
         row.axis = UILayoutConstraintAxisHorizontal;
         row.alignment = UIStackViewAlignmentCenter;
-        row.spacing = 10;
         row.layoutMarginsRelativeArrangement = YES;
         row.layoutMargins = UIEdgeInsetsMake(0, 18, 0, 18);
-        UIImageView *quiet = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.fill"]];
-        quiet.tintColor = SGRSecondary();
-        quiet.contentMode = UIViewContentModeScaleAspectFit;
-        [quiet.widthAnchor constraintEqualToConstant:18].active = YES;
-        [row addArrangedSubview:quiet];
         MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         volume.showsRouteButton = NO;
 #pragma clang diagnostic pop
         volume.showsVolumeSlider = YES;
-        volume.tintColor = SGRAccent();
+        volume.tintColor = UIColor.whiteColor;
         volume.accessibilityLabel = @"iPhone volume";
         volume.translatesAutoresizingMaskIntoConstraints = NO;
-        volume.transform = CGAffineTransformMakeTranslation(0, 3);
         [volume setContentHuggingPriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
         [volume setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
-        [volume.heightAnchor constraintEqualToConstant:30].active = YES;
+        [volume.heightAnchor constraintEqualToConstant:44].active = YES;
         [row addArrangedSubview:volume];
-        UIImageView *loud = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"speaker.wave.3.fill"]];
-        loud.tintColor = SGRSecondary();
-        loud.contentMode = UIViewContentModeScaleAspectFit;
-        [loud.widthAnchor constraintEqualToConstant:20].active = YES;
-        [row addArrangedSubview:loud];
-        [row.heightAnchor constraintEqualToConstant:36].active = YES;
+        [row.heightAnchor constraintEqualToConstant:44].active = YES;
         objc_setAssociatedObject(stack, &kVolumeRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     NSUInteger controlsIndex = [stack.arrangedSubviews indexOfObject:controls];
@@ -66,9 +52,6 @@ static void installVolumeRow(UIViewController *unit) {
         controlsIndex = [stack.arrangedSubviews indexOfObject:controls];
         if (controlsIndex != NSNotFound) [stack insertArrangedSubview:row atIndex:controlsIndex + 1];
     }
-    SGForEachView(row, ^(UIView *view) {
-        if ([view isKindOfClass:MPVolumeView.class]) SGRVinylStyleVolumeView((MPVolumeView *)view);
-    });
     static dispatch_once_t once;
     dispatch_once(&once, ^{ SGLog(@"redesign player: iPhone output-volume row inserted under playback controls"); });
 }

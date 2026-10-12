@@ -9,6 +9,7 @@
 #import "Lyrics.h"
 #import "Shared/LockScreenLyrics/LockScreenLyrics.h"
 #import "Shared/LyricsSources/LyricsSources.h"
+#import "Shared/LockScreenArtwork/LockScreenArtwork.h"
 #import "Shared/Player/PlayerState.h"
 #import "Headers/SPTPlayer.h"
 
@@ -137,10 +138,6 @@ static void askAgainLater(NSString *trackID) {
         [sg_asking removeObject:trackID];
         [sg_requested removeObject:trackID];
     });
-}
-
-NSString *SGKaraokeSpotifyAuthorization(void) {
-    return sg_spclientHeaders[@"authorization"];
 }
 
 // `retry`: the sources' walk failed on the way, so an answer with no lines is not final either.
@@ -340,8 +337,10 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
 
 %ctor {
     // The sources that search by name learn the name from the player, so the player is caught
-    // whenever one is on, not only for the redesign's lyrics and the lock screen.
-    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsActive()) return;
+    // whenever one is on, not only for the redesign's lyrics and system artwork.
+    BOOL artworkNeedsSpotifyHeaders = SGAnimatedArtworkAvailable() && SGFlag(SGKeyLockScreenArtwork, YES);
+    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsActive() &&
+        !artworkNeedsSpotifyHeaders) return;
     sg_seenTracks = [NSMutableDictionary dictionary];
     sg_lyrics = [NSMutableDictionary dictionary];
     sg_requested = [NSMutableSet set];

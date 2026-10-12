@@ -15,16 +15,6 @@
 // Threading: main thread only.
 #import <UIKit/UIKit.h>
 
-// The Home's optional, compact random synchronized-lyrics card.
-UIViewController *SGRHomeLyricsSettingsPage(void);
-NSArray<NSString *> *SGRHomeLyricsMoodChoices(void);
-NSArray<NSString *> *SGRHomeLyricsGenreChoices(void);
-NSString *SGRHomeLyricsMoodFilter(void);
-NSString *SGRHomeLyricsGenreFilter(void);
-void SGRHomeLyricsSetMoodFilter(NSString *mood);
-void SGRHomeLyricsSetGenreFilter(NSString *genre);
-void SGRHomeLyricsObserveTrack(id track, NSDictionary *metadata);
-
 // Whether HomeSections.x has collapsed the section in this cell.
 BOOL SGRHomeSectionCollapsed(UIView *cell);
 

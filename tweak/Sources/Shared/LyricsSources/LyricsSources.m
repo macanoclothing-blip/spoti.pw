@@ -260,8 +260,6 @@ BOOL SGLyricsActive(void) {
 
 #pragma mark - what is known about the track
 
-static NSMutableDictionary<NSString *, SGLyricsQuery *> *sg_querySeeds;
-
 // The player knows every track it has played by name, which is what every source but Musixmatch
 // searches by. The track is looked up by id rather than compared with the one playing now: a lyrics
 // request often lands a beat before the player moves on to its track, and comparing then left the
@@ -280,11 +278,6 @@ static SGLyricsQuery *queryFor(NSString *trackID) {
         if ([album isKindOfClass:NSString.class]) query.album = album;
         if ([length respondsToSelector:@selector(integerValue)]) query.seconds = [length integerValue] / 1000;
     }
-    SGLyricsQuery *seed = sg_querySeeds[trackID];
-    if (!query.title.length) query.title = seed.title;
-    if (!query.artist.length) query.artist = seed.artist;
-    if (!query.album.length) query.album = seed.album;
-    if (query.seconds <= 0) query.seconds = seed.seconds;
     return query;
 }
 
@@ -312,7 +305,6 @@ static void setUp(void) {
     dispatch_once(&once, ^{
         sg_kept = [NSMutableDictionary dictionary];
         sg_waiting = [NSMutableDictionary dictionary];
-        sg_querySeeds = [NSMutableDictionary dictionary];
         sg_missing = [NSMutableSet set];
         sg_credits = [NSMutableDictionary dictionary];
         sg_pageCredits = [NSMutableDictionary dictionary];
@@ -479,21 +471,12 @@ static void whenNamed(NSString *trackID, NSTimeInterval waited) {
     });
 }
 
-static void fetch(NSString *trackID, SGLyricsQuery *seed, void (^done)(SGLyricsResult *result)) {
+static void fetch(NSString *trackID, void (^done)(SGLyricsResult *result)) {
     setUp();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!trackID.length) {
             done(nil);
             return;
-        }
-        if (seed) {
-            SGLyricsQuery *stored = sg_querySeeds[trackID] ?: [SGLyricsQuery new];
-            stored.trackID = trackID;
-            if (!stored.title.length) stored.title = seed.title;
-            if (!stored.artist.length) stored.artist = seed.artist;
-            if (!stored.album.length) stored.album = seed.album;
-            if (stored.seconds <= 0) stored.seconds = seed.seconds;
-            sg_querySeeds[trackID] = stored;
         }
         id kept = sg_kept[trackID];
         if (kept) {
@@ -511,18 +494,7 @@ static void fetch(NSString *trackID, SGLyricsQuery *seed, void (^done)(SGLyricsR
 }
 
 void SGLyricsFetch(NSString *trackID, void (^done)(SGLyricsResult *result)) {
-    fetch(trackID, nil, done);
-}
-
-void SGLyricsFetchForTrack(NSString *trackID, NSString *title, NSString *artist, NSString *album,
-                           NSInteger seconds, void (^done)(SGLyricsResult *result)) {
-    SGLyricsQuery *seed = [SGLyricsQuery new];
-    seed.trackID = trackID;
-    seed.title = title;
-    seed.artist = artist;
-    seed.album = album;
-    seed.seconds = seconds;
-    fetch(trackID, seed, done);
+    fetch(trackID, done);
 }
 
 BOOL SGLyricsMayHave(NSString *trackID) {

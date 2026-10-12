@@ -1234,23 +1234,6 @@ static void styleVinylProgress(UIViewController *unit) {
     objc_setAssociatedObject(slider, &kVinylProgressStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-void SGRVinylStyleVolumeView(MPVolumeView *volumeView) {
-    if (!vinylOn() || !volumeView) return;
-    __block UISlider *slider = nil;
-    SGForEachView(volumeView, ^(UIView *view) {
-        if (!slider && [view isKindOfClass:UISlider.class]) slider = (UISlider *)view;
-    });
-    if (!slider || [objc_getAssociatedObject(slider, &kVinylVolumeSliderStyledKey) boolValue]) return;
-    UIImage *filled = retroProgressTrack(YES), *empty = retroProgressTrack(NO), *thumb = retroProgressThumb();
-    [slider setMinimumTrackImage:filled forState:UIControlStateNormal];
-    [slider setMinimumTrackImage:filled forState:UIControlStateHighlighted];
-    [slider setMaximumTrackImage:empty forState:UIControlStateNormal];
-    [slider setMaximumTrackImage:empty forState:UIControlStateHighlighted];
-    [slider setThumbImage:thumb forState:UIControlStateNormal];
-    [slider setThumbImage:thumb forState:UIControlStateHighlighted];
-    objc_setAssociatedObject(slider, &kVinylVolumeSliderStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
 static UIStackView *vinylBottomStackIn(UIView *view) {
     for (UIView *candidate = view; candidate; candidate = candidate.superview) {
         if ([candidate isKindOfClass:UIStackView.class] &&
@@ -1274,12 +1257,34 @@ static UIView *vinylVolumeRow(UIStackView *stack) {
     return volume ? arrangedSubviewContainingView(stack, volume) : nil;
 }
 
+void SGRVinylStyleVolumeView(MPVolumeView *volumeView) {
+    if (!vinylOn() || !volumeView) return;
+    __block UISlider *slider = nil;
+    SGForEachView(volumeView, ^(UIView *view) {
+        if (!slider && [view isKindOfClass:UISlider.class]) slider = (UISlider *)view;
+    });
+    if (!slider || [objc_getAssociatedObject(slider, &kVinylVolumeSliderStyledKey) boolValue]) return;
+    UIImage *filled = retroProgressTrack(YES), *empty = retroProgressTrack(NO), *thumb = retroProgressThumb();
+    [slider setMinimumTrackImage:filled forState:UIControlStateNormal];
+    [slider setMinimumTrackImage:filled forState:UIControlStateHighlighted];
+    [slider setMaximumTrackImage:empty forState:UIControlStateNormal];
+    [slider setMaximumTrackImage:empty forState:UIControlStateHighlighted];
+    [slider setThumbImage:thumb forState:UIControlStateNormal];
+    [slider setThumbImage:thumb forState:UIControlStateHighlighted];
+    objc_setAssociatedObject(slider, &kVinylVolumeSliderStyledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
 static void updateVinylPlaybackSpacing(UIView *host) {
     UIStackView *stack = vinylBottomStackIn(host);
     if (!stack) return;
     UIView *slider = SGRFindByIdentifier(stack, @"SPTNowPlayingSliderV2", &kVinylProgressSliderKey);
     UIView *progressRow = slider ? arrangedSubviewContainingView(stack, slider) : nil;
     UIView *volumeRow = vinylVolumeRow(stack);
+    __block MPVolumeView *volume = nil;
+    SGForEachView(volumeRow, ^(UIView *view) {
+        if (!volume && [view isKindOfClass:MPVolumeView.class]) volume = (MPVolumeView *)view;
+    });
+    SGRVinylStyleVolumeView(volume);
     if (progressRow) {
         CGAffineTransform down = CGAffineTransformMakeTranslation(0, kVinylProgressShift);
         if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;

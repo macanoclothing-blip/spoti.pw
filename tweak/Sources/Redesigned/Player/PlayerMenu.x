@@ -38,6 +38,7 @@ static const NSTimeInterval kSettle = 0.8;
 // The rows of the last menu, for the next one to open on.
 static NSString *const kLastRowsKey = @"spotifyglass.redesign.player.menuRows";
 static const CGFloat kPanelWidth = 300, kPanelTop = 12;
+static const CGFloat kReverbHeight = 78, kPanelGap = 8;
 
 // Whether the hooks are in, so the ⋯ is watched only when a menu can be taken over.
 static BOOL sgr_menuOn;
@@ -357,11 +358,15 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
 #pragma mark - Speed and pitch's panel
 
 // The sliders in a popover from the ⋯: a system menu has no room for a view of its own.
+@interface SGRReverbPanel : UIViewController <UIPopoverPresentationControllerDelegate>
+@end
+
 @interface SGRSpeedPitchPanel : UIViewController <UIPopoverPresentationControllerDelegate>
 @end
 
 @implementation SGRSpeedPitchPanel {
     UIView *_panel;
+    SGRReverbPanel *_reverbPanel;
     id _observer;
 }
 
@@ -374,6 +379,10 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
     self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
     _panel = SGSpeedPitchPanelMake();
     [self.view addSubview:_panel];
+    _reverbPanel = [SGRReverbPanel new];
+    [self addChildViewController:_reverbPanel];
+    [self.view addSubview:_reverbPanel.view];
+    [_reverbPanel didMoveToParentViewController:self];
     [self fit];
     __weak SGRSpeedPitchPanel *weak = self;
     // Pitch following speed folds its slider away, and the panel with it.
@@ -385,7 +394,7 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
 }
 
 - (void)fit {
-    CGSize size = CGSizeMake(kPanelWidth, kPanelTop + SGSpeedPitchPanelHeight());
+    CGSize size = CGSizeMake(kPanelWidth, kPanelTop + SGSpeedPitchPanelHeight() + kPanelGap + kReverbHeight);
     if (!CGSizeEqualToSize(self.preferredContentSize, size)) self.preferredContentSize = size;
 }
 
@@ -393,6 +402,8 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
     [super viewDidLayoutSubviews];
     CGRect safe = UIEdgeInsetsInsetRect(self.view.bounds, self.view.safeAreaInsets);
     _panel.frame = CGRectMake(CGRectGetMinX(safe), CGRectGetMinY(safe) + kPanelTop, safe.size.width, SGSpeedPitchPanelHeight());
+    _reverbPanel.view.frame = CGRectMake(CGRectGetMinX(safe),
+        CGRectGetMinY(safe) + kPanelTop + SGSpeedPitchPanelHeight() + kPanelGap, safe.size.width, kReverbHeight);
 }
 
 - (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller traitCollection:(UITraitCollection *)traits {
@@ -401,9 +412,6 @@ static SGRPlayerMenuAnchor *anchorIn(UIView *button) {
 @end
 
 #pragma mark - Reverb's panel
-
-@interface SGRReverbPanel : UIViewController <UIPopoverPresentationControllerDelegate>
-@end
 
 @implementation SGRReverbPanel {
     UISlider *_amount;
@@ -750,22 +758,6 @@ static void openSpeedPitch(SGRPlayerMenuTakeover *t) {
     });
 }
 
-static void openReverb(SGRPlayerMenuTakeover *t) {
-    UIView *button = t.button;
-    UIViewController *player = t.player;
-    finish(t, @"Reverb opens its panel", ^{
-        if (!player || !button.window || player.presentedViewController) return;
-        SGRReverbPanel *panel = [SGRReverbPanel new];
-        panel.modalPresentationStyle = UIModalPresentationPopover;
-        UIPopoverPresentationController *popover = panel.popoverPresentationController;
-        popover.sourceView = button;
-        popover.sourceRect = button.bounds;
-        popover.permittedArrowDirections = UIPopoverArrowDirectionUp;
-        popover.delegate = panel;
-        [player presentViewController:panel animated:YES completion:nil];
-    });
-}
-
 #pragma mark building the menu
 
 static UIMenu *group(NSArray<UIMenuElement *> *children) {
@@ -796,14 +788,27 @@ static UIAction *speedAndPitchAction(SGRPlayerMenuTakeover *t) {
     return action;
 }
 
-static UIAction *reverbAction(SGRPlayerMenuTakeover *t) {
+static UIAction *artworkChoice(SGRPlayerMenuTakeover *t, SGRPlayerBackground background,
+                               NSString *title, NSString *imageName) {
     __weak SGRPlayerMenuTakeover *weak = t;
-    UIAction *action = [UIAction actionWithTitle:@"Reverb" image:symbol(@"waveform") identifier:nil handler:^(UIAction *sender) {
-        pick(weak, ^(SGRPlayerMenuTakeover *strong) { openReverb(strong); });
+    UIAction *action = [UIAction actionWithTitle:title image:symbol(imageName) identifier:nil handler:^(UIAction *sender) {
+        pick(weak, ^(SGRPlayerMenuTakeover *strong) {
+            (void)strong;
+            SGSetInt(SGRKeyPlayerBackground, background);
+            [NSNotificationCenter.defaultCenter postNotificationName:SGRPlayerBackgroundDidChangeNotification object:nil];
+            SGLog(@"redesign player: %@ selected from Artwork menu", title);
+        });
     }];
-    action.subtitle = SGDSPSwitch(SGKeyDSP) && SGDSPSwitch(SGKeyDSPReverb)
-        ? [NSString stringWithFormat:@"%.0f%%", SGDSPNumber(SGKeyDSPReverbAmount)] : @"Off";
+    action.state = SGRPlayerBackgroundStyle() == background ? UIMenuElementStateOn : UIMenuElementStateOff;
     return action;
+}
+
+static UIMenu *artworkMenu(SGRPlayerMenuTakeover *t) {
+    return [UIMenu menuWithTitle:@"Artwork" image:symbol(@"photo") identifier:nil
+        options:UIMenuOptionsSingleSelection children:@[
+            artworkChoice(t, SGRPlayerBackgroundFluid, @"Cover art", @"photo"),
+            artworkChoice(t, SGRPlayerBackgroundAnimated, @"Animated", @"film"),
+        ]];
 }
 
 static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
@@ -833,7 +838,7 @@ static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
         [tiles removeLastObject];
     }
     [main addObject:speedAndPitchAction(t)];
-    [main addObject:reverbAction(t)];
+    [main addObject:artworkMenu(t)];
     if (more.count == 1) {
         [feedback addObject:more.firstObject];
     } else if (more.count) {
@@ -1025,55 +1030,7 @@ static SGRPlayerMenuTakeover *takeoverFor(UIViewController *menu) {
     return t;
 }
 
-#pragma mark - what darkens the screen as the menu opens
-
-// A dark picture across the screen flashed as the menu opened on the phone, with the sheet and its dimming
-// out of sight from the presentation's first frame (device, 2026-09-24). So the first menus of a launch say
-// what they find at a few moments after the ⋯'s tap: every view drawn dark over most of the window, and the
-// windows themselves.
-static NSString *darkness(UIColor *color) {
-    CGFloat white = 1, alpha = 0;
-    if (!color || ![color getWhite:&white alpha:&alpha]) {
-        CGFloat r, g, b;
-        if (![color getRed:&r green:&g blue:&b alpha:&alpha]) return nil;
-        white = (r + g + b) / 3;
-    }
-    return alpha >= 0.3 && white < 0.15 ? [NSString stringWithFormat:@"%.2f@%.2f", white, alpha] : nil;
-}
-
-static void findDark(UIView *view, UIView *window, CGFloat alpha, int depth, NSMutableArray<NSString *> *out) {
-    if (view.hidden || view.alpha < 0.01 || depth > 40 || out.count > 20) return;
-    alpha *= view.alpha;
-    CGRect frame = [view convertRect:view.bounds toView:window];
-    CGRect screen = CGRectIntersection(frame, window.bounds);
-    BOOL covers = !CGRectIsNull(screen) && screen.size.width * screen.size.height > 0.6 * window.bounds.size.width * window.bounds.size.height;
-    if (!covers) return;
-    NSString *dark = darkness(view.backgroundColor) ?: (view.layer.backgroundColor ? darkness([UIColor colorWithCGColor:view.layer.backgroundColor]) : nil);
-    if (dark && alpha > 0.05) {
-        [out addObject:[NSString stringWithFormat:@"%@%@ bg %@ alpha %.2f", NSStringFromClass(view.class),
-                        view.accessibilityIdentifier.length ? [@" id=" stringByAppendingString:view.accessibilityIdentifier] : @"", dark, alpha]];
-    }
-    for (UIView *child in view.subviews) findDark(child, window, alpha, depth + 1, out);
-}
-
-static void logDarkness(UIView *anyView) {
-    static int menus;
-    if (menus++ >= 2) return;
-    for (NSNumber *after in @[@0, @0.02, @0.05, @0.1, @0.2, @0.4]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(after.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIWindowScene *scene = anyView.window.windowScene;
-            NSMutableArray<NSString *> *lines = [NSMutableArray array];
-            for (UIWindow *window in scene.windows) {
-                if (window.hidden) continue;
-                NSMutableArray<NSString *> *dark = [NSMutableArray array];
-                findDark(window, window, 1, 0, dark);
-                [lines addObject:[NSString stringWithFormat:@"%@ level %.0f: %@", NSStringFromClass(window.class), window.windowLevel,
-                                  dark.count ? [dark componentsJoinedByString:@"; "] : @"nothing dark over it"]];
-            }
-            SGLog(@"redesign player menu: %.2f s after the sheet began: %@", after.doubleValue, [lines componentsJoinedByString:@" | "]);
-        });
-    }
-}
+#pragma mark - taking over Spotify's sheet
 
 // The sheet and its dimming go out of sight as the presentation begins, before its first frame: the menu's
 // own appearance comes later than that, and hiding them only from there let the dimming's black and the sheet
@@ -1089,14 +1046,12 @@ static void logDarkness(UIView *anyView) {
     if (!moreTappedRecently() || !menu) return;
     objc_setAssociatedObject(sheet, &kClaimKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     hidePresentation(presentation.presentedView, presentation.containerView);
-    logDarkness(presentation.containerView ?: presentation.presentingViewController.view);
     // A menu asked for from inside this call is never shown; from the next turn it is, and stays.
     __weak UIViewController *weakMenu = menu;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController *strongMenu = weakMenu;
         SGRPlayerMenuTakeover *t = strongMenu ? takeoverFor(strongMenu) : nil;
         if (!t) return;
-        pass(t);
         openMenu(t);
     });
     // A claimed sheet whose menu is never taken over would stay out of sight with nothing in its place.

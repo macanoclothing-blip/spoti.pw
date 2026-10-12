@@ -68,10 +68,6 @@ static UIViewController *modSettingsPage(void) {
         pageRow(@"Control Center Canvas", @"waveform", ^UIViewController *{ return SGControlCenterArtworkPage(); }),
         audioEffects,
     ]];
-    if (SGRedesignedUIStored()) {
-        [parts insertObject:pageRow(@"Lyrics nella Home", @"quote.opening",
-            ^UIViewController *{ return SGRHomeLyricsSettingsPage(); }) atIndex:3];
-    }
     if (@available(iOS 17.0, *)) {
         SGModRow *liveActivity = pageRow(@"Live Activity", @"platter.filled.top.iphone", ^UIViewController *{ return SGLiveActivitySettingsPage(); });
         liveActivity.value = ^NSString *{ return SGLiveActivitySummary(); };

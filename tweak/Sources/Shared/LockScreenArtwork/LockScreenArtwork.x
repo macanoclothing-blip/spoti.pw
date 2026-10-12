@@ -7,7 +7,6 @@
 #import "SGArtworkFile.h"
 #import "SGCanvas.h"
 #import "Headers/SPTPlayer.h"
-#import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Player/PlayerState.h"
 
 static NSString *const kCanvazAddress = @"https://spclient.wg.spotify.com/canvaz-cache/v0/canvases";
@@ -23,7 +22,43 @@ static NSDictionary<NSString *, id> *sg_artworkByKey;
 static NSString *sg_wanted;
 static NSString *sg_playing;   // the source the artwork set for sg_wanted came from
 static NSString *sg_offered;
+static NSString *sg_waitingForAuthorization;
+static NSDictionary<NSString *, NSString *> *sg_spotifyHeaders;
 static CGFloat sg_aspect;
+static void resolve(SPTPlayerTrack *track);
+
+static NSString *const sg_spclientHeaderNames[] = {
+    @"authorization", @"client-token", @"app-platform", @"spotify-app-version", @"user-agent", @"accept-language",
+};
+
+static void rememberSpotifyHeaders(NSURLSession *session, NSURLRequest *request) {
+    NSString *host = request.URL.host.lowercaseString;
+    if (![host isEqualToString:@"spclient.wg.spotify.com"] && ![host hasSuffix:@"-spclient.spotify.com"]) return;
+    NSSet<NSString *> *wanted = [NSSet setWithArray:@[@"authorization", @"client-token", @"app-platform",
+        @"spotify-app-version", @"user-agent", @"accept-language"]];
+    NSMutableDictionary<NSString *, NSString *> *headers = [NSMutableDictionary dictionary];
+    for (NSDictionary *source in @[session.configuration.HTTPAdditionalHeaders ?: @{},
+                                    request.allHTTPHeaderFields ?: @{}]) {
+        [source enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
+            if (![key isKindOfClass:NSString.class] || ![value isKindOfClass:NSString.class]) return;
+            NSString *name = [key lowercaseString];
+            if ([wanted containsObject:name]) headers[name] = value;
+        }];
+    }
+    if (!headers[@"authorization"]) return;
+    NSDictionary<NSString *, NSString *> *captured = [headers copy];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([captured isEqualToDictionary:sg_spotifyHeaders]) return;
+        sg_spotifyHeaders = captured;
+        SGLog(@"lock artwork: Spotify service authorization captured");
+        NSString *waiting = sg_waitingForAuthorization;
+        SPTPlayerTrack *track = SGPlayerState().track;
+        if (!waiting || ![SGURIString(track.URI) isEqualToString:waiting]) return;
+        sg_waitingForAuthorization = nil;
+        sg_wanted = nil;
+        resolve(track);
+    });
+}
 
 static UIImage *coverImage(CGSize size) {
     MPMediaItemArtwork *cover;
@@ -142,17 +177,21 @@ static void play(NSString *uri, SGCanvas *canvas, NSString *source) {
 }
 
 static void askCanvaz(NSString *uri, void (^done)(SGCanvas *canvas, NSString *note)) {
-    NSString *authorization = SGKaraokeSpotifyAuthorization();
     NSData *body = SGCanvazRequestBody(uri);
-    if (!authorization || !body) {
-        done(nil, @"no token for canvaz yet");
+    if (!sg_spotifyHeaders[@"authorization"] || !body) {
+        if (body && !sg_spotifyHeaders[@"authorization"]) sg_waitingForAuthorization = uri;
+        done(nil, body ? @"no token for canvaz yet" : @"no canvaz request body");
         return;
     }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:kCanvazAddress]];
     request.HTTPMethod = @"POST";
     request.HTTPBody = body;
     request.allowsConstrainedNetworkAccess = NO;
-    [request setValue:authorization forHTTPHeaderField:@"Authorization"];
+    for (NSUInteger i = 0; i < sizeof(sg_spclientHeaderNames) / sizeof(*sg_spclientHeaderNames); i++) {
+        NSString *name = sg_spclientHeaderNames[i];
+        NSString *value = sg_spotifyHeaders[name];
+        if (value) [request setValue:value forHTTPHeaderField:name];
+    }
     [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Content-Type"];
     [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *answer, NSURLResponse *response, NSError *error) {
         SGCanvas *canvas = SGCanvazFromBody(answer);
@@ -177,6 +216,12 @@ void SGArtworkAsk(NSString *source, SPTPlayerTrack *track, SGCanvas *fromMetadat
 static void walk(NSString *uri, SPTPlayerTrack *track, SGCanvas *fromMetadata, NSArray<NSString *> *order, NSUInteger at) {
     if (at >= order.count) {
         SGLog(@"lock artwork: no clip for %@ from %@", uri, order.count ? [order componentsJoinedByString:@", "] : @"no source");
+        return;
+    }
+    if ([order[at] isEqualToString:SGArtworkSourceSpotify] && !fromMetadata &&
+        !sg_spotifyHeaders[@"authorization"]) {
+        sg_waitingForAuthorization = uri;
+        SGLog(@"lock artwork: waiting for Spotify authorization before checking Canvas for %@", uri);
         return;
     }
     SGArtworkAsk(order[at], track, fromMetadata, sg_aspect < 0.9,
@@ -205,6 +250,7 @@ static void resolve(SPTPlayerTrack *track) {
     if (!SGFlag(SGKeyLockScreenArtwork, YES)) {
         if (sg_wanted) {
             sg_wanted = nil;
+            sg_waitingForAuthorization = nil;
             SGArtworkCancelFetch();
             sg_playing = nil;
             @synchronized (sg_lock) {
@@ -217,6 +263,7 @@ static void resolve(SPTPlayerTrack *track) {
     }
     if (!keyOffered()) return;
     NSString *uri = SGURIString(track.URI);
+    if (![uri isEqualToString:sg_wanted]) sg_waitingForAuthorization = nil;
     SGCanvas *canvas = SGCanvasFromMetadata([track respondsToSelector:@selector(metadata)] ? track.metadata : nil);
     // Pause, shuffle and the like report the same track again; only metadata that landed late is news.
     static BOOL fromMetadata;
@@ -269,6 +316,28 @@ static SGArtworkWatcher *sg_watcher;
 }
 %end
 
+%hook SPTDataLoaderService
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
+    rememberSpotifyHeaders(session, task.currentRequest);
+    %orig;
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    rememberSpotifyHeaders(session, task.currentRequest);
+    %orig;
+}
+%end
+
+%hook _TtC26Connectivity_HttpClientKit20HttpClientURLSession
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
+    rememberSpotifyHeaders(session, task.currentRequest);
+    %orig;
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    rememberSpotifyHeaders(session, task.currentRequest);
+    %orig;
+}
+%end
+
 %ctor {
     if (!SGAnimatedArtworkAvailable()) {
         SGLog(@"lock artwork: off, animated artwork needs iOS 26");
@@ -278,6 +347,7 @@ static SGArtworkWatcher *sg_watcher;
     sg_watcher = [SGArtworkWatcher new];
     SGAddPlayerStateObserver(sg_watcher);
     %init;
-    SGRequireClasses(@[@"MPNowPlayingInfoCenter"]);
+    SGRequireClasses(@[@"MPNowPlayingInfoCenter", @"SPTDataLoaderService",
+                        @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession"]);
     SGLog(@"lock artwork: on");
 }

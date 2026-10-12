@@ -109,7 +109,10 @@ Shared:
                   shared Settings/SGOrderPage the lyrics sources use too). Spotify's URL comes off canvas.url
                   in the played track's metadata, which Spotify's core fills whatever
                   ios-feature-canvas.canvas_enabled says, and failing that from spotify.canvaz.cache with the
-                  account's own token. Apple Music's (SGAppleArtwork.m) comes from the catalog search with
+                  account's own token; LockScreenArtwork.x captures the required Spotify headers independently of
+                  the lyrics hooks, waits for them before asking Canvaz, and retries the current track as soon as
+                  they arrive.
+                  Apple Music's (SGAppleArtwork.m) comes from the catalog search with
                   editorialVideo extended, under the web player's token read from music.apple.com's script and
                   kept until it expires; the HLS stream near 1100 px wide, HEVC first, is byte ranges of one
                   MP4, which is fetched whole. The clip is downloaded into Caches, centre cropped once to the
@@ -147,8 +150,10 @@ Shared:
                   between its mixer and its RemoteIO unit through Audio/SGAudioPipeline's connection
                   (SpeedPitchMenu.x, SpeedPitch.x, SGTimePitch.m). With Pitch follows speed on (the default, stored) the pitch
                   slider folds away and Apple's varispeed takes the unit's place: the song resampled like a record, no
-                  time stretch to smear it. The block goes into Spotify's own context menu sheet
-                  and is drawn from its own measures, not the Kit's, so it sits there under either look. Tested on the
+                  time stretch to smear it. In the redesign's player menu, Reverb sits under Speed and pitch in the
+                  same popover, and Artwork offers Cover art or Animated (Spotify Canvas when available). The block
+                  goes into Spotify's own context menu sheet and is drawn from its own measures, not the Kit's, so it
+                  sits there under either look. Tested on the
                   Mac against harness/pitch/ and in the simulator against harness/speed/ and harness/menu/
     AudioEffects/ the audio effects on Spotify's sound (AudioEffects.h has the keys and the page's calls): Audio/SGAudioPipeline's
                   ordered output processor runs each finished buffer through the mod's own engine, re-blocked to 1024 frames one block late,
@@ -270,11 +275,12 @@ Redesigned:
                   matching scene geometry update while the player is visible. In landscape the lyrics layout uses
                   a cover column and a separate lyrics column; Vinyl mode scales the disc to the shorter screen
                   dimension and places its metadata beside it.
-                  Player/PlayerVolume.x inserts a volume slider with speaker endpoints below the transport controls and
-                  above the lyrics, Connect and queue row; its track is vertically aligned with the icons. In the
-                  standard player the transport row is centered between the song progress and volume sliders. Vinyl
-                  mode gives the volume slider and progress track a matching retro treatment, raises the volume row and
-                  lowers the progress row. The slider adjusts the iPhone's output volume, not Spotify Connect's remote
+                  Player/PlayerVolume.x inserts iOS's native MPVolumeView below the transport controls and above the
+                  lyrics, Connect and queue row, using the system speaker artwork and white volume track in the
+                  standard redesign. Vinyl mode keeps its own retro slider styling, raises the volume row and lowers
+                  the progress row. The standard player's transport row is centered between the song progress and
+                  volume sliders. The slider adjusts the iPhone's output
+                  volume, not Spotify Connect's remote
                   device volume.
     Artist/       artist page headers look up a Fanart.tv music logo automatically when opened, with the artist name
                   as fallback; album headers keep the album title and show the credited artist's logo in place of the
@@ -312,6 +318,8 @@ Redesigned:
                   without, and Spotify already draws them on the system's own glass
     Playlist/     the playlist page (Liked Songs and one's own too, all three being the same page) the way the Music
                   app lays one out: the cover full bleed across the top dissolving into the page's field with no seam,
+                  stretching into the top overscroll so the field or system background does not flash through; animated
+                  UIImageView covers mirror their frame sequence in the hero,
                   the title, the creator after their picture and the length centred under it, one row of glass
                   controls (shuffle, a prominent Play capsule taking its glyph and its word from Spotify's own button,
                   add), the find bar and the curation pills gone, and the track rows on the field with a hairline between them
@@ -403,9 +411,7 @@ each with its own list of tabs. Lyrics, beside Player: the ordered list of lyric
 naming the source in the redesign, the lock screen, and glass lyrics in the native look; in the redesign also
 which of the lyrics, their pronunciation and their translation is set largest, and the translation's language.
 Control Center Canvas is a separate page under either look for the animated Canvas on supported system
-now-playing surfaces. Lyrics nella Home appears only in the redesign: it enables a compact Home card that
-chooses synchronized lyric lines from locally observed Spotify tracks and previews a line on demand;
-Mood and Genre filters are populated only by tags Spotify actually provides, never inferred classifications.
+now-playing surfaces.
 Player: Gestures, Blocked artists (with the count on the row) and Lock screen widget (its controls and, under Artwork, Animated artwork, the track's Canvas or the album's Apple Music cover in supported system now-playing surfaces, on until switched off, with a Sources page for their order, and a "Needs iOS 26" row below that), which work with either look;
 in the native look also Now playing bar (its device button and its flags), Queue & devices, and
 Spotify's own player screen (artwork background, glass header buttons, Disable Canvas and the sheet,
