@@ -100,6 +100,15 @@ static void setFrame(UIView *view, CGRect frame) {
     if (view && !CGRectIsEmpty(frame) && !CGRectEqualToRect(view.frame, frame)) view.frame = frame;
 }
 
+static CGFloat topOverscrollFor(UIView *view) {
+    for (UIView *ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        if (![ancestor isKindOfClass:UIScrollView.class]) continue;
+        UIScrollView *scroll = (UIScrollView *)ancestor;
+        return MAX(0, -(scroll.contentOffset.y + scroll.adjustedContentInset.top));
+    }
+    return 0;
+}
+
 // The stack Spotify arranges the header's buttons in: the first one above `button`.
 static UIView *rowOf(UIView *button, UIView *header) {
     for (UIView *v = button.superview; v && v != header; v = v.superview) {
@@ -355,7 +364,8 @@ static void applyHero(UIView *header, UIView *cover, CGFloat bottom) {
         SGLog(@"redesign album: hero %.0fpt across the top of the header", height);
     }
     if (height < kMinHero) return;
-    setFrame(hero, CGRectMake(0, 0, header.bounds.size.width, height));
+    CGFloat overscroll = topOverscrollFor(header);
+    setFrame(hero, CGRectMake(0, -overscroll, header.bounds.size.width, height + overscroll));
     hero.fieldColor = SGRAlbumFieldColor(header);
 
     [hero followCover:coverImageIn(cover)];

@@ -1455,10 +1455,11 @@ typedef struct {
     for (SGRKaraokeLineView *view in _shown.allValues) [view.layer removeAnimationForKey:@"blur"];
 }
 
-// The button shows only for a song with a pronunciation or a translation to show, and its menu only
-// what the song has: a switch for each, reading what tapping it will do.
+// Keep an enabled text option reachable even when this source has no extra lines for the track.
 - (void)offerExtras {
-    BOOL offered = _lines && (_hasSpoken || _hasTranslation);
+    BOOL pronunciationOn = SGFlag(SGRKeyLyricsPronunciation, NO);
+    BOOL translationOn = SGFlag(SGRKeyLyricsTranslation, NO);
+    BOOL offered = _lines && (_hasSpoken || _hasTranslation || pronunciationOn || translationOn);
     if (!offered) {
         _extras.hidden = YES;
         return;
@@ -1486,17 +1487,16 @@ typedef struct {
         [self addSubview:_extras];
     }
     NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
-    if (_hasSpoken) {
-        BOOL on = SGFlag(SGRKeyLyricsPronunciation, NO);
+    if (_hasSpoken || pronunciationOn) {
+        BOOL on = pronunciationOn;
         [items addObject:[UIAction actionWithTitle:on ? @"Hide Pronunciation" : @"Show Pronunciation"
                                              image:[UIImage systemImageNamed:@"character.phonetic"] identifier:nil
                                            handler:^(UIAction *action) { SGRSetLyricsTextShown(SGRLyricsTextPronunciation, !on); }]];
     }
-    if (_hasTranslation) {
-        BOOL on = SGFlag(SGRKeyLyricsTranslation, NO);
-        [items addObject:[UIAction actionWithTitle:on ? @"Hide Translation" : @"Show Translation"
+    if (_hasTranslation || translationOn) {
+        [items addObject:[UIAction actionWithTitle:translationOn ? @"Hide Translation" : @"Show Translation"
                                              image:[UIImage systemImageNamed:@"character.bubble"] identifier:nil
-                                           handler:^(UIAction *action) { SGRSetLyricsTextShown(SGRLyricsTextTranslation, !on); }]];
+                                           handler:^(UIAction *action) { SGRSetLyricsTextShown(SGRLyricsTextTranslation, !translationOn); }]];
     }
     _extras.menu = [UIMenu menuWithChildren:items];
     _extras.hidden = NO;

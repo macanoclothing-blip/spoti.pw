@@ -22,8 +22,25 @@ static void installVolumeRow(UIViewController *unit) {
         row = [[UIStackView alloc] initWithFrame:CGRectZero];
         row.axis = UILayoutConstraintAxisHorizontal;
         row.alignment = UIStackViewAlignmentCenter;
+        row.spacing = 10;
         row.layoutMarginsRelativeArrangement = YES;
-        row.layoutMargins = UIEdgeInsetsMake(0, 18, 0, 18);
+        row.layoutMargins = UIEdgeInsetsMake(0, 24, 0, 24);
+        UIImageSymbolConfiguration *iconConfiguration =
+            [UIImageSymbolConfiguration configurationWithPointSize:22 weight:UIImageSymbolWeightSemibold];
+        UIImageView *quiet = [[UIImageView alloc] initWithImage:
+            [[UIImage systemImageNamed:@"speaker.fill" withConfiguration:iconConfiguration]
+                imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        UIImageView *loud = [[UIImageView alloc] initWithImage:
+            [[UIImage systemImageNamed:@"speaker.wave.3.fill" withConfiguration:iconConfiguration]
+                imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]];
+        for (UIImageView *icon in @[quiet, loud]) {
+            icon.tintColor = [UIColor colorWithWhite:1 alpha:0.72];
+            icon.contentMode = UIViewContentModeScaleAspectFit;
+            icon.accessibilityElementsHidden = YES;
+        }
+        [quiet.widthAnchor constraintEqualToConstant:24].active = YES;
+        [loud.widthAnchor constraintEqualToConstant:30].active = YES;
+        [row addArrangedSubview:quiet];
         MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -37,6 +54,7 @@ static void installVolumeRow(UIViewController *unit) {
         [volume setContentCompressionResistancePriority:UILayoutPriorityDefaultLow forAxis:UILayoutConstraintAxisHorizontal];
         [volume.heightAnchor constraintEqualToConstant:44].active = YES;
         [row addArrangedSubview:volume];
+        [row addArrangedSubview:loud];
         [row.heightAnchor constraintEqualToConstant:44].active = YES;
         objc_setAssociatedObject(stack, &kVolumeRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }

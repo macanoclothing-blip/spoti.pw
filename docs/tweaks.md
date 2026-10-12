@@ -153,7 +153,9 @@ Shared:
                   time stretch to smear it. In the redesign's player menu, Reverb sits under Speed and pitch in the
                   same popover, and Artwork offers Cover art or Animated (Spotify Canvas when available). The block
                   goes into Spotify's own context menu sheet and is drawn from its own measures, not the Kit's, so it
-                  sits there under either look. Tested on the
+                  sits there under either look. In the redesign, a menu whose Spotify rows were cached opens
+                  directly from the ⋯; choosing a Spotify row opens Spotify's source only after the selection.
+                  Tested on the
                   Mac against harness/pitch/ and in the simulator against harness/speed/ and harness/menu/
     AudioEffects/ the audio effects on Spotify's sound (AudioEffects.h has the keys and the page's calls): Audio/SGAudioPipeline's
                   ordered output processor runs each finished buffer through the mod's own engine, re-blocked to 1024 frames one block late,
@@ -276,8 +278,8 @@ Redesigned:
                   a cover column and a separate lyrics column; Vinyl mode scales the disc to the shorter screen
                   dimension and places its metadata beside it.
                   Player/PlayerVolume.x inserts iOS's native MPVolumeView below the transport controls and above the
-                  lyrics, Connect and queue row, using the system speaker artwork and white volume track in the
-                  standard redesign. Vinyl mode keeps its own retro slider styling, raises the volume row and lowers
+                  lyrics, Connect and queue row, flanked by low and high speaker symbols like the Music app's
+                  volume row in the standard redesign. Vinyl mode keeps its own retro slider styling, raises the volume row and lowers
                   the progress row. The standard player's transport row is centered between the song progress and
                   volume sliders. The slider adjusts the iPhone's output
                   volume, not Spotify Connect's remote
