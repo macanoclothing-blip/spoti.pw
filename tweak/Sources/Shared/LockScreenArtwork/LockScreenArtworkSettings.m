@@ -1,4 +1,4 @@
-// The Animated lock screen rows, put on the Lock screen widget page by Shared/Player/PlayerSettings.m, and
+// The Animated artwork rows, put on the Lock screen widget page by Shared/Player/PlayerSettings.m, and
 // the Sources row for an order of these sources (the redesigned player keeps one of its own).
 #import "Core/SGCore.h"
 #import "Settings/SGModPage.h"
@@ -7,8 +7,8 @@
 #import "LockScreenArtwork.h"
 
 static void sayWhatIsMissing(void) {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Animated lock screen"
-        message:[NSString stringWithFormat:@"Animated artwork is the lock screen's own, and iOS takes one only from 26 on. This phone runs iOS %@, where the cover stays still.", UIDevice.currentDevice.systemVersion]
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Animated artwork"
+        message:[NSString stringWithFormat:@"Animated artwork is supported by iOS 26 and later. This phone runs iOS %@, where the cover stays still.", UIDevice.currentDevice.systemVersion]
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];
     [SGTopController() presentViewController:alert animated:YES completion:nil];
@@ -40,12 +40,12 @@ SGModRow *SGArtworkSourcesRow(NSString *key, NSString *note) {
 
 NSArray<SGModRow *> *SGAnimatedArtworkRows(void) {
     if (!SGAnimatedArtworkAvailable())
-        return @[SGStatActionRow(@"Animated lock screen", nil, ^NSString *{ return @"Needs iOS 26"; }, ^{ sayWhatIsMissing(); })];
+        return @[SGStatActionRow(@"Animated artwork", nil, ^NSString *{ return @"Needs iOS 26"; }, ^{ sayWhatIsMissing(); })];
     SGModRow *order = SGArtworkSourcesRow(SGKeyLockScreenArtworkSources,
         @"Asked top to bottom until one has a clip. Apple Music gets only the artist and album name.");
     order.visible = ^BOOL { return SGFlag(SGKeyLockScreenArtwork, YES); };
     return @[
-        SGSwitchRow(@"Animated lock screen", @"A moving cover behind the lock screen's controls", SGKeyLockScreenArtwork),
+        SGSwitchRow(@"Animated artwork", @"A moving Canvas in the system's animated now-playing surfaces", SGKeyLockScreenArtwork),
         order,
     ];
 }

@@ -203,12 +203,12 @@ static void testMerging(MPMediaItemAnimatedArtwork *artwork, NSString *key) {
         MPNowPlayingInfoPropertyElapsedPlaybackTime: @12.0,
         MPNowPlayingInfoPropertyPlaybackRate: @1.0,
     };
-    NSDictionary *withArtwork = SGArtworkInInfo(info, artwork, key);
+    NSDictionary *withArtwork = SGArtworkInInfo(info, @{key: artwork});
     CHECK(withArtwork[key] == artwork, @"the artwork goes in under the key");
     CHECK([withArtwork[MPMediaItemPropertyTitle] isEqual:@"Song"] && withArtwork.count == info.count + 1, @"nothing else in the dictionary moves");
-    CHECK(SGArtworkInInfo(withArtwork, artwork, key) == withArtwork, @"the same artwork again leaves the dictionary alone");
-    CHECK(SGArtworkInInfo(info, nil, key) == info, @"no artwork means no change");
-    CHECK(SGArtworkInInfo(info, artwork, nil) == info, @"no key means no change");
+    CHECK(SGArtworkInInfo(withArtwork, @{key: artwork}) == withArtwork, @"the same artwork again leaves the dictionary alone");
+    CHECK(SGArtworkInInfo(info, @{}) == info, @"no artwork means no change");
+    CHECK(SGArtworkInInfo(withArtwork, nil)[key] == nil, @"stale animation keys are removed when the feature is off");
 
     // LockScreenLyrics.x's rewrite: the artist swapped for the line and the position moved on.
     NSMutableDictionary *rewritten = [withArtwork mutableCopy];
@@ -219,8 +219,16 @@ static void testMerging(MPMediaItemAnimatedArtwork *artwork, NSString *key) {
     // And the other way round, which is the order the hooks run in when ours is installed first.
     NSMutableDictionary *lyricsFirst = [info mutableCopy];
     lyricsFirst[MPMediaItemPropertyArtist] = @"the line being sung";
-    NSDictionary *both = SGArtworkInInfo(lyricsFirst, artwork, key);
+    NSDictionary *both = SGArtworkInInfo(lyricsFirst, @{key: artwork});
     CHECK(both[key] == artwork && [both[MPMediaItemPropertyArtist] isEqual:@"the line being sung"], @"the key goes onto a dictionary the lyrics already wrote");
+
+    NSString *compactKey = MPNowPlayingInfoProperty1x1AnimatedArtwork;
+    NSDictionary *compactAndTall = SGArtworkInInfo(info, @{key: artwork, compactKey: artwork});
+    CHECK(compactAndTall[key] == artwork && compactAndTall[compactKey] == artwork,
+          @"both portrait and square surfaces get animated artwork");
+    CHECK(SGAnimatedArtworkAspect(MPNowPlayingInfoProperty3x4AnimatedArtwork) == 0.75 &&
+          SGAnimatedArtworkAspect(MPNowPlayingInfoProperty1x1AnimatedArtwork) == 1,
+          @"each supported artwork key maps to its own crop shape");
 }
 
 int main(void) {
@@ -304,7 +312,7 @@ int main(void) {
 
         printf("\nthe now playing info\n");
         testMerging(artwork, key);
-        NSDictionary *out = SGArtworkInInfo(@{MPMediaItemPropertyTitle: @"Song"}, artwork, key);
+        NSDictionary *out = SGArtworkInInfo(@{MPMediaItemPropertyTitle: @"Song"}, @{key: artwork});
         MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = out;
         NSDictionary *back = MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo;
         CHECK(back[key] != nil, @"the info centre keeps the artwork under %@", key);

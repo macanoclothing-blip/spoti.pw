@@ -27,30 +27,40 @@ BOOL SGAnimatedArtworkAvailable(void) {
 }
 
 NSArray<NSString *> *SGAnimatedArtworkKeys(void) {
-    if (@available(iOS 26.0, *)) return MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys;
-    return nil;
-}
-
-NSString *SGAnimatedArtworkKey(CGFloat *aspect) {
     if (@available(iOS 26.0, *)) {
-        NSArray<NSString *> *supported = SGAnimatedArtworkKeys();
-        // A Canvas is taller than either shape, so the tall key loses the least of it.
-        if ([supported containsObject:MPNowPlayingInfoProperty3x4AnimatedArtwork]) {
-            if (aspect) *aspect = 3.0 / 4.0;
-            return MPNowPlayingInfoProperty3x4AnimatedArtwork;
+        NSArray<NSString *> *supported = MPNowPlayingInfoCenter.supportedAnimatedArtworkKeys;
+        NSMutableArray<NSString *> *keys = [NSMutableArray array];
+        for (NSString *key in @[MPNowPlayingInfoProperty3x4AnimatedArtwork, MPNowPlayingInfoProperty1x1AnimatedArtwork]) {
+            if ([supported containsObject:key]) [keys addObject:key];
         }
-        if ([supported containsObject:MPNowPlayingInfoProperty1x1AnimatedArtwork]) {
-            if (aspect) *aspect = 1;
-            return MPNowPlayingInfoProperty1x1AnimatedArtwork;
-        }
+        return keys;
     }
     return nil;
 }
 
-NSDictionary *SGArtworkInInfo(NSDictionary *info, id artwork, NSString *key) {
-    if (!info.count || !artwork || !key.length) return info;
-    if (info[key] == artwork) return info;
-    NSMutableDictionary *shown = [info mutableCopy];
-    shown[key] = artwork;
-    return shown;
+CGFloat SGAnimatedArtworkAspect(NSString *key) {
+    if ([key isEqualToString:MPNowPlayingInfoProperty3x4AnimatedArtwork]) return 3.0 / 4.0;
+    if ([key isEqualToString:MPNowPlayingInfoProperty1x1AnimatedArtwork]) return 1;
+    return 0;
+}
+
+NSString *SGAnimatedArtworkKey(CGFloat *aspect) {
+    NSArray<NSString *> *supported = SGAnimatedArtworkKeys();
+    NSString *key = supported.firstObject;
+    if (key && aspect) *aspect = SGAnimatedArtworkAspect(key);
+    return key;
+}
+
+NSDictionary *SGArtworkInInfo(NSDictionary *info, NSDictionary<NSString *, id> *artworkByKey) {
+    if (!info.count) return info;
+    NSMutableDictionary *shown;
+    for (NSString *key in @[MPNowPlayingInfoProperty3x4AnimatedArtwork, MPNowPlayingInfoProperty1x1AnimatedArtwork]) {
+        id artwork = artworkByKey[key];
+        if (artwork && info[key] == artwork) continue;
+        if (!artwork && !info[key]) continue;
+        if (!shown) shown = [info mutableCopy];
+        if (artwork) shown[key] = artwork;
+        else [shown removeObjectForKey:key];
+    }
+    return shown ?: info;
 }

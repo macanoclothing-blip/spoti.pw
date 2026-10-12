@@ -24,13 +24,15 @@ void SGArtworkAsk(NSString *source, SPTPlayerTrack *track, SGCanvas *fromMetadat
 
 // Whether this iOS has MPMediaItemAnimatedArtwork at all.
 BOOL SGAnimatedArtworkAvailable(void);
-// Every now playing key this iOS takes a clip under, and the one of them the Canvas goes under with
-// the shape it wants there through `aspect`; nil where there is none.
+// The animated artwork shapes this iOS can show, including square artwork for compact now-playing
+// surfaces such as Control Center; empty where there is none.
 NSArray<NSString *> *SGAnimatedArtworkKeys(void);
+CGFloat SGAnimatedArtworkAspect(NSString *key);
+// The preferred key for sources that need one shape (tall first, then square).
 NSString *SGAnimatedArtworkKey(CGFloat *aspect);
-// `artwork` under `key` in a copy of `info`, everything else left as it stands. The lock screen
-// lyrics rewrite the dictionary on a timer, so the key is put back on every one that passes.
-NSDictionary *SGArtworkInInfo(NSDictionary *info, id artwork, NSString *key);
+// Each supported shape's artwork in a copy of `info`, removing stale injected keys for unsupported
+// shapes. The lock screen lyrics rewrite the dictionary on a timer, so the keys are put back on each one.
+NSDictionary *SGArtworkInInfo(NSDictionary *info, NSDictionary<NSString *, id> *artworkByKey);
 // The rows for the Lock screen widget page; below iOS 26 one row reads out what is missing instead.
 NSArray<SGModRow *> *SGAnimatedArtworkRows(void);
 // A Sources row for the order under `key`, opening the page it is dragged in with `note` under the list.

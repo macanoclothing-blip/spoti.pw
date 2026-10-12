@@ -1,5 +1,5 @@
-// The track's Canvas or its album's Apple Music cover as the lock screen's animated artwork. The key
-// is put on every dictionary that goes out, so the lock screen lyrics' rewrites carry it too.
+// The track's Canvas or its album's Apple Music cover as animated now-playing artwork. Every supported
+// shape is put on each dictionary that goes out, so compact surfaces and lyrics rewrites keep it too.
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
 #import "LockScreenArtwork.h"
@@ -18,8 +18,7 @@ static NSObject *sg_lock;
 static NSDictionary *sg_info;
 static CFAbsoluteTime sg_infoAt;
 static MPMediaItemArtwork *sg_cover;
-static id sg_artwork;
-static NSString *sg_key;
+static NSDictionary<NSString *, id> *sg_artworkByKey;
 
 static NSString *sg_wanted;
 static NSString *sg_playing;   // the source the artwork set for sg_wanted came from
@@ -48,6 +47,8 @@ static UIImage *filled(UIImage *image, CGSize size) {
     }];
 }
 
+static void resend(void);
+
 static id artworkFor(NSString *artworkID, NSURL *file, UIImage *still) {
     if (@available(iOS 26.0, *)) {
         return [[MPMediaItemAnimatedArtwork alloc] initWithArtworkID:artworkID
@@ -61,6 +62,36 @@ static id artworkFor(NSString *artworkID, NSURL *file, UIImage *still) {
             }];
     }
     return nil;
+}
+
+static void prepareArtworkVariant(NSArray<NSString *> *keys, NSUInteger index, NSString *uri, NSString *source,
+                                  SGCanvas *canvas, NSURL *file, NSMutableDictionary<NSString *, id> *artworks) {
+    if (index >= keys.count) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (![sg_wanted isEqualToString:uri] || !artworks.count) return;
+            @synchronized (sg_lock) { sg_artworkByKey = [artworks copy]; }
+            sg_playing = source;
+            SGLog(@"lock artwork: %@ set under %@", uri, [artworks.allKeys componentsJoinedByString:@", "]);
+            resend();
+        });
+        return;
+    }
+    NSString *key = keys[index];
+    CGFloat aspect = SGAnimatedArtworkAspect(key);
+    NSString *identifier = [[canvas.identifier stringByAppendingString:uri] stringByAppendingFormat:@"-%@", key];
+    SGArtworkCrop(file, identifier, aspect, ^(NSURL *ready, NSString *cropNote) {
+        SGLog(@"lock artwork: %@ %@ (%@)", canvas.identifier, key, cropNote);
+        if (!ready) {
+            prepareArtworkVariant(keys, index + 1, uri, source, canvas, file, artworks);
+            return;
+        }
+        SGArtworkFirstFrame(ready, ^(CGImageRef frame) {
+            UIImage *still = frame ? [UIImage imageWithCGImage:frame] : nil;
+            id artwork = artworkFor(identifier, ready, still);
+            if (artwork) artworks[key] = artwork;
+            prepareArtworkVariant(keys, index + 1, uri, source, canvas, file, artworks);
+        });
+    });
 }
 
 // Every credited artist, the way the metadata lists them.
@@ -104,24 +135,9 @@ static void play(NSString *uri, SGCanvas *canvas, NSString *source) {
     SGArtworkFetch(canvas.identifier, canvas.address, ^(NSURL *file, NSString *note) {
         SGLog(@"lock artwork: %@ %@", canvas.identifier, note);
         if (!file) return;
-        SGArtworkCrop(file, canvas.identifier, sg_aspect, ^(NSURL *ready, NSString *cropNote) {
-            SGLog(@"lock artwork: %@ %@", canvas.identifier, cropNote);
-            if (!ready) return;
-            SGArtworkFirstFrame(ready, ^(CGImageRef frame) {
-                UIImage *still = frame ? [UIImage imageWithCGImage:frame] : nil;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    if (![sg_wanted isEqualToString:uri]) return;
-                    id artwork = artworkFor([canvas.identifier stringByAppendingString:uri], ready, still);
-                    @synchronized (sg_lock) {
-                        sg_artwork = artwork;
-                        sg_key = sg_offered;
-                    }
-                    sg_playing = source;
-                    SGLog(@"lock artwork: %@ set under %@", uri, sg_offered);
-                    resend();
-                });
-            });
-        });
+        NSArray<NSString *> *keys = SGAnimatedArtworkKeys();
+        NSMutableDictionary<NSString *, id> *artworks = [NSMutableDictionary dictionary];
+        prepareArtworkVariant(keys, 0, uri, source, canvas, file, artworks);
     });
 }
 
@@ -163,7 +179,8 @@ static void walk(NSString *uri, SPTPlayerTrack *track, SGCanvas *fromMetadata, N
         SGLog(@"lock artwork: no clip for %@ from %@", uri, order.count ? [order componentsJoinedByString:@", "] : @"no source");
         return;
     }
-    SGArtworkAsk(order[at], track, fromMetadata, sg_aspect < 0.9, ^(SGCanvas *canvas, NSString *note) {
+    SGArtworkAsk(order[at], track, fromMetadata, sg_aspect < 0.9,
+                 ^(SGCanvas *canvas, NSString *note) {
         if (![sg_wanted isEqualToString:uri]) return;
         if (canvas.video) {
             play(uri, canvas, order[at]);
@@ -191,8 +208,7 @@ static void resolve(SPTPlayerTrack *track) {
             SGArtworkCancelFetch();
             sg_playing = nil;
             @synchronized (sg_lock) {
-                sg_artwork = nil;
-                sg_key = nil;
+                sg_artworkByKey = nil;
             }
             SGLog(@"lock artwork: switched off");
             resend();
@@ -215,8 +231,7 @@ static void resolve(SPTPlayerTrack *track) {
     sg_playing = nil;
     SGArtworkCancelFetch();
     @synchronized (sg_lock) {
-        sg_artwork = nil;
-        sg_key = nil;
+        sg_artworkByKey = nil;
     }
     if (!uri) return;
     walk(uri, track, canvas, order, 0);
@@ -243,16 +258,14 @@ static SGArtworkWatcher *sg_watcher;
 
 %hook MPNowPlayingInfoCenter
 - (void)setNowPlayingInfo:(NSDictionary *)info {
-    id artwork;
-    NSString *key;
+    NSDictionary<NSString *, id> *artworkByKey;
     @synchronized (sg_lock) {
         if (info[MPMediaItemPropertyArtwork]) sg_cover = info[MPMediaItemPropertyArtwork];
-        sg_info = info;
+        sg_info = SGArtworkInInfo(info, nil);
         sg_infoAt = CFAbsoluteTimeGetCurrent();
-        artwork = sg_artwork;
-        key = sg_key;
+        artworkByKey = sg_artworkByKey;
     }
-    %orig(SGArtworkInInfo(info, artwork, key));
+    %orig(SGArtworkInInfo(info, artworkByKey));
 }
 %end
 

@@ -100,11 +100,12 @@ Shared:
                   its hook on the same delegate calls blocks on a lyrics fetch, and LyricsHook calls it from the main
                   queue. The Lyrics page says so
     LockScreenLyrics/ the line being sung in the system's now playing
-    LockScreenArtwork/ the track's Canvas or its album's Apple Music cover as the lock screen's animated
-                  artwork, from iOS 26 (Apple takes an MPMediaItemAnimatedArtwork under one of
-                  MPNowPlayingInfoCenter's animated artwork keys, and the mod puts one there through a second
-                  hook on setNowPlayingInfo:, so the lock screen lyrics' rewrites of the same dictionary carry
-                  it). The sources are asked in the user's order (Spotify, then Apple Music until set, on the
+    LockScreenArtwork/ the track's Canvas or its album's Apple Music cover as animated now-playing
+                  artwork, from iOS 26 (Apple takes MPMediaItemAnimatedArtwork under the supported
+                  MPNowPlayingInfoCenter keys; the mod provides each supported shape so compact surfaces
+                  such as Control Center and the lock screen can use the matching crop, and its hook on
+                  setNowPlayingInfo: keeps those keys through lyrics rewrites). The sources are asked in the
+                  user's order (Spotify, then Apple Music until set, on the
                   shared Settings/SGOrderPage the lyrics sources use too). Spotify's URL comes off canvas.url
                   in the played track's metadata, which Spotify's core fills whatever
                   ios-feature-canvas.canvas_enabled says, and failing that from spotify.canvaz.cache with the
@@ -401,7 +402,7 @@ beside the row, "Needs iOS 27" below iOS 27. Then a card of parts. Navbar: the t
 each with its own list of tabs. Lyrics, beside Player: the ordered list of lyrics sources, lyrics for every track,
 naming the source in the redesign, the lock screen, and glass lyrics in the native look; in the redesign also
 which of the lyrics, their pronunciation and their translation is set largest, and the translation's language.
-Player: Gestures, Blocked artists (with the count on the row) and Lock screen widget (its controls and, under Artwork, Animated lock screen, the track's Canvas or the album's Apple Music cover played behind the lock screen's controls, on until switched off, with a Sources page for their order, and a "Needs iOS 26" row below that), which work with either look;
+Player: Gestures, Blocked artists (with the count on the row) and Lock screen widget (its controls and, under Artwork, Animated artwork, the track's Canvas or the album's Apple Music cover in supported system now-playing surfaces, on until switched off, with a Sources page for their order, and a "Needs iOS 26" row below that), which work with either look;
 in the native look also Now playing bar (its device button and its flags), Queue & devices, and
 Spotify's own player screen (artwork background, glass header buttons, Disable Canvas and the sheet,
 header, slider and sticky header flags, the cards under the player and the lyrics preview and player
