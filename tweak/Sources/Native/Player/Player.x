@@ -32,6 +32,13 @@
 static const CGFloat kButtonMin = 36, kButtonMax = 48;
 static const CGFloat kArtRadius = 12;
 
+static __weak UIImageView *sg_nativeBarArtwork;
+static __weak UIView *sg_nativeBarRoot;
+static UIImage *sg_nativeOriginalArtwork;
+static UIImage *sg_nativeAppliedArtwork;
+static NSString *sg_nativeArtworkURI;
+static NSString *sg_nativeLoadingArtworkKey;
+
 static BOOL backdropOn(void) {
     return SGFlag(SGKeyPlayerBackdrop, NO);
 }
@@ -164,13 +171,6 @@ static NSString *sg_appliedLocalURI;
 static NSString *sg_appliedLocalURL;
 static NSString *sg_loadingLocalCoverKey;
 static __weak UIScrollView *sg_playerCoverList;
-static __weak UIImageView *sg_nativeBarArtwork;
-static __weak UIView *sg_nativeBarRoot;
-static UIImage *sg_nativeOriginalArtwork;
-static UIImage *sg_nativeAppliedArtwork;
-static NSString *sg_nativeArtworkURI;
-static NSString *sg_nativeLoadingArtworkKey;
-
 static void showCover(UIImage *cover) {
     if (!cover || cover == sg_cover) return;
     sg_cover = cover;
