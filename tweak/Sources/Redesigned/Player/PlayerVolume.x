@@ -1,6 +1,7 @@
 // Keep the public iOS output-volume control in the player's bottom stack, between its transport
 // controls and footer. This adjusts the iPhone's system output, not a Spotify Connect device.
 #import <math.h>
+#import <AVFoundation/AVFoundation.h>
 #import "Core/SGCore.h"
 #import <MediaPlayer/MediaPlayer.h>
 
@@ -34,8 +35,7 @@ static UIImage *volumeThumbImage(void) {
 @end
 
 @implementation SGRCenteredVolumeView
-- (void)layoutSubviews {
-    [super layoutSubviews];
+- (void)sgr_recenterSlider {
     __block UISlider *slider = nil;
     __block CGFloat widest = 0;
     SGForEachView(self, ^(UIView *view) {
@@ -50,6 +50,49 @@ static UIImage *volumeThumbImage(void) {
         frame.origin.y = centeredY;
         slider.frame = frame;
     }
+}
+
+- (void)sgr_scheduleRecenter {
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SGRCenteredVolumeView *strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf setNeedsLayout];
+        [strongSelf layoutIfNeeded];
+        [strongSelf sgr_recenterSlider];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [weakSelf sgr_recenterSlider];
+        });
+    });
+}
+
+- (void)sgr_audioStateChanged:(NSNotification *)notification {
+    (void)notification;
+    [self sgr_scheduleRecenter];
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self selector:@selector(sgr_audioStateChanged:)
+                   name:AVAudioSessionRouteChangeNotification object:nil];
+    [center addObserver:self selector:@selector(sgr_audioStateChanged:)
+                   name:AVAudioSessionInterruptionNotification object:nil];
+    return self;
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self sgr_recenterSlider];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [weakSelf sgr_recenterSlider];
+    });
 }
 @end
 
