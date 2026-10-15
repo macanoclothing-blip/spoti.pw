@@ -183,10 +183,22 @@ static void lowerRow(UIView *row) {
     UIView *controls = controlsIn(bottomStack, row);
     UIView *volumeRow = arrangedSubviewContainingVolume(bottomStack);
     UIView *progressRow = arrangedSubviewContainingProgress(bottomStack);
+    // Volume row insertion (PlayerVolume.x) marks the stack as needing layout without laying it out
+    // immediately. Measuring volumeRow/progressRow before that layout yields a zero or stale frame,
+    // which made the controls jump and the volume bar appear to move up when the play/pause state
+    // triggered a new layout pass.
+    if (volumeRow && progressRow) [bottomStack layoutIfNeeded];
     CGFloat controlsMove = controls ? round(move * kControlsShare) - kControlsLift : 0;
-    if (controls && volumeRow && progressRow) {
+    if (controls && volumeRow && progressRow && volumeRow.bounds.size.height > 1 && progressRow.bounds.size.height > 1) {
         CGFloat midpoint = (CGRectGetMidY(volumeRow.frame) + CGRectGetMidY(progressRow.frame)) / 2;
         controlsMove = round(midpoint - controls.center.y);
+    }
+    // The volume row itself must never carry a previous vinyl or stale transform when vinyl is off.
+    if (volumeRow && !CGAffineTransformIsIdentity(volumeRow.transform)) {
+        // Vinyl mode (PlayerVinyl.x) is the only feature that legitimately moves the volume row.
+        // Outside of it a leftover transform from a previous layout mode makes the bar jump on pause.
+        extern BOOL SGFlag(NSString *key, BOOL def);
+        if (!SGFlag(@"spotifyglass.redesign.player.vinyl", NO)) volumeRow.transform = CGAffineTransformIdentity;
     }
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;

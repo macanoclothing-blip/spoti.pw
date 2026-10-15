@@ -44,6 +44,13 @@ static UIImage *volumeThumbImage(void) {
         slider = (UISlider *)view;
     });
     if (!slider) return;
+    // MPVolumeView recreates or hides its internal slider when the audio session
+    // deactivates (pause). Until the next layout pass bounds/frames are zero or
+    // the slider is temporarily at the top (y=0), which appeared as the volume
+    // bar jumping up on every pause. Guard against zero sizes and against a pass
+    // where the MPVolumeView itself has not been sized to its 44pt row yet.
+    if (self.bounds.size.height < 10 || slider.bounds.size.height < 2) return;
+    if (slider.bounds.size.width < 10) return;
     CGRect frame = slider.frame;
     CGFloat centeredY = round((self.bounds.size.height - frame.size.height) / 2);
     if (fabs(frame.origin.y - centeredY) > 0.5) {
@@ -57,6 +64,19 @@ static UIImage *volumeThumbImage(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         SGRCenteredVolumeView *strongSelf = weakSelf;
         if (!strongSelf) return;
+        // The stack that hosts the volume row may not have laid out the row's
+        // 44pt height yet when the audio notification fires on pause. Forcing
+        // a layout on the nearest bottom stack first gives the MPVolumeView its
+        // final bounds before centering, so the slider does not get centered
+        // inside a transient zero-height bounds and then appear to jump.
+        UIStackView *stack = nil;
+        for (UIView *v = strongSelf; v; v = v.superview) {
+            if ([v.superview isKindOfClass:UIStackView.class] && [v.superview.accessibilityIdentifier isEqualToString:@"npv.bottomStackView"]) {
+                stack = (UIStackView *)v.superview;
+                break;
+            }
+        }
+        if (stack) [stack layoutIfNeeded];
         [strongSelf setNeedsLayout];
         [strongSelf layoutIfNeeded];
         [strongSelf sgr_recenterSlider];
@@ -79,6 +99,11 @@ static UIImage *volumeThumbImage(void) {
                    name:AVAudioSessionRouteChangeNotification object:nil];
     [center addObserver:self selector:@selector(sgr_audioStateChanged:)
                    name:AVAudioSessionInterruptionNotification object:nil];
+    // Pausing via the player's play button does not always post a route/interruption
+    // notification, yet MPVolumeView still rebuilds its internals on the next runloop,
+    // leaving the slider at the top until the next layout pass. Listening to the
+    // player's own paused state as well makes the recentering fire on every pause/play.
+    [center addObserver:self selector:@selector(sgr_audioStateChanged:) name:@"SGPlayerStateDidChange" object:nil];
     return self;
 }
 
@@ -93,6 +118,16 @@ static UIImage *volumeThumbImage(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [weakSelf sgr_recenterSlider];
     });
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window) [self sgr_scheduleRecenter];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self sgr_scheduleRecenter];
 }
 @end
 
