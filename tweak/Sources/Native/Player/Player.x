@@ -172,6 +172,7 @@ static NSString *sg_appliedLocalURL;
 static NSString *sg_loadingLocalCoverKey;
 static __weak UIScrollView *sg_playerCoverList;
 static void updateLocalCover(void);
+static NSMapTable<UIView *, NSNumber *> *sg_coverOverlayAlphas;
 static void showCover(UIImage *cover) {
     if (!cover || cover == sg_cover) return;
     sg_cover = cover;
@@ -202,7 +203,59 @@ static UIImageView *coverViewInFront(UIScrollView *list) {
     return cover;
 }
 
+static BOOL coverOverlay(UIView *sibling, CGRect coverRect) {
+    if (sibling.hidden || sibling.alpha < 0.01) return NO;
+    CGRect frame = sibling.frame;
+    CGFloat width = CGRectGetWidth(coverRect), height = CGRectGetHeight(coverRect);
+    if (width < 1 || height < 1) return NO;
+    CGRect overlap = CGRectIntersection(frame, coverRect);
+    if (CGRectIsNull(overlap) || CGRectIsEmpty(overlap)) return NO;
+    CGFloat overlapArea = CGRectGetWidth(overlap) * CGRectGetHeight(overlap);
+    CGFloat coverArea = width * height;
+    if (CGRectGetWidth(frame) >= width * 0.5 && CGRectGetHeight(frame) >= height * 0.5 &&
+        overlapArea / coverArea >= 0.65) return YES;
+
+    if (![sibling isKindOfClass:UIImageView.class] || CGRectGetWidth(frame) > width * 0.5 ||
+        CGRectGetHeight(frame) > height * 0.5) return NO;
+    CGFloat dx = fabs(CGRectGetMidX(frame) - CGRectGetMidX(coverRect));
+    CGFloat dy = fabs(CGRectGetMidY(frame) - CGRectGetMidY(coverRect));
+    return CGRectGetWidth(frame) >= 24 && CGRectGetHeight(frame) >= 24 &&
+           dx <= width * 0.08 && dy <= height * 0.08;
+}
+
+static void hideCoverOverlays(UIImageView *cover, UIView *container, BOOL hide) {
+    if (!sg_coverOverlayAlphas) sg_coverOverlayAlphas = [NSMapTable weakToStrongObjectsMapTable];
+    if (!hide) {
+        for (UIView *overlay in sg_coverOverlayAlphas.keyEnumerator.allObjects) {
+            NSNumber *alpha = [sg_coverOverlayAlphas objectForKey:overlay];
+            if (overlay.alpha == 0 && alpha) overlay.alpha = alpha.doubleValue;
+        }
+        [sg_coverOverlayAlphas removeAllObjects];
+        return;
+    }
+    if (!cover || !container) return;
+
+    for (UIView *node = cover; node && node != container; node = node.superview) {
+        UIView *parent = node.superview;
+        if (!parent) break;
+        CGRect coverRect = [cover convertRect:cover.bounds toView:parent];
+        BOOL above = NO;
+        for (UIView *sibling in parent.subviews) {
+            if (sibling == node) {
+                above = YES;
+                continue;
+            }
+            if (!above || !coverOverlay(sibling, coverRect)) continue;
+            if (![sg_coverOverlayAlphas objectForKey:sibling]) {
+                [sg_coverOverlayAlphas setObject:@(sibling.alpha) forKey:sibling];
+            }
+            sibling.alpha = 0;
+        }
+    }
+}
+
 static void restoreLocalCover(void) {
+    hideCoverOverlays(nil, nil, NO);
     UIImageView *view = sg_localCoverView;
     UIImage *original = sg_originalLocalCover;
     UIImage *applied = sg_appliedLocalCover;
@@ -268,6 +321,9 @@ static void updateLocalCover(void) {
                         animations:^{ view.image = selected; } completion:nil];
     }
     sg_appliedLocalCover = selected;
+    UIView *cell = view;
+    while (cell.superview && cell.superview != list) cell = cell.superview;
+    hideCoverOverlays(view, cell, YES);
     if (backdropOn()) showCover(selected);
 }
 
