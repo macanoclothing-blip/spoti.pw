@@ -196,7 +196,10 @@ static NSDictionary *localStillArtwork(NSDictionary *info) {
     if (![sg_localCoverURI isEqualToString:uri] || sg_localCoverImage != image) {
         sg_localCoverURI = uri;
         sg_localCoverImage = image;
-        sg_localMediaArtwork = [[MPMediaItemArtwork alloc] initWithImage:image];
+        sg_localMediaArtwork = [[MPMediaItemArtwork alloc] initWithBoundsSize:image.size
+            requestHandler:^UIImage *(CGSize size) {
+                return image;
+            }];
     }
     if (!sg_localMediaArtwork || info[MPMediaItemPropertyArtwork] == sg_localMediaArtwork) return info;
     NSMutableDictionary *updated = [info mutableCopy] ?: [NSMutableDictionary dictionary];
