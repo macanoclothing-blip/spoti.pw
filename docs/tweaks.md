@@ -109,9 +109,9 @@ Shared:
                   shared Settings/SGOrderPage the lyrics sources use too). Spotify's URL comes off canvas.url
                   in the played track's metadata, which Spotify's core fills whatever
                   ios-feature-canvas.canvas_enabled says, and failing that from spotify.canvaz.cache with the
-                  account's own token; LockScreenArtwork.x captures the required Spotify headers independently of
-                  the lyrics hooks, waits for them before asking Canvaz, and retries the current track as soon as
-                  they arrive.
+                  account's own token; KaraokeSource.x captures Spotify's spclient headers for both lyrics and
+                  Canvaz. If they have not arrived yet, the source walk tries Apple Music and retries the current
+                  track as soon as the headers arrive.
                   Apple Music's (SGAppleArtwork.m) comes from the catalog search with
                   editorialVideo extended, under the web player's token read from music.apple.com's script and
                   kept until it expires; the HLS stream near 1100 px wide, HEVC first, is byte ranges of one

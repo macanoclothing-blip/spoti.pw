@@ -64,7 +64,11 @@ static void rememberHeaders(NSURLSession *session, NSURLRequest *request) {
         NSString *name = kSpclientHeaders[i];
         if (all[name]) headers[name] = all[name];
     }
-    dispatch_async(dispatch_get_main_queue(), ^{ sg_spclientHeaders = headers; });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *before = sg_spclientHeaders[@"authorization"];
+        sg_spclientHeaders = headers;
+        if (![headers[@"authorization"] isEqualToString:before]) SGArtworkSpotifyHeadersChanged();
+    });
 }
 
 static SPTPlayerState *playerState(void);
@@ -138,6 +142,14 @@ static void askAgainLater(NSString *trackID) {
         [sg_asking removeObject:trackID];
         [sg_requested removeObject:trackID];
     });
+}
+
+NSDictionary<NSString *, NSString *> *SGKaraokeSpotifyHeaders(void) {
+    return sg_spclientHeaders;
+}
+
+NSString *SGKaraokeSpotifyAuthorization(void) {
+    return sg_spclientHeaders[@"authorization"];
 }
 
 // `retry`: the sources' walk failed on the way, so an answer with no lines is not final either.

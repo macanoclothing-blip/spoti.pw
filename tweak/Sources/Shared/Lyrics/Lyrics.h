@@ -103,6 +103,10 @@ void SGKaraokeRequestLyrics(NSString *trackID);
 // Asks Spotify's JSON lyrics for the track once, and keeps its lines only if they are more finely
 // timed than the ones kept: the lyrics view was left with plain text, and Spotify may have it timed.
 void SGKaraokeAskSpotifyForTiming(NSString *trackID);
+// The headers of Spotify's own spclient requests (authorization, client-token, ...), nil until one has gone
+// out. Only ever sent back to Spotify's servers (the Canvas lookup), never to a lyrics source.
+NSDictionary<NSString *, NSString *> *SGKaraokeSpotifyHeaders(void);
+NSString *SGKaraokeSpotifyAuthorization(void);
 NSString *SGKaraokePlayingTrack(void); // the base62 id, nil before the player reported
 NSInteger SGKaraokePositionMs(void);     // negative when unknown
 void SGKaraokeSeek(NSInteger ms);
