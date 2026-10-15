@@ -1,5 +1,6 @@
 // The animated-artwork source-order row used by the redesigned player.
 #import "Core/SGCore.h"
+#import "Settings/SGModPage.h"
 #import "Settings/SGOrderPage.h"
 #import "Settings/SGPageStyle.h"
 #import "LockScreenArtwork.h"
