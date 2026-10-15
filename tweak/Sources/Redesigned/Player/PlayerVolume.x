@@ -1,5 +1,6 @@
 // Keep the public iOS output-volume control in the player's bottom stack, between its transport
 // controls and footer. This adjusts the iPhone's system output, not a Spotify Connect device.
+#import <math.h>
 #import "Core/SGCore.h"
 #import <MediaPlayer/MediaPlayer.h>
 
@@ -28,6 +29,29 @@ static UIImage *volumeThumbImage(void) {
         (void)context;
     }];
 }
+
+@interface SGRCenteredVolumeView : MPVolumeView
+@end
+
+@implementation SGRCenteredVolumeView
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    __block UISlider *slider = nil;
+    __block CGFloat widest = 0;
+    SGForEachView(self, ^(UIView *view) {
+        if (![view isKindOfClass:UISlider.class] || view.bounds.size.width <= widest) return;
+        widest = view.bounds.size.width;
+        slider = (UISlider *)view;
+    });
+    if (!slider) return;
+    CGRect frame = slider.frame;
+    CGFloat centeredY = round((self.bounds.size.height - frame.size.height) / 2);
+    if (fabs(frame.origin.y - centeredY) > 0.5) {
+        frame.origin.y = centeredY;
+        slider.frame = frame;
+    }
+}
+@end
 
 static void installVolumeRow(UIViewController *unit) {
     UIView *unitView = unit.viewIfLoaded, *controls = nil;
@@ -65,7 +89,7 @@ static void installVolumeRow(UIViewController *unit) {
         [quiet.widthAnchor constraintEqualToConstant:20].active = YES;
         [loud.widthAnchor constraintEqualToConstant:24].active = YES;
         [row addArrangedSubview:quiet];
-        MPVolumeView *volume = [[MPVolumeView alloc] initWithFrame:CGRectZero];
+        MPVolumeView *volume = [[SGRCenteredVolumeView alloc] initWithFrame:CGRectZero];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         volume.showsRouteButton = NO;

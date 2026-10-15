@@ -25,12 +25,14 @@ static void hideConnectButton(UIView *bar) {
 %hook _TtC18NowPlaying_BarImpl27NowPlayingBarViewController
 - (void)viewDidLayoutSubviews {
     %orig;
-    hideConnectButton(((UIViewController *)self).view);
+    UIView *root = ((UIViewController *)self).view;
+    SGNativePlayerUpdateBarArtwork(root);
+    if (SGHidden(SGHideBarConnect)) hideConnectButton(root);
 }
 %end
 
 %ctor {
-    if (!SGNativeUI() || !SGHidden(SGHideBarConnect)) return;
+    if (!SGNativeUI()) return;
     %init;
     SGRequireClasses(@[@"_TtC18NowPlaying_BarImpl27NowPlayingBarViewController"]);
 }

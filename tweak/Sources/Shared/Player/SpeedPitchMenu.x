@@ -1,6 +1,6 @@
 // The player's more menu gets Speed and pitch, under either look: one row in Spotify's own context menu
 // sheet that opens, right there in the sheet, onto two sliders, the playback speed and the pitch
-// (SpeedPitch.x applies them).
+// (SpeedPitch.x applies them). While a local file is playing, the block also offers Match artwork.
 //
 // The sheet is Spotify's ContextMenu_InternalImpl.ContextMenuViewController, a table of its rows
 // (ContextMenuTableView, sized to its content). Its rows come from Swift item factories with no way in,
@@ -33,6 +33,8 @@
 #import "Core/SGCore.h"
 #import "Settings/SGPageStyle.h"
 #import "Shared/Haptics/Haptics.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
+#import "Shared/Player/PlayerState.h"
 #import "SpeedPitch.h"
 
 // A menu this soon after the more button's tap is the player's.
@@ -89,6 +91,15 @@ static NSTimeInterval sg_moreTappedAt;
 static BOOL sg_open;
 static char kBlockKey, kDecidedKey, kWatchedKey, kShownAtKey, kRowsInKey;
 
+static NSString *localTrackURI(void) {
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    return SGLocalArtworkIsLocalTrack(uri) ? uri : nil;
+}
+
+static CGFloat localArtworkRowHeight(void) {
+    return localTrackURI() ? kRowHeight : 0;
+}
+
 #pragma mark - the block
 
 NSNotificationName const SGSpeedPitchChangedNotification = @"SGSpeedPitchChangedNotification";
@@ -102,8 +113,11 @@ NSNotificationName const SGSpeedPitchChangedNotification = @"SGSpeedPitchChanged
 
 @implementation SGSpeedPitchView {
     UIControl *_row;
+    UIControl *_artworkRow;
     UIImageView *_icon, *_chevron;
+    UIImageView *_artworkIcon, *_artworkChevron;
     UILabel *_title, *_summary;
+    UILabel *_artworkTitle, *_artworkSummary;
     UIView *_panel;
     UILabel *_speedName, *_pitchName, *_followName;
     UIButton *_speedValue, *_pitchValue;
@@ -217,6 +231,25 @@ static void placeTick(UISlider *slider) {
         [_row addSubview:view];
     }
 
+    _artworkRow = [UIControl new];
+    [_artworkRow addTarget:self action:@selector(editArtwork) forControlEvents:UIControlEventTouchUpInside];
+    _artworkRow.isAccessibilityElement = YES;
+    _artworkRow.accessibilityTraits = UIAccessibilityTraitButton;
+    _artworkRow.accessibilityHint = @"Search Spotify and use the selected track's cover and Canvas for this local file.";
+    [self addSubview:_artworkRow];
+    _artworkIcon = [[UIImageView alloc] initWithImage:paintedSymbol(@"pencil", 19, UIImageSymbolWeightRegular, secondary())];
+    _artworkIcon.contentMode = UIViewContentModeCenter;
+    _artworkTitle = makeLabel(font(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryExtraLarge), primary());
+    _artworkTitle.text = @"Match artwork";
+    _artworkSummary = makeLabel(font(UIFontTextStyleSubheadline, UIFontWeightRegular, UIContentSizeCategoryExtraLarge), secondary());
+    _artworkSummary.textAlignment = NSTextAlignmentRight;
+    _artworkChevron = [[UIImageView alloc] initWithImage:paintedSymbol(@"chevron.right", 13, UIImageSymbolWeightSemibold, secondary())];
+    _artworkChevron.contentMode = UIViewContentModeCenter;
+    for (UIView *view in @[_artworkIcon, _artworkTitle, _artworkSummary, _artworkChevron]) {
+        view.userInteractionEnabled = NO;
+        [_artworkRow addSubview:view];
+    }
+
     _panel = [UIView new];
     [self addSubview:_panel];
     UIFont *nameFont = font(UIFontTextStyleSubheadline, UIFontWeightRegular, UIContentSizeCategoryExtraLarge);
@@ -252,7 +285,7 @@ static CGFloat panelHeight(void) {
 }
 
 + (CGFloat)heightOpen:(BOOL)open {
-    return kRowHeight + (open ? panelHeight() : 0);
+    return kRowHeight + localArtworkRowHeight() + (open ? panelHeight() : 0);
 }
 
 - (void)layoutSubviews {
@@ -268,8 +301,26 @@ static CGFloat panelHeight(void) {
     _summary.frame = CGRectMake(summaryX, 0, MAX(0, CGRectGetMinX(_chevron.frame) - kGrid - summaryX), kRowHeight);
 
     _row.hidden = self.panelOnly;
+    CGFloat artworkHeight = self.panelOnly ? 0 : localArtworkRowHeight();
+    _artworkRow.hidden = artworkHeight < 1;
+    _artworkRow.frame = CGRectMake(0, kRowHeight, width, artworkHeight);
+    _artworkRow.accessibilityLabel = @"Match artwork";
+    NSDictionary *match = SGLocalArtworkMatch(localTrackURI());
+    NSString *matchTitle = [match[@"title"] isKindOfClass:NSString.class] ? match[@"title"] : nil;
+    _artworkRow.accessibilityValue = matchTitle ?: @"No Spotify match selected";
+    _artworkSummary.text = matchTitle ?: @"Search Spotify";
+    _artworkIcon.frame = CGRectMake(side, 0, 24, kRowHeight);
+    _artworkChevron.frame = CGRectMake(width - side - 20, 0, 20, kRowHeight);
+    CGFloat artworkTitleX = side + 24 + side;
+    CGFloat artworkTitleWidth = MIN([_artworkTitle sizeThatFits:CGSizeMake(CGFLOAT_MAX, kRowHeight)].width,
+        CGRectGetMinX(_artworkChevron.frame) - artworkTitleX - kGrid);
+    _artworkTitle.frame = CGRectMake(artworkTitleX, 0, artworkTitleWidth, kRowHeight);
+    CGFloat artworkSummaryX = CGRectGetMaxX(_artworkTitle.frame) + kGrid;
+    _artworkSummary.frame = CGRectMake(artworkSummaryX, 0,
+        MAX(0, CGRectGetMinX(_artworkChevron.frame) - kGrid - artworkSummaryX), kRowHeight);
     // Pitch stays laid out under the switch when it folds away, so it fades where it was rather than moving.
-    _panel.frame = CGRectMake(0, self.panelOnly ? 0 : kRowHeight, width, kSliderBlockHeight + kFollowHeight + kSliderBlockHeight + kPanelBottom);
+    _panel.frame = CGRectMake(0, self.panelOnly ? 0 : kRowHeight + artworkHeight, width,
+                              kSliderBlockHeight + kFollowHeight + kSliderBlockHeight + kPanelBottom);
     CGFloat y = 0;
     for (NSArray<UIView *> *line in @[@[_speedName, _speedValue, _speed], @[_followName, _follow], @[_pitchName, _pitchValue, _pitch]]) {
         if (line.count == 2) {
@@ -412,6 +463,27 @@ static NSString *summaryText(float speed, BOOL speedShown, float pitch, BOOL fol
     UITableView *table = self.table;
     UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, sg_open ? _speed : nil);
     SGLog(@"speed and pitch: speed and pitch %@, table %.0f tall showing %.0f", sg_open ? @"opened" : @"closed", table.contentSize.height, table.bounds.size.height);
+}
+
+- (void)editArtwork {
+    NSString *uri = localTrackURI();
+    if (!uri) return;
+    UIViewController *menu = nil;
+    for (UIResponder *responder = self; responder; responder = responder.nextResponder) {
+        if ([responder isKindOfClass:UIViewController.class]) {
+            menu = (UIViewController *)responder;
+            break;
+        }
+    }
+    UIViewController *sheet = menu.navigationController ?: menu;
+    UIViewController *presenter = sheet.presentingViewController ?: menu.presentingViewController;
+    if (!presenter) {
+        SGLocalArtworkPresentEditor(uri, menu);
+        return;
+    }
+    [sheet dismissViewControllerAnimated:NO completion:^{
+        SGLocalArtworkPresentEditor(uri, presenter);
+    }];
 }
 
 - (void)followChanged {

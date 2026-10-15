@@ -348,11 +348,8 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
 %end
 
 %ctor {
-    // The sources that search by name learn the name from the player, so the player is caught
-    // whenever one is on, not only for the redesign's lyrics and system artwork.
-    BOOL artworkNeedsSpotifyHeaders = SGAnimatedArtworkAvailable() && SGFlag(SGKeyLockScreenArtwork, YES);
-    if (!SGRedesignedUI() && !SGFlag(SGKeyLockScreenLyrics, NO) && !SGLyricsActive() &&
-        !artworkNeedsSpotifyHeaders) return;
+    // Local artwork search, named lyric sources and animated system artwork share Spotify's token,
+    // so the request observers stay available under either look, even when lyric features are off.
     sg_seenTracks = [NSMutableDictionary dictionary];
     sg_lyrics = [NSMutableDictionary dictionary];
     sg_requested = [NSMutableSet set];

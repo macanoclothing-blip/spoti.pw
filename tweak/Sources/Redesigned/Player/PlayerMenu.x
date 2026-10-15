@@ -18,6 +18,8 @@
 #import "Redesigned/Kit/SGRKit.h"
 #import "Shared/Player/SpeedPitch.h"
 #import "Shared/AudioEffects/AudioEffects.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
+#import "Shared/Player/PlayerState.h"
 #import "Player.h"
 
 // A sheet this soon after the ⋯'s tap is the player's.
@@ -817,6 +819,26 @@ static UIAction *speedAndPitchAction(SGRPlayerMenuTakeover *t) {
     return action;
 }
 
+static void openLocalArtworkEditor(SGRPlayerMenuTakeover *t, NSString *localURI) {
+    UIViewController *player = t.player;
+    finish(t, @"local artwork editor opened", ^{
+        SGLocalArtworkPresentEditor(localURI, player);
+    });
+}
+
+static UIAction *localArtworkAction(SGRPlayerMenuTakeover *t) {
+    NSString *localURI = SGURIString(SGPlayerState().track.URI);
+    if (!SGLocalArtworkIsLocalTrack(localURI)) return nil;
+    __weak SGRPlayerMenuTakeover *weak = t;
+    UIAction *action = [UIAction actionWithTitle:@"Match artwork" image:symbol(@"pencil") identifier:nil
+        handler:^(UIAction *sender) {
+        pick(weak, ^(SGRPlayerMenuTakeover *strong) { openLocalArtworkEditor(strong, localURI); });
+    }];
+    NSDictionary *match = SGLocalArtworkMatch(localURI);
+    action.subtitle = [match[@"title"] isKindOfClass:NSString.class] ? match[@"title"] : @"Search Spotify for this local file";
+    return action;
+}
+
 static UIAction *artworkChoice(SGRPlayerMenuTakeover *t, SGRPlayerBackground background,
                                NSString *title, NSString *imageName) {
     __weak SGRPlayerMenuTakeover *weak = t;
@@ -868,6 +890,8 @@ static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
     }
     [main addObject:speedAndPitchAction(t)];
     [main addObject:artworkMenu(t)];
+    UIAction *localArtwork = localArtworkAction(t);
+    if (localArtwork) [main addObject:localArtwork];
     if (more.count == 1) {
         [feedback addObject:more.firstObject];
     } else if (more.count) {

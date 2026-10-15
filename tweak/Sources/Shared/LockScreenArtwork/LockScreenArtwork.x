@@ -7,6 +7,7 @@
 #import "SGArtworkFile.h"
 #import "SGCanvas.h"
 #import "Headers/SPTPlayer.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Player/PlayerState.h"
 
@@ -175,12 +176,19 @@ void SGArtworkAsk(NSString *source, SPTPlayerTrack *track, SGCanvas *fromMetadat
     if ([source isEqualToString:SGArtworkSourceSpotify]) {
         NSString *uri = SGURIString(track.URI);
         if (fromMetadata) done(fromMetadata, @"track metadata");
-        else if (uri) askCanvaz(uri, done);
+        else if (uri) {
+            NSString *canvasURI = SGLocalArtworkIsLocalTrack(uri) ? SGLocalArtworkSpotifyURI(uri) : nil;
+            askCanvaz(canvasURI ?: uri, done);
+        }
         else done(nil, @"no track");
         return;
     }
     NSDictionary *metadata = [track respondsToSelector:@selector(metadata)] ? track.metadata : nil;
-    SGAppleArtworkFind(metadata[@"artist_name"] ?: track.artistName, metadata[@"album_title"], tall, done);
+    NSString *uri = SGURIString(track.URI);
+    NSDictionary *match = SGLocalArtworkMatch(uri);
+    NSString *artist = match[@"artist"] ?: metadata[@"artist_name"] ?: track.artistName;
+    NSString *album = match[@"album"] ?: metadata[@"album_title"];
+    SGAppleArtworkFind(artist, album, tall, done);
 }
 
 static void walk(NSString *uri, SPTPlayerTrack *track, SGCanvas *fromMetadata, NSArray<NSString *> *order, NSUInteger at) {
@@ -216,21 +224,6 @@ static BOOL keyOffered(void) {
 }
 
 static void resolve(SPTPlayerTrack *track) {
-    // Read on every track, so the switch needs no restart.
-    if (!SGFlag(SGKeyLockScreenArtwork, YES)) {
-        if (sg_wanted) {
-            sg_wanted = nil;
-            sg_waitingForAuthorization = nil;
-            SGArtworkCancelFetch();
-            sg_playing = nil;
-            @synchronized (sg_lock) {
-                sg_artworkByKey = nil;
-            }
-            SGLog(@"lock artwork: switched off");
-            resend();
-        }
-        return;
-    }
     if (!keyOffered()) return;
     NSString *uri = SGURIString(track.URI);
     if (![uri isEqualToString:sg_wanted]) sg_waitingForAuthorization = nil;
@@ -308,4 +301,16 @@ void SGArtworkSpotifyHeadersChanged(void) {
     %init;
     SGRequireClasses(@[@"MPNowPlayingInfoCenter"]);
     SGLog(@"lock artwork: on");
+    [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkMatchDidChangeNotification
+                                                    object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *notification) {
+        NSString *uri = SGURIString(SGPlayerState().track.URI);
+        if (![notification.object isEqualToString:uri]) return;
+        sg_wanted = nil;
+        sg_waitingForAuthorization = nil;
+        sg_playing = nil;
+        @synchronized (sg_lock) { sg_artworkByKey = nil; }
+        resend();
+        resolve(SGPlayerState().track);
+    }];
 }

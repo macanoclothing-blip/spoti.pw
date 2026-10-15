@@ -10,6 +10,7 @@
 #import "Core/SGCore.h"
 #import "Headers/SPTPlayer.h"
 #import "Shared/Lyrics/Lyrics.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 #import "Shared/Player/PlayerState.h"
 #import "NowPlayingBar.h"
 
@@ -31,6 +32,7 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     UILabel *_title, *_artist;
     UIButton *_play;
     __weak UIImageView *_source;   // the artwork on Spotify's bar, watched for its picture
+    id _artworkObserver;
     BOOL _swiping;
 }
 
@@ -77,6 +79,11 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
         [self registerForTraitChanges:@[UITraitTabAccessoryEnvironment.class] withAction:@selector(environmentChanged)];
     }
     SGAddPlayerStateObserver(self);
+    __weak typeof(self) weakSelf = self;
+    _artworkObserver = [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification
+        object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *notification) {
+            if ([notification.object isEqualToString:SGURIString(SGPlayerState().track.URI)]) [weakSelf findArtwork];
+        }];
     [self showState:SGPlayerState()];
     return self;
 }
@@ -87,6 +94,7 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
 
 - (void)dealloc {
     [self watchSource:nil];
+    if (_artworkObserver) [NSNotificationCenter.defaultCenter removeObserver:_artworkObserver];
 }
 
 - (void)environmentChanged {
@@ -166,10 +174,25 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
 }
 
 - (void)findArtwork {
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    UIImage *localArtwork = SGLocalArtworkCachedCover(uri);
+    if (localArtwork) {
+        if (_artwork.image != localArtwork) _artwork.image = localArtwork;
+        return;
+    }
+    if (SGLocalArtworkCoverURL(uri)) {
+        __weak typeof(self) weakSelf = self;
+        SGLocalArtworkLoadCover(uri, ^(UIImage *image) {
+            SGRMiniPlayer *strongSelf = weakSelf;
+            if (image && strongSelf && [SGURIString(SGPlayerState().track.URI) isEqualToString:uri]) {
+                strongSelf->_artwork.image = image;
+            }
+        });
+    }
     UIImageView *source = SGRNowPlayingArtworkView();
     if (source != _source) [self watchSource:source];
     UIImage *image = source.image;
-    if (image && _artwork.image != image) _artwork.image = image;
+    if (_artwork.image != image) _artwork.image = image;
 }
 
 - (void)watchSource:(UIImageView *)source {

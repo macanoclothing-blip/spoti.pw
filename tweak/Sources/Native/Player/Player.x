@@ -20,10 +20,14 @@
 // covers what that field changes around it too: the artwork takes corners and a shadow so it sits
 // on the field rather than being pasted onto it, the lyric under it drops behind the title in
 // contrast, and the timestamps take monospaced digits so they stop twitching every second.
+#import <math.h>
 #import "Core/SGCore.h"
 #import "Native/Appearance/Repaint.h"
+#import "Native/NowPlayingBar/NowPlayingBar.h"
 #import "NowPlaying.h"
 #import "Native/Appearance/Appearance.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
+#import "Shared/Player/PlayerState.h"
 
 static const CGFloat kButtonMin = 36, kButtonMax = 48;
 static const CGFloat kArtRadius = 12;
@@ -31,6 +35,86 @@ static const CGFloat kArtRadius = 12;
 static BOOL backdropOn(void) {
     return SGFlag(SGKeyPlayerBackdrop, NO);
 }
+
+static BOOL sameOptionalString(NSString *left, NSString *right) {
+    return left == right || [left isEqualToString:right];
+}
+
+static UIImageView *barArtworkIn(UIView *root) {
+    __block UIImageView *best = nil;
+    __block CGFloat bestSide = 31;
+    SGForEachView(root, ^(UIView *view) {
+        if (![view isKindOfClass:UIImageView.class]) return;
+        CGSize size = view.bounds.size;
+        if (size.width < 32 || size.width > 80 || fabs(size.width - size.height) > 4 || size.width <= bestSide) return;
+        bestSide = size.width;
+        best = (UIImageView *)view;
+    });
+    return best;
+}
+
+static void restoreBarArtwork(void) {
+    UIImageView *view = sg_nativeBarArtwork;
+    if (view && view.image == sg_nativeAppliedArtwork) view.image = sg_nativeOriginalArtwork;
+    sg_nativeBarArtwork = nil;
+    sg_nativeOriginalArtwork = nil;
+    sg_nativeAppliedArtwork = nil;
+    sg_nativeArtworkURI = nil;
+    sg_nativeLoadingArtworkKey = nil;
+}
+
+void SGNativePlayerUpdateBarArtwork(UIView *root) {
+    if (root) sg_nativeBarRoot = root;
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    if (!SGLocalArtworkIsLocalTrack(uri)) {
+        restoreBarArtwork();
+        return;
+    }
+    UIImageView *view = barArtworkIn(root);
+    if (!view) return;
+    if (view != sg_nativeBarArtwork || ![uri isEqualToString:sg_nativeArtworkURI]) {
+        restoreBarArtwork();
+        sg_nativeBarArtwork = view;
+        sg_nativeOriginalArtwork = view.image;
+        sg_nativeArtworkURI = uri;
+    }
+    UIImage *artwork = SGLocalArtworkCachedCover(uri);
+    if (artwork) {
+        sg_nativeLoadingArtworkKey = nil;
+        if (view.image != artwork) view.image = artwork;
+        sg_nativeAppliedArtwork = artwork;
+        return;
+    }
+    NSString *coverURL = SGLocalArtworkCoverURL(uri);
+    if (!coverURL.length) {
+        restoreBarArtwork();
+        return;
+    }
+    NSString *requestKey = [uri stringByAppendingFormat:@"|%@", coverURL];
+    if ([requestKey isEqualToString:sg_nativeLoadingArtworkKey]) return;
+    sg_nativeLoadingArtworkKey = requestKey;
+    SGLocalArtworkLoadCover(uri, ^(UIImage *image) {
+        if (![sg_nativeLoadingArtworkKey isEqualToString:requestKey]) return;
+        sg_nativeLoadingArtworkKey = nil;
+        if (image && view == sg_nativeBarArtwork &&
+            [uri isEqualToString:SGURIString(SGPlayerState().track.URI)]) {
+            view.image = image;
+            sg_nativeAppliedArtwork = image;
+        }
+    });
+}
+
+@interface SGNativeBarArtworkWatcher : NSObject <SGPlayerStateObserver>
+@end
+
+@implementation SGNativeBarArtworkWatcher
+- (void)playerStateDidChange:(SPTPlayerState *)state {
+    (void)state;
+    SGNativePlayerUpdateBarArtwork(sg_nativeBarRoot);
+}
+@end
+
+static SGNativeBarArtworkWatcher *sg_nativeBarArtworkWatcher;
 
 #pragma mark - glass behind the header buttons
 
@@ -73,6 +157,19 @@ static char kBackdropKey;
 static UIImage *sg_cover;       // the cover the backdrop stands on, compared by pointer
 static UIImage *sg_coverSmall;
 static __weak UIImageView *sg_coverView;
+static __weak UIImageView *sg_localCoverView;
+static UIImage *sg_originalLocalCover;
+static UIImage *sg_appliedLocalCover;
+static NSString *sg_appliedLocalURI;
+static NSString *sg_appliedLocalURL;
+static NSString *sg_loadingLocalCoverKey;
+static __weak UIScrollView *sg_playerCoverList;
+static __weak UIImageView *sg_nativeBarArtwork;
+static __weak UIView *sg_nativeBarRoot;
+static UIImage *sg_nativeOriginalArtwork;
+static UIImage *sg_nativeAppliedArtwork;
+static NSString *sg_nativeArtworkURI;
+static NSString *sg_nativeLoadingArtworkKey;
 
 static void showCover(UIImage *cover) {
     if (!cover || cover == sg_cover) return;
@@ -87,21 +184,90 @@ static void showCover(UIImage *cover) {
 
 // The covers are the cells of a list scrolled sideways, one per track in the queue; the cell under
 // the middle of the list is the one playing.
-static UIImage *coverInFront(UIScrollView *list) {
+static UIImageView *coverViewInFront(UIScrollView *list) {
     CGFloat middle = list.contentOffset.x + list.bounds.size.width / 2;
-    __block UIImage *cover = nil;
+    __block UIImageView *cover = nil;
     // The cover is 354pt across, the glyph standing in for a missing one 64pt.
     __block CGFloat widest = 200;
     for (UIView *cell in list.subviews) {
         if (middle < CGRectGetMinX(cell.frame) || middle > CGRectGetMaxX(cell.frame)) continue;
         SGForEachView(cell, ^(UIView *view) {
             UIImageView *image = (UIImageView *)view;
-            if (![view isKindOfClass:UIImageView.class] || !image.image || image.bounds.size.width <= widest) return;
+            if (![view isKindOfClass:UIImageView.class] || image.bounds.size.width < widest) return;
             widest = image.bounds.size.width;
-            cover = image.image;
+            cover = image;
         });
     }
     return cover;
+}
+
+static void restoreLocalCover(void) {
+    UIImageView *view = sg_localCoverView;
+    UIImage *original = sg_originalLocalCover;
+    UIImage *applied = sg_appliedLocalCover;
+    if (view && view.image == applied) {
+        [UIView transitionWithView:view duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve
+                        animations:^{ view.image = original; } completion:nil];
+    }
+    sg_localCoverView = nil;
+    sg_originalLocalCover = nil;
+    sg_appliedLocalCover = nil;
+    sg_appliedLocalURI = nil;
+    sg_appliedLocalURL = nil;
+    sg_loadingLocalCoverKey = nil;
+}
+
+static void updateLocalCover(void) {
+    UIScrollView *list = sg_playerCoverList;
+    if (!list) return;
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    NSString *address = SGLocalArtworkCoverURL(uri);
+    if (!SGLocalArtworkIsLocalTrack(uri)) {
+        restoreLocalCover();
+        if (backdropOn()) showCover(coverViewInFront(list).image);
+        return;
+    }
+    UIImage *selected = SGLocalArtworkCachedCover(uri);
+    if (!selected && !address.length) {
+        restoreLocalCover();
+        if (backdropOn()) showCover(coverViewInFront(list).image);
+        return;
+    }
+    if (!selected) {
+        if (![sg_appliedLocalURI isEqualToString:uri] || !sameOptionalString(sg_appliedLocalURL, address)) {
+            restoreLocalCover();
+        }
+        NSString *requestKey = [uri stringByAppendingFormat:@"|%@", address];
+        if (![requestKey isEqualToString:sg_loadingLocalCoverKey]) {
+            sg_loadingLocalCoverKey = requestKey;
+            __weak UIScrollView *weakList = list;
+            SGLocalArtworkLoadCover(uri, ^(UIImage *image) {
+                if (![sg_loadingLocalCoverKey isEqualToString:requestKey]) return;
+                sg_loadingLocalCoverKey = nil;
+                if (image && [SGURIString(SGPlayerState().track.URI) isEqualToString:uri] && weakList) {
+                    updateLocalCover();
+                }
+            });
+        }
+        return;
+    }
+    sg_loadingLocalCoverKey = nil;
+    UIImageView *view = coverViewInFront(list);
+    if (!view) return;
+    if (view != sg_localCoverView || ![uri isEqualToString:sg_appliedLocalURI] ||
+        !sameOptionalString(address, sg_appliedLocalURL)) {
+        restoreLocalCover();
+        sg_localCoverView = view;
+        sg_originalLocalCover = view.image;
+        sg_appliedLocalURI = uri;
+        sg_appliedLocalURL = address;
+    }
+    if (view.image != selected) {
+        [UIView transitionWithView:view duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve
+                        animations:^{ view.image = selected; } completion:nil];
+    }
+    sg_appliedLocalCover = selected;
+    if (backdropOn()) showCover(selected);
 }
 
 static UIView *backdropIn(UIView *plane) {
@@ -136,7 +302,41 @@ static UIView *backdropIn(UIView *plane) {
 %hook _TtC35NowPlaying_ContentLayerPlatformImpl24AccessibleCollectionView
 - (void)layoutSubviews {
     %orig;
-    if (backdropOn()) showCover(coverInFront((UIScrollView *)self));
+    sg_playerCoverList = (UIScrollView *)self;
+    updateLocalCover();
+    if (backdropOn()) showCover(coverViewInFront((UIScrollView *)self).image);
+}
+%end
+
+%hook UIImageView
+- (void)setImage:(UIImage *)image {
+    if (self == sg_localCoverView) {
+        NSString *uri = SGURIString(SGPlayerState().track.URI);
+        NSString *coverURL = SGLocalArtworkCoverURL(uri);
+        UIImage *selected = SGLocalArtworkCachedCover(uri);
+        if ([uri isEqualToString:sg_appliedLocalURI] && sameOptionalString(coverURL, sg_appliedLocalURL)) {
+            if (selected && image != selected) {
+                sg_originalLocalCover = image;
+                %orig(selected);
+                return;
+            }
+            if (!selected) sg_originalLocalCover = image;
+        }
+    }
+    if (self == sg_nativeBarArtwork) {
+        NSString *uri = SGURIString(SGPlayerState().track.URI);
+        UIImage *selected = SGLocalArtworkCachedCover(uri);
+        if ([uri isEqualToString:sg_nativeArtworkURI]) {
+            if (selected && image != selected) {
+                sg_nativeOriginalArtwork = image;
+                %orig(selected);
+                sg_nativeAppliedArtwork = selected;
+                return;
+            }
+            if (!selected) sg_nativeOriginalArtwork = image;
+        }
+    }
+    %orig(image);
 }
 %end
 
@@ -206,4 +406,13 @@ static UIFont *timeFont(void) {
         @"_TtC22Lyrics_NPVContainerKit19LyricsContainerView",
         @"_TtC20NowPlaying_ModesImpl19DurationElementUnit",
     ]);
+    sg_nativeBarArtworkWatcher = [SGNativeBarArtworkWatcher new];
+    SGAddPlayerStateObserver(sg_nativeBarArtworkWatcher);
+    [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification
+                                                    object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *notification) {
+        if (![notification.object isEqualToString:SGURIString(SGPlayerState().track.URI)]) return;
+        updateLocalCover();
+        SGNativePlayerUpdateBarArtwork(sg_nativeBarRoot);
+    }];
 }

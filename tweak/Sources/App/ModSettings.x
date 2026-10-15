@@ -65,7 +65,6 @@ static UIViewController *modSettingsPage(void) {
         pageRow(@"Navbar", @"dock.rectangle", ^UIViewController *{ return SGNavbarPage(); }),
         pageRow(@"Player", @"play.circle", ^UIViewController *{ return SGPlayerSettingsPage(); }),
         pageRow(@"Lyrics", @"quote.bubble", ^UIViewController *{ return SGLyricsSettingsPage(); }),
-        pageRow(@"Control Center Canvas", @"waveform", ^UIViewController *{ return SGControlCenterArtworkPage(); }),
         audioEffects,
     ]];
     if (@available(iOS 17.0, *)) {

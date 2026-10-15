@@ -11,6 +11,8 @@
 // frame the cover is seen at, so growing it for the transition only made it jump afterwards.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
+#import "Shared/Player/PlayerState.h"
 #import "Player.h"
 
 static const CGFloat kPausedScale = 0.84, kPausedScaleReduceMotion = 0.92;
@@ -22,11 +24,96 @@ static NSHashTable<UIView *> *sg_tilts;
 // The cover of each tilt view once found. A frame Spotify sets on a scaled view becomes its scaled
 // size, leaving bounds that no longer match the tilt view's, so the cover is not looked for by size again.
 static NSMapTable<UIView *, UIView *> *sg_covers;
+static __weak UIImageView *sg_localCoverView;
+static UIImage *sg_originalLocalCover;
+static UIImage *sg_appliedLocalCover;
+static NSString *sg_appliedLocalURI;
+static NSString *sg_appliedLocalURL;
+static NSString *sg_loadingLocalCoverKey;
+static UIView *coverIn(UIView *tilt);
+static UIView *showingTilt(void);
+
+static BOOL sameOptionalString(NSString *left, NSString *right) {
+    return left == right || [left isEqualToString:right];
+}
 
 static CGFloat currentScale(void) {
     SPTPlayerState *state = SGPlayerState();
     if (!state.isPaused) return 1;
     return SGRReduceMotion() ? kPausedScaleReduceMotion : kPausedScale;
+}
+
+static UIImageView *coverImageIn(UIView *cover) {
+    if ([cover isKindOfClass:UIImageView.class]) return (UIImageView *)cover;
+    __block UIImageView *found = nil;
+    __block CGFloat widest = 0;
+    SGForEachView(cover, ^(UIView *view) {
+        if (![view isKindOfClass:UIImageView.class] || view.bounds.size.width <= widest) return;
+        widest = view.bounds.size.width;
+        found = (UIImageView *)view;
+    });
+    return found;
+}
+
+static void restoreLocalCover(void) {
+    UIImageView *view = sg_localCoverView;
+    if (view && view.image == sg_appliedLocalCover) view.image = sg_originalLocalCover;
+    sg_localCoverView = nil;
+    sg_originalLocalCover = nil;
+    sg_appliedLocalCover = nil;
+    sg_appliedLocalURI = nil;
+    sg_appliedLocalURL = nil;
+    sg_loadingLocalCoverKey = nil;
+}
+
+static void updateLocalCover(UIView *tilt) {
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    if (!SGLocalArtworkIsLocalTrack(uri)) {
+        restoreLocalCover();
+        return;
+    }
+    if (!tilt) return;
+    UIImageView *view = coverImageIn(coverIn(tilt));
+    if (!view) return;
+    NSString *address = SGLocalArtworkCoverURL(uri);
+    UIImage *selected = SGLocalArtworkCachedCover(uri);
+    if (!selected && !address.length) {
+        restoreLocalCover();
+        return;
+    }
+    if (!selected) {
+        if (view != sg_localCoverView || ![uri isEqualToString:sg_appliedLocalURI] ||
+            !sameOptionalString(address, sg_appliedLocalURL)) {
+            restoreLocalCover();
+            sg_localCoverView = view;
+            sg_originalLocalCover = view.image;
+            sg_appliedLocalURI = uri;
+            sg_appliedLocalURL = address;
+        }
+        NSString *requestKey = [uri stringByAppendingFormat:@"|%@", address];
+        if (![requestKey isEqualToString:sg_loadingLocalCoverKey]) {
+            sg_loadingLocalCoverKey = requestKey;
+            SGLocalArtworkLoadCover(uri, ^(UIImage *image) {
+                if (![sg_loadingLocalCoverKey isEqualToString:requestKey]) return;
+                sg_loadingLocalCoverKey = nil;
+                if (image && [SGURIString(SGPlayerState().track.URI) isEqualToString:uri]) {
+                    updateLocalCover(showingTilt());
+                }
+            });
+        }
+        return;
+    }
+    sg_loadingLocalCoverKey = nil;
+    if (view != sg_localCoverView || ![uri isEqualToString:sg_appliedLocalURI] ||
+        !sameOptionalString(address, sg_appliedLocalURL)) {
+        restoreLocalCover();
+        sg_localCoverView = view;
+        sg_originalLocalCover = view.image;
+        sg_appliedLocalURI = uri;
+        sg_appliedLocalURL = address;
+    }
+    if (view.image != selected) view.image = selected;
+    sg_appliedLocalCover = selected;
 }
 
 // The child of the tilt view the size of the cover.
@@ -184,6 +271,7 @@ static void scaleEveryCover(BOOL animated) {
     %orig;
     UIView *tilt = (UIView *)self;
     if (tilt.bounds.size.width < kCoverMinWidth || !inCoverCell(tilt)) return;
+    if (tilt == showingTilt()) updateLocalCover(tilt);
     UIView *cover = coverIn(tilt);
     if (!cover) return;
     [sg_tilts addObject:tilt];
@@ -206,6 +294,25 @@ static void scaleEveryCover(BOOL animated) {
 
     static dispatch_once_t once;
     dispatch_once(&once, ^{ SGLog(@"redesign player: cover %@ rounded %.0f with a shadow plate, scale %.2f", NSStringFromClass(cover.class), SGRRadiusArtwork, currentScale()); });
+}
+%end
+
+%hook UIImageView
+- (void)setImage:(UIImage *)image {
+    if (self == sg_localCoverView) {
+        NSString *uri = SGURIString(SGPlayerState().track.URI);
+        UIImage *selected = SGLocalArtworkCachedCover(uri);
+        if ([uri isEqualToString:sg_appliedLocalURI]) {
+            if (selected && image != selected) {
+                sg_originalLocalCover = image;
+                %orig(selected);
+                sg_appliedLocalCover = selected;
+                return;
+            }
+            if (!selected) sg_originalLocalCover = image;
+        }
+    }
+    %orig(image);
 }
 %end
 
@@ -235,6 +342,7 @@ static void scaleEveryCover(BOOL animated) {
 }
 
 - (void)playerStateDidChange:(SPTPlayerState *)state {
+    updateLocalCover(showingTilt());
     NSInteger paused = state.isPaused ? 1 : 0;
     if (paused == _paused) return;
     _paused = paused;
@@ -255,6 +363,12 @@ static SGRPlayerArtworkWatcher *sg_artworkWatcher;
     sg_gone = [NSHashTable weakObjectsHashTable];
     sg_artworkWatcher = [SGRPlayerArtworkWatcher new];
     SGAddPlayerStateObserver(sg_artworkWatcher);
+    [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification
+                                                    object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *notification) {
+        if (![notification.object isEqualToString:SGURIString(SGPlayerState().track.URI)]) return;
+        updateLocalCover(showingTilt());
+    }];
     SGRObservePlayerTransition(sg_artworkWatcher, ^(id owner) {
         scaleEveryCover(YES);
     }, ^(id owner) {

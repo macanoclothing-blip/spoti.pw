@@ -282,9 +282,13 @@ Redesigned:
                   volume row in the standard redesign, with a flat two-tone track and no thumb. Vinyl mode keeps its
                   own retro slider styling, raises the volume row and lowers
                   the progress row. The standard player's transport row is centered between the song progress and
-                  volume sliders. The slider adjusts the iPhone's output
+                  volume sliders, and the system slider is kept vertically centered between its speaker symbols
+                  through playback layout changes. The slider adjusts the iPhone's output
                   volume, not Spotify Connect's remote
                   device volume.
+                  Local files can match a Spotify track from the player's three-dot menu or use a photo selected
+                  with the iPhone photo picker; the association is stored per local URI and supplies that track's
+                  cover and, when available, Canvas (Shared/LocalTrackArtwork/LocalTrackArtwork.x).
     Artist/       artist page headers look up a Fanart.tv music logo automatically when opened, with the artist name
                   as fallback; album headers keep the album title and show the credited artist's logo in place of the
                   artist line when available (Artist/SGArtistLogo.m, Album/AlbumHeader.x). MusicBrainz matching includes
@@ -413,9 +417,9 @@ beside the row, "Needs iOS 27" below iOS 27. Then a card of parts. Navbar: the t
 each with its own list of tabs. Lyrics, beside Player: the ordered list of lyrics sources, lyrics for every track,
 naming the source in the redesign, the lock screen, and glass lyrics in the native look; in the redesign also
 which of the lyrics, their pronunciation and their translation is set largest, and the translation's language.
-Control Center Canvas is a separate page under either look for the animated Canvas on supported system
-now-playing surfaces.
-Player: Gestures, Blocked artists (with the count on the row) and Lock screen widget (its controls and, under Artwork, Animated artwork, the track's Canvas or the album's Apple Music cover in supported system now-playing surfaces, on until switched off, with a Sources page for their order, and a "Needs iOS 26" row below that), which work with either look;
+Player: Gestures, Blocked artists (with the count on the row) and Lock screen widget (its controls, plus animated
+artwork on supported system now-playing surfaces when a Canvas or animated album cover is available), which work
+with either look;
 in the native look also Now playing bar (its device button and its flags), Queue & devices, and
 Spotify's own player screen (artwork background, glass header buttons, Disable Canvas and the sheet,
 header, slider and sticky header flags, the cards under the player and the lyrics preview and player
