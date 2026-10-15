@@ -25,8 +25,14 @@ static NSString *sg_wanted;
 static NSString *sg_playing;   // the source the artwork set for sg_wanted came from
 static NSString *sg_offered;
 static NSString *sg_waitingForAuthorization;
+static NSString *sg_localCoverRequest;
+static NSString *sg_localCoverURI;
+static UIImage *sg_localCoverImage;
+static MPMediaItemArtwork *sg_localMediaArtwork;
+static MPMediaItemArtwork *sg_originalMediaArtwork;
 static CGFloat sg_aspect;
 static void resolve(SPTPlayerTrack *track);
+static void refreshLocalStillArtwork(void);
 
 static UIImage *coverImage(CGSize size) {
     MPMediaItemArtwork *cover;
@@ -133,6 +139,79 @@ static void resend(void) {
         now[MPNowPlayingInfoPropertyElapsedPlaybackTime] = @(elapsed.doubleValue + rate * (CFAbsoluteTimeGetCurrent() - reportedAt));
     }
     MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = now;
+}
+
+static NSDictionary *localStillArtwork(NSDictionary *info) {
+    if (!info.count) return info;
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    if (!SGLocalArtworkIsLocalTrack(uri)) {
+        sg_localCoverRequest = nil;
+        sg_localCoverURI = nil;
+        sg_localCoverImage = nil;
+        sg_localMediaArtwork = nil;
+        sg_originalMediaArtwork = nil;
+        return info;
+    }
+
+    UIImage *image = SGLocalArtworkCachedCover(uri);
+    if (!image) {
+        NSString *coverURL = SGLocalArtworkCoverURL(uri);
+        NSString *request = coverURL.length ? [uri stringByAppendingFormat:@"|%@", coverURL] : nil;
+        if (!request && [sg_localCoverURI isEqualToString:uri] &&
+            info[MPMediaItemPropertyArtwork] == sg_localMediaArtwork) {
+            NSMutableDictionary *restored = [info mutableCopy];
+            if (sg_originalMediaArtwork) restored[MPMediaItemPropertyArtwork] = sg_originalMediaArtwork;
+            else [restored removeObjectForKey:MPMediaItemPropertyArtwork];
+            sg_localCoverURI = nil;
+            sg_localCoverImage = nil;
+            sg_localMediaArtwork = nil;
+            sg_originalMediaArtwork = nil;
+            return restored;
+        }
+        if (!request) {
+            sg_localCoverURI = nil;
+            sg_localCoverImage = nil;
+            sg_localMediaArtwork = nil;
+            sg_originalMediaArtwork = nil;
+        }
+        if (request && ![request isEqualToString:sg_localCoverRequest]) {
+            sg_localCoverRequest = request;
+            SGLocalArtworkLoadCover(uri, ^(UIImage *loaded) {
+                if (![sg_localCoverRequest isEqualToString:request]) return;
+                sg_localCoverRequest = nil;
+                if (loaded && [SGURIString(SGPlayerState().track.URI) isEqualToString:uri]) {
+                    refreshLocalStillArtwork();
+                }
+            });
+        }
+        return info;
+    }
+
+    sg_localCoverRequest = nil;
+    BOOL sameTrack = [sg_localCoverURI isEqualToString:uri];
+    if (!sameTrack) {
+        sg_originalMediaArtwork = [info[MPMediaItemPropertyArtwork] isKindOfClass:MPMediaItemArtwork.class]
+            ? info[MPMediaItemPropertyArtwork] : nil;
+    }
+    if (![sg_localCoverURI isEqualToString:uri] || sg_localCoverImage != image) {
+        sg_localCoverURI = uri;
+        sg_localCoverImage = image;
+        sg_localMediaArtwork = [[MPMediaItemArtwork alloc] initWithImage:image];
+    }
+    if (!sg_localMediaArtwork || info[MPMediaItemPropertyArtwork] == sg_localMediaArtwork) return info;
+    NSMutableDictionary *updated = [info mutableCopy] ?: [NSMutableDictionary dictionary];
+    updated[MPMediaItemPropertyArtwork] = sg_localMediaArtwork;
+    return updated;
+}
+
+static void refreshLocalStillArtwork(void) {
+    NSDictionary *info = MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo;
+    if (!info.count) {
+        @synchronized (sg_lock) { info = sg_info; }
+    }
+    if (!info.count) return;
+    NSDictionary *updated = localStillArtwork(info);
+    if (updated != info) MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = updated;
 }
 
 static void play(NSString *uri, SGCanvas *canvas, NSString *source) {
@@ -279,6 +358,7 @@ void SGArtworkSpotifyHeadersChanged(void) {
 
 %hook MPNowPlayingInfoCenter
 - (void)setNowPlayingInfo:(NSDictionary *)info {
+    info = localStillArtwork(info);
     NSDictionary<NSString *, id> *artworkByKey;
     @synchronized (sg_lock) {
         if (info[MPMediaItemPropertyArtwork]) sg_cover = info[MPMediaItemPropertyArtwork];
@@ -312,5 +392,11 @@ void SGArtworkSpotifyHeadersChanged(void) {
         @synchronized (sg_lock) { sg_artworkByKey = nil; }
         resend();
         resolve(SGPlayerState().track);
+    }];
+    [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification
+                                                    object:nil queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *notification) {
+        if (![notification.object isEqualToString:SGURIString(SGPlayerState().track.URI)]) return;
+        refreshLocalStillArtwork();
     }];
 }

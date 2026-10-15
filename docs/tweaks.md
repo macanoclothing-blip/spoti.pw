@@ -288,7 +288,8 @@ Redesigned:
                   device volume.
                   Local files can match a Spotify track from the player's three-dot menu or use a photo selected
                   with the iPhone photo picker; the association is stored per local URI and supplies that track's
-                  cover and, when available, Canvas (Shared/LocalTrackArtwork/LocalTrackArtwork.x).
+                  cover in the player, mini player and lock screen, and its Canvas when available
+                  (Shared/LocalTrackArtwork/LocalTrackArtwork.x).
     Artist/       artist page headers look up a Fanart.tv music logo automatically when opened, with the artist name
                   as fallback; album headers keep the album title and show the credited artist's logo in place of the
                   artist line when available (Artist/SGArtistLogo.m, Album/AlbumHeader.x). MusicBrainz matching includes

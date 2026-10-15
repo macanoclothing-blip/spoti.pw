@@ -171,6 +171,7 @@ static NSString *sg_appliedLocalURI;
 static NSString *sg_appliedLocalURL;
 static NSString *sg_loadingLocalCoverKey;
 static __weak UIScrollView *sg_playerCoverList;
+static void updateLocalCover(void);
 static void showCover(UIImage *cover) {
     if (!cover || cover == sg_cover) return;
     sg_cover = cover;
@@ -269,6 +270,24 @@ static void updateLocalCover(void) {
     sg_appliedLocalCover = selected;
     if (backdropOn()) showCover(selected);
 }
+
+@interface SGNativeLocalCoverWatcher : NSObject <SGPlayerStateObserver>
+@end
+
+@implementation SGNativeLocalCoverWatcher
+- (void)playerStateDidChange:(SPTPlayerState *)state {
+    NSString *uri = SGURIString(state.track.URI);
+    if (!SGLocalArtworkIsLocalTrack(uri)) {
+        updateLocalCover();
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if ([uri isEqualToString:SGURIString(SGPlayerState().track.URI)]) updateLocalCover();
+    });
+}
+@end
+
+static SGNativeLocalCoverWatcher *sg_nativeLocalCoverWatcher;
 
 static UIView *backdropIn(UIView *plane) {
     UIView *backdrop = objc_getAssociatedObject(plane, &kBackdropKey);
@@ -406,6 +425,8 @@ static UIFont *timeFont(void) {
         @"_TtC22Lyrics_NPVContainerKit19LyricsContainerView",
         @"_TtC20NowPlaying_ModesImpl19DurationElementUnit",
     ]);
+    sg_nativeLocalCoverWatcher = [SGNativeLocalCoverWatcher new];
+    SGAddPlayerStateObserver(sg_nativeLocalCoverWatcher);
     sg_nativeBarArtworkWatcher = [SGNativeBarArtworkWatcher new];
     SGAddPlayerStateObserver(sg_nativeBarArtworkWatcher);
     [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification
