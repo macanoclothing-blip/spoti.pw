@@ -170,6 +170,7 @@ static UIImage *sg_appliedLocalCover;
 static NSString *sg_appliedLocalURI;
 static NSString *sg_appliedLocalURL;
 static NSString *sg_loadingLocalCoverKey;
+static __weak UIView *sg_localCoverCell;
 static __weak UIScrollView *sg_playerCoverList;
 static void updateLocalCover(void);
 static NSMapTable<UIView *, NSNumber *> *sg_coverOverlayAlphas;
@@ -215,12 +216,18 @@ static BOOL coverOverlay(UIView *sibling, CGRect coverRect) {
     if (CGRectGetWidth(frame) >= width * 0.5 && CGRectGetHeight(frame) >= height * 0.5 &&
         overlapArea / coverArea >= 0.65) return YES;
 
-    if (![sibling isKindOfClass:UIImageView.class] || CGRectGetWidth(frame) > width * 0.5 ||
-        CGRectGetHeight(frame) > height * 0.5) return NO;
-    CGFloat dx = fabs(CGRectGetMidX(frame) - CGRectGetMidX(coverRect));
-    CGFloat dy = fabs(CGRectGetMidY(frame) - CGRectGetMidY(coverRect));
-    return CGRectGetWidth(frame) >= 24 && CGRectGetHeight(frame) >= 24 &&
-           dx <= width * 0.08 && dy <= height * 0.08;
+    __block BOOL centeredGlyph = NO;
+    SGForEachView(sibling, ^(UIView *view) {
+        if (centeredGlyph) return;
+        if (![view isKindOfClass:UIImageView.class] || view.hidden || view.alpha < 0.01) return;
+        CGRect glyph = [view convertRect:view.bounds toView:sibling.superview];
+        CGFloat dx = fabs(CGRectGetMidX(glyph) - CGRectGetMidX(coverRect));
+        CGFloat dy = fabs(CGRectGetMidY(glyph) - CGRectGetMidY(coverRect));
+        centeredGlyph = CGRectGetWidth(glyph) >= 24 && CGRectGetHeight(glyph) >= 24 &&
+            CGRectGetWidth(glyph) <= width * 0.5 && CGRectGetHeight(glyph) <= height * 0.5 &&
+            dx <= width * 0.08 && dy <= height * 0.08;
+    });
+    return centeredGlyph;
 }
 
 static void hideCoverOverlays(UIImageView *cover, UIView *container, BOOL hide) {
@@ -254,6 +261,16 @@ static void hideCoverOverlays(UIImageView *cover, UIView *container, BOOL hide) 
     }
 }
 
+static void scheduleCoverOverlayHiding(void) {
+    __weak UIImageView *weakCover = sg_localCoverView;
+    __weak UIView *weakCell = sg_localCoverCell;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIImageView *cover = weakCover;
+        UIView *container = weakCell;
+        if (cover && container) hideCoverOverlays(cover, container, YES);
+    });
+}
+
 static void restoreLocalCover(void) {
     hideCoverOverlays(nil, nil, NO);
     UIImageView *view = sg_localCoverView;
@@ -269,6 +286,7 @@ static void restoreLocalCover(void) {
     sg_appliedLocalURI = nil;
     sg_appliedLocalURL = nil;
     sg_loadingLocalCoverKey = nil;
+    sg_localCoverCell = nil;
 }
 
 static void updateLocalCover(void) {
@@ -323,6 +341,7 @@ static void updateLocalCover(void) {
     sg_appliedLocalCover = selected;
     UIView *cell = view;
     while (cell.superview && cell.superview != list) cell = cell.superview;
+    sg_localCoverCell = cell;
     hideCoverOverlays(view, cell, YES);
     if (backdropOn()) showCover(selected);
 }
@@ -393,6 +412,7 @@ static UIView *backdropIn(UIView *plane) {
             if (selected && image != selected) {
                 sg_originalLocalCover = image;
                 %orig(selected);
+                scheduleCoverOverlayHiding();
                 return;
             }
             if (!selected) sg_originalLocalCover = image;
@@ -412,6 +432,9 @@ static UIView *backdropIn(UIView *plane) {
         }
     }
     %orig(image);
+    if (sg_localCoverCell && self != sg_localCoverView && [self isDescendantOfView:sg_localCoverCell]) {
+        scheduleCoverOverlayHiding();
+    }
 }
 %end
 
@@ -420,11 +443,12 @@ static UIView *backdropIn(UIView *plane) {
 %hook _TtC35CreativeWorkCommons_CoverArtTiltKit16CoverArtTiltView
 - (void)layoutSubviews {
     %orig;
-    if (!backdropOn()) return;
     UIView *tilt = (UIView *)self;
     CGSize size = tilt.bounds.size;
-    // The player's cover only; the bar downstairs carries a 40pt one of its own.
     if (size.width < 200) return;
+    updateLocalCover();
+    if (!backdropOn()) return;
+    // The player's cover only; the bar downstairs carries a 40pt one of its own.
     SGForEachView(tilt, ^(UIView *view) {
         if (view == tilt || !CGSizeEqualToSize(view.bounds.size, size)) return;
         view.layer.cornerRadius = kArtRadius;

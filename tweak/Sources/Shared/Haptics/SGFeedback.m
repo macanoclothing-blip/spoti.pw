@@ -53,12 +53,20 @@ static UIFeedbackGenerator *generatorFor(NSInteger style) {
     return generator;
 }
 
-void SGPlayFeedback(SGFeedback feedback) {
-    if (!SGEnabled(SGKeyControlHaptics)) return;
+static void playFeedback(SGFeedback feedback, BOOL requireControlsEnabled) {
+    if (requireControlsEnabled && !SGEnabled(SGKeyControlHaptics)) return;
     Tap tap = tapAtStrength(feedback);
     UIFeedbackGenerator *generator = generatorFor(tap.style);
     if (tap.style == kSelection) [(UISelectionFeedbackGenerator *)generator selectionChanged];
     else [(UIImpactFeedbackGenerator *)generator impactOccurredWithIntensity:tap.intensity];
+}
+
+void SGPlayFeedback(SGFeedback feedback) {
+    playFeedback(feedback, YES);
+}
+
+void SGPlayFeedbackPreview(SGFeedback feedback) {
+    playFeedback(feedback, NO);
 }
 
 void SGPrepareFeedback(SGFeedback feedback) {

@@ -19,7 +19,7 @@ static NSString *aboutSize(void) {
 static NSString *footer(void) {
     return [NSString stringWithFormat:@"Sing changes the song mix using a voice separation model. In the lyrics, its slider moves from instrumental at the bottom, through the original mix in the middle, to vocals only at the top. "
             "It works on iOS 27 only. Its voice model, %@, is downloaded once and runs only on this iPhone. "
-            "Spatial Voice uses Apple's spatial mixer and enables AirPods head tracking where supported. If spatial rendering is unavailable, Sing keeps its regular vocal mix. "
+            "Spatial Voice is available on any output; compatible headphones add head tracking. If spatial rendering is unavailable, Sing keeps its regular vocal mix. "
             "The switches and the download apply straight away.", aboutSize()];
 }
 
@@ -112,10 +112,10 @@ static SGModSection *karaokeSection(void) {
     SGModRow *sing = SGOptionRow(@"Sing", @"The microphone in the lyrics", SGRKeySing);
     sing.changed = ^(BOOL on) { SGRSingApplySwitch(); };
 
-    SGModRow *spatial = SGOptionRow(@"Spatial Voice", @"Spatial sound with AirPods head tracking where supported", SGKeySingSpatial);
+    SGModRow *spatial = SGOptionRow(@"Spatial Voice", @"Works on any output; head tracking needs compatible headphones", SGKeySingSpatial);
     spatial.changed = ^(BOOL on) { SGSingSetSpatialEnabled(on); };
     SGModRow *spatialStatus = SGStatActionRow(@"Spatial Voice status", nil, ^NSString *{ return SGSingSpatialStatus(); }, ^{
-        tell(@"Spatial Voice", @"The separated vocal is rendered as a point source by Apple's spatial mixer. Compatible AirPods provide head tracking; other outputs use the mixer's spatial rendering without head tracking. If setup or rendering fails, Sing continues with its regular vocal mix.");
+        tell(@"Spatial Voice", @"This setting stays available with or without headphones. The separated vocal is rendered by Apple's spatial mixer on the current output; compatible AirPods add head tracking. If setup or rendering fails, Sing continues with its regular vocal mix.");
     });
     spatialStatus.visible = ^BOOL { return SGSingSpatialEnabled(); };
     spatialStatus.refreshOn = SGSingDidChangeNotification;

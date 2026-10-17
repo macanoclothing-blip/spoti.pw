@@ -118,3 +118,6 @@ void SGRPlayerLyricsChanged(void);
 // Alpha 0, no touches, hidden from accessibility, set again on every call: for Spotify's Swift views,
 // which SGRSuppress cannot keep (PlayerControls.x).
 void SGRPlayerVanish(UIView *view);
+
+// Positions the system output-volume control in the gap between the transport controls and footer.
+BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer);

@@ -58,6 +58,8 @@ typedef NS_ENUM(NSInteger, SGFeedback) {
 
 // Plays `feedback` while Controls is on.
 void SGPlayFeedback(SGFeedback feedback);
+// The settings preview is an explicit user action, so it can be felt even while Controls is off.
+void SGPlayFeedbackPreview(SGFeedback feedback);
 // Wakes the Taptic Engine for feedback about to follow quickly (a finger on the scrubber).
 void SGPrepareFeedback(SGFeedback feedback);
 

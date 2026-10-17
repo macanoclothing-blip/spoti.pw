@@ -106,9 +106,16 @@ UIViewController *SGArtistLogoSettingsPage(void) {
         ^NSString *{ return SGRArtistLogoKeyShown() ?: @"Not set"; },
         ^NSString *(NSString *text) { return SGRArtistLogoSetKey(text); });
     key.refreshOn = SGRArtistLogoKeyDidChangeNotification;
-    SGModSection *section = SGNotedSection(@"Artist logos", @[key],
-        @"Set your Fanart.tv API key once; after that, logos are looked up automatically when you open an artist page. "
-         "The artist name stays visible if no logo is available. The key is stored on this device. Apple Music does not provide a public artist-logo endpoint.");
+    SGModRow *apple = SGOptionRow(@"Apple Music logos",
+        @"Use Apple Music's transparent artist wordmark when Fanart.tv has no logo. Lookups use the artist name and need no sign-in.",
+        SGRKeyArtistLogoApple);
+    apple.changed = ^(BOOL on) { SGRArtistLogoSetAppleEnabled(on); };
+    apple.refreshOn = SGRArtistLogoKeyDidChangeNotification;
+    SGModSection *section = SGNotedSection(@"Artist logos", @[key, apple],
+        @"Fanart.tv is checked first. When enabled, Apple Music is the fallback and provides its transparent artist wordmark where available. "
+         "Apple Music is queried through its web player's catalog because it has no documented artist-logo endpoint. Artist names are sent to "
+         "MusicBrainz for Fanart.tv matching and to Apple Music only when that fallback is enabled. "
+         "The Fanart.tv API key is stored on this device; the artist name stays visible if neither source has a logo.");
     section.footerLink = @"https://fanart.tv/get-an-api-key/";
     return [[SGModPage alloc] initWithTitle:@"Artist logos" intro:nil sections:@[section] footer:nil];
 }

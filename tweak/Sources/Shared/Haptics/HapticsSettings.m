@@ -3,6 +3,7 @@
 #import "Core/SGCore.h"
 #import "Settings/SGModPage.h"
 #import "Haptics.h"
+#import "SGHapticsPreview.h"
 #import "SystemMusicHaptics.h"
 
 static NSString *const kMusicHapticsInfo = @"None\nNo music vibrations in Spotify. The separate Controls setting still governs taps on playback buttons.\n\nNative iOS\nUses Apple's haptic tracks for supported songs. Works on the Home Screen and while locked, and follows Music Haptics in Control Center and Settings > Accessibility. Requires iOS 18 or later and Music Haptics enabled in iOS. Not every song is supported.\n\nspoti.pw Generated\nCreates taps and bass rumble from Spotify's sound in real time, without needing an Apple haptic track. Works only while Spotify is open and playing on this iPhone, not through Spotify Connect. Strength and Follows apply to this mode only.";
@@ -86,6 +87,7 @@ NSArray<SGModSection *> *SGVibrationsSections(void) {
     follows.chosen = ^(NSInteger index) { SGMusicHapticsSettingsChanged(); };
     follows.visible = musicOn;
 
+    SGHapticsPreview *preview = [[SGHapticsPreview alloc] initWithFrame:CGRectZero];
     NSMutableArray *musicRows = [NSMutableArray arrayWithObject:SGWithSymbol(music, @"waveform")];
     if (SGSystemMusicHapticsAvailable()) {
         SGModRow *status = SGStatRow(@"iOS status", ^NSString *{ return SGSystemMusicHapticsStatus(); });
@@ -96,6 +98,7 @@ NSArray<SGModSection *> *SGVibrationsSections(void) {
     }
     [musicRows addObjectsFromArray:@[musicStrength, follows]];
     return @[
+        SGSection(nil, @[SGViewRow(preview, 280)]),
         SGSection(@"Vibrations", @[SGWithSymbol(controls, @"hand.tap"), controlStrength]),
         SGSection(nil, musicRows),
     ];

@@ -167,7 +167,9 @@ Shared:
                   against its sim/
     Haptics/      Vibrations (Haptics.h lists its files): a tap of UIKit's feedback generators for the player's and the now
                   playing bar's controls, the scrubber's tenths and ends, cover swipes, gestures and the lyrics page's tap to
-                  seek, at the strength set for them (ControlHaptics.x, SGFeedback.m). Music Haptics
+                  seek, at the strength set for them (ControlHaptics.x, SGFeedback.m). The settings page has an accessible,
+                  Reduce Motion-aware radial preview; its explicit test tap uses the selected Controls strength even if
+                  Controls is switched off (SGHapticsPreview.m). Music Haptics
                   has a dropdown for None, Native iOS and spoti.pw Generated, with an info button explaining them.
                   Native iOS follows the system setting in Control Center and Accessibility. SystemMusicHaptics.x
                   observes it through MediaAccessibility. Spotify's TRACK_V4 extended metadata supplies the
@@ -277,13 +279,14 @@ Redesigned:
                   matching scene geometry update while the player is visible. In landscape the lyrics layout uses
                   a cover column and a separate lyrics column; Vinyl mode scales the disc to the shorter screen
                   dimension and places its metadata beside it.
-                  Player/PlayerVolume.x inserts iOS's native MPVolumeView below the transport controls and above the
-                  lyrics, Connect and queue row, flanked by low and high speaker symbols like the Music app's
-                  volume row in the standard redesign, with a flat two-tone track and no thumb. Vinyl mode keeps its
-                  own retro slider styling, raises the volume row and lowers
-                  the progress row. The standard player's transport row is centered between the song progress and
-                  volume sliders, and the system slider is kept vertically centered between its speaker symbols
-                  through playback layout changes. The slider adjusts the iPhone's output
+                  Player/PlayerVolume.x places iOS's native MPVolumeView as a non-arranged overlay below the
+                  transport controls and above the lyrics, Connect and queue row, flanked by low and high speaker
+                  symbols like the Music app's volume row in the standard redesign, with a flat two-tone track and
+                  no thumb. Its frame is recalculated from the controls and footer after layout, and MPVolumeView
+                  gets its fitted height rather than relying on adjustments to its private slider. Vinyl mode keeps
+                  its own retro slider styling, raises the volume row and lowers the progress row. The standard
+                  player lifts the transport controls only when the available gap can fit the volume row; otherwise
+                  it keeps the normal controls layout. The slider adjusts the iPhone's output
                   volume, not Spotify Connect's remote
                   device volume.
                   Local files can match a Spotify track from the player's three-dot menu or use a photo selected
@@ -296,9 +299,11 @@ Redesigned:
                   normalized names,
                   sort-names and aliases and tries up to 20 matching artist IDs in score order. Fanart.tv logo URLs are
                   tried in HD/like order, falling through to alternate URLs and artist IDs when an image is unavailable
-                  or invalid; transparent margins are cropped before drawing. A missing logo is retried on a later visit.
-                  The user's Fanart.tv key stays in local preferences and is shown partially in Mod Settings. Apple Music
-                  exposes artwork, not a public artist-logo endpoint.
+                  or invalid; transparent margins are cropped before drawing. When enabled, Apple Music's transparent artist
+                  wordmark is requested only after Fanart.tv has no result, using the shared Apple web-player catalog (not a
+                  documented public artist-logo endpoint).
+                  A missing logo is retried on a later visit. The Fanart.tv key stays in local preferences and is shown
+                  partially in Mod Settings; Apple Music lookup is an opt-in Redesigned setting and sends only the artist name.
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
                   edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred

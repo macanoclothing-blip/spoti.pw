@@ -40,7 +40,7 @@ static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
 static const CGFloat kControlsShare = 0.3;
 static const CGFloat kControlsLift = 12;
 
-static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kProgressSliderKey;
+static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
 
 // The view the footer's stack view arranges around `view`.
@@ -136,8 +136,7 @@ static UIViewController *unitOf(UIView *view) {
     return [next isKindOfClass:UIViewController.class] && ((UIViewController *)next).viewIfLoaded == view ? (UIViewController *)next : nil;
 }
 
-// The transport unit may no longer be immediately above the footer because the volume row is inserted
-// between them. Find it in the stack rather than relying on adjacency.
+// Find the transport unit without relying on its position in Spotify's arranged views.
 static UIView *controlsIn(UIStackView *stack, UIView *footer) {
     NSUInteger footerIndex = [stack.arrangedSubviews indexOfObject:footer];
     if (footerIndex == NSNotFound) return nil;
@@ -145,24 +144,6 @@ static UIView *controlsIn(UIStackView *stack, UIView *footer) {
         UIView *candidate = stack.arrangedSubviews[(NSUInteger)i];
         UIViewController *unit = unitOf(candidate);
         if ([NSStringFromClass(unit.class) containsString:@"PlaybackControlsElementsUnit"]) return candidate;
-    }
-    return nil;
-}
-
-static UIView *arrangedSubviewContainingVolume(UIStackView *stack) {
-    __block UIView *found = nil;
-    for (UIView *candidate in stack.arrangedSubviews) {
-        SGForEachView(candidate, ^(UIView *view) {
-            if (!found && [view isKindOfClass:MPVolumeView.class]) found = candidate;
-        });
-        if (found) break;
-    }
-    return found;
-}
-
-static UIView *arrangedSubviewContainingProgress(UIStackView *stack) {
-    for (UIView *candidate in stack.arrangedSubviews) {
-        if (SGRFindByIdentifier(candidate, @"SPTNowPlayingSliderV2", &kProgressSliderKey)) return candidate;
     }
     return nil;
 }
@@ -181,15 +162,16 @@ static void lowerRow(UIView *row) {
 
     UIStackView *bottomStack = (UIStackView *)stack;
     UIView *controls = controlsIn(bottomStack, row);
-    UIView *volumeRow = arrangedSubviewContainingVolume(bottomStack);
-    UIView *progressRow = arrangedSubviewContainingProgress(bottomStack);
-    CGFloat controlsMove = controls ? round(move * kControlsShare) - kControlsLift : 0;
-    if (controls && volumeRow && progressRow) {
-        CGFloat midpoint = (CGRectGetMidY(volumeRow.frame) + CGRectGetMidY(progressRow.frame)) / 2;
-        controlsMove = round(midpoint - controls.center.y);
-    }
+    CGFloat controlsMove = controls ? -kControlsLift : 0;
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
+    BOOL volumeFits = SGRPlayerLayoutVolume(stack, controls, row);
+    if (!volumeFits) {
+        controlsMove = controls ? round(move * kControlsShare) : 0;
+        follow = CGAffineTransformMakeTranslation(0, controlsMove);
+        if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
+        SGRPlayerLayoutVolume(stack, controls, row);
+    }
 
     SGRFooterReach *reach = objc_getAssociatedObject(row, &kReachKey);
     if (!reach) {

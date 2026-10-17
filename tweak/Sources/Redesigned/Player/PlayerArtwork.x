@@ -26,6 +26,7 @@ static NSHashTable<UIView *> *sg_tilts;
 // size, leaving bounds that no longer match the tilt view's, so the cover is not looked for by size again.
 static NSMapTable<UIView *, UIView *> *sg_covers;
 static __weak UIImageView *sg_localCoverView;
+static __weak UIView *sg_localCoverCell;
 static UIImage *sg_originalLocalCover;
 static UIImage *sg_appliedLocalCover;
 static NSString *sg_appliedLocalURI;
@@ -33,6 +34,7 @@ static NSString *sg_appliedLocalURL;
 static NSString *sg_loadingLocalCoverKey;
 static NSMapTable<UIView *, NSNumber *> *sg_coverOverlayAlphas;
 static UIView *coverIn(UIView *tilt);
+static UIView *coverCellForTilt(UIView *tilt);
 static UIView *showingTilt(void);
 
 static BOOL sameOptionalString(NSString *left, NSString *right) {
@@ -69,12 +71,18 @@ static BOOL coverOverlay(UIView *sibling, CGRect coverRect) {
     if (CGRectGetWidth(frame) >= width * 0.5 && CGRectGetHeight(frame) >= height * 0.5 &&
         overlapArea / coverArea >= 0.65) return YES;
 
-    if (![sibling isKindOfClass:UIImageView.class] || CGRectGetWidth(frame) > width * 0.5 ||
-        CGRectGetHeight(frame) > height * 0.5) return NO;
-    CGFloat dx = fabs(CGRectGetMidX(frame) - CGRectGetMidX(coverRect));
-    CGFloat dy = fabs(CGRectGetMidY(frame) - CGRectGetMidY(coverRect));
-    return CGRectGetWidth(frame) >= 24 && CGRectGetHeight(frame) >= 24 &&
-           dx <= width * 0.08 && dy <= height * 0.08;
+    __block BOOL centeredGlyph = NO;
+    SGForEachView(sibling, ^(UIView *view) {
+        if (centeredGlyph) return;
+        if (![view isKindOfClass:UIImageView.class] || view.hidden || view.alpha < 0.01) return;
+        CGRect glyph = [view convertRect:view.bounds toView:sibling.superview];
+        CGFloat dx = fabs(CGRectGetMidX(glyph) - CGRectGetMidX(coverRect));
+        CGFloat dy = fabs(CGRectGetMidY(glyph) - CGRectGetMidY(coverRect));
+        centeredGlyph = CGRectGetWidth(glyph) >= 24 && CGRectGetHeight(glyph) >= 24 &&
+            CGRectGetWidth(glyph) <= width * 0.5 && CGRectGetHeight(glyph) <= height * 0.5 &&
+            dx <= width * 0.08 && dy <= height * 0.08;
+    });
+    return centeredGlyph;
 }
 
 static void hideCoverOverlays(UIImageView *cover, UIView *container, BOOL hide) {
@@ -108,11 +116,22 @@ static void hideCoverOverlays(UIImageView *cover, UIView *container, BOOL hide) 
     }
 }
 
+static void scheduleCoverOverlayHiding(void) {
+    __weak UIImageView *weakCover = sg_localCoverView;
+    __weak UIView *weakCell = sg_localCoverCell;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIImageView *cover = weakCover;
+        UIView *container = weakCell;
+        if (cover && container) hideCoverOverlays(cover, container, YES);
+    });
+}
+
 static void restoreLocalCover(void) {
     hideCoverOverlays(nil, nil, NO);
     UIImageView *view = sg_localCoverView;
     if (view && view.image == sg_appliedLocalCover) view.image = sg_originalLocalCover;
     sg_localCoverView = nil;
+    sg_localCoverCell = nil;
     sg_originalLocalCover = nil;
     sg_appliedLocalCover = nil;
     sg_appliedLocalURI = nil;
@@ -140,6 +159,7 @@ static void updateLocalCover(UIView *tilt) {
             !sameOptionalString(address, sg_appliedLocalURL)) {
             restoreLocalCover();
             sg_localCoverView = view;
+            sg_localCoverCell = coverCellForTilt(tilt) ?: tilt;
             sg_originalLocalCover = view.image;
             sg_appliedLocalURI = uri;
             sg_appliedLocalURL = address;
@@ -168,7 +188,9 @@ static void updateLocalCover(UIView *tilt) {
     }
     if (view.image != selected) view.image = selected;
     sg_appliedLocalCover = selected;
-    hideCoverOverlays(view, tilt, YES);
+    // Spotify's missing-art glyph can be a sibling of the tilt view in the cell, not a child of it.
+    sg_localCoverCell = coverCellForTilt(tilt) ?: tilt;
+    hideCoverOverlays(view, sg_localCoverCell, YES);
 }
 
 // The child of the tilt view the size of the cover.
@@ -184,13 +206,17 @@ static UIView *coverIn(UIView *tilt) {
     return nil;
 }
 
-static BOOL inCoverCell(UIView *tilt) {
+static UIView *coverCellForTilt(UIView *tilt) {
     static Class cell;
     if (!cell) cell = NSClassFromString(@"_TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl");
     for (UIView *v = tilt.superview; v; v = v.superview) {
-        if ([v isKindOfClass:cell]) return YES;
+        if ([v isKindOfClass:cell]) return v;
     }
-    return NO;
+    return nil;
+}
+
+static BOOL inCoverCell(UIView *tilt) {
+    return coverCellForTilt(tilt) != nil;
 }
 
 static void scaleCover(UIView *tilt, CGFloat scale) {
@@ -352,6 +378,14 @@ static void scaleEveryCover(BOOL animated) {
 }
 %end
 
+%hook _TtC28NowPlaying_ContentLayersImpl16CoverArtCellImpl
+- (void)layoutSubviews {
+    %orig;
+    UIView *tilt = showingTilt();
+    if (tilt && [tilt isDescendantOfView:(UIView *)self]) updateLocalCover(tilt);
+}
+%end
+
 %hook UIImageView
 - (void)setImage:(UIImage *)image {
     if (self == sg_localCoverView) {
@@ -362,12 +396,16 @@ static void scaleEveryCover(BOOL animated) {
                 sg_originalLocalCover = image;
                 %orig(selected);
                 sg_appliedLocalCover = selected;
+                scheduleCoverOverlayHiding();
                 return;
             }
             if (!selected) sg_originalLocalCover = image;
         }
     }
     %orig(image);
+    if (sg_localCoverCell && self != sg_localCoverView && [self isDescendantOfView:sg_localCoverCell]) {
+        scheduleCoverOverlayHiding();
+    }
 }
 %end
 
