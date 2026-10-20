@@ -160,10 +160,6 @@ BOOL SGLyricsActive(void) { return NO; }
 void SGLyricsMeaningsFor(NSString *trackID, NSArray *lines, void (^done)(NSDictionary *byLine)) {}
 void SGRShowMeanings(NSString *lineText, NSArray *meanings) {}
 
-void SGRPlayerToggleOrientation(void) {}
-void SGRPlayerClearOrientationOverride(void) {}
-void SGRPlayerRefreshOrientationPolicy(void) {}
-
 NSNotificationName const SGLocalArtworkDidChangeNotification = @"harness.localArtworkDidChange";
 BOOL SGLocalArtworkIsLocalTrack(NSString *uri) { (void)uri; return NO; }
 NSString *SGLocalArtworkCoverURL(NSString *uri) { (void)uri; return nil; }

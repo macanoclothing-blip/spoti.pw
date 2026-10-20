@@ -49,6 +49,10 @@ static BOOL playerVisibleInWindow(UIWindow *window) {
 static void requestWindowOrientationIfNeeded(UIWindow *window) {
     if (@available(iOS 16.0, *)) {
         UIWindowScene *windowScene = window.windowScene;
+        if (!windowScene || windowScene.activationState != UISceneActivationStateForegroundActive) {
+            SGLog(@"redesign player: cannot request orientation without an active window scene");
+            return;
+        }
         UIDeviceOrientation deviceOrientation = UIDevice.currentDevice.orientation;
         UIInterfaceOrientationMask requested = sg_forcedOrientationMask;
         if (!requested && physicalOrientationIsValid(deviceOrientation)) {
@@ -59,7 +63,7 @@ static void requestWindowOrientationIfNeeded(UIWindow *window) {
         UIInterfaceOrientation interfaceOrientation = windowScene.interfaceOrientation;
         BOOL orientationMismatch = (deviceLandscape && !UIInterfaceOrientationIsLandscape(interfaceOrientation)) ||
                                    (!deviceLandscape && !UIInterfaceOrientationIsPortrait(interfaceOrientation));
-        if (windowScene && orientationMismatch) {
+        if (orientationMismatch) {
             UIWindowSceneGeometryPreferencesIOS *preferences =
                 [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:requested];
             [windowScene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
@@ -145,18 +149,26 @@ void SGRPlayerToggleOrientation(void) {
         }
         if (window) break;
     }
-    if (!window) return;
+    if (!window) {
+        SGLog(@"redesign player: orientation toggle could not find the visible player window");
+        return;
+    }
 
     UIInterfaceOrientation orientation = window.windowScene.interfaceOrientation;
-    BOOL landscape = UIInterfaceOrientationIsPortrait(orientation);
-    if (!UIInterfaceOrientationIsPortrait(orientation) && !UIInterfaceOrientationIsLandscape(orientation)) {
-        landscape = window.bounds.size.height >= window.bounds.size.width;
+    BOOL currentLandscape = UIInterfaceOrientationIsLandscape(orientation);
+    if (sg_forcedOrientationMask) {
+        currentLandscape = (sg_forcedOrientationMask & UIInterfaceOrientationMaskLandscape) != 0;
+    } else if (!UIInterfaceOrientationIsPortrait(orientation) && !UIInterfaceOrientationIsLandscape(orientation)) {
+        currentLandscape = window.bounds.size.height < window.bounds.size.width;
     }
+    BOOL landscape = !currentLandscape;
     sg_forcedOrientationMask = landscape ? UIInterfaceOrientationMaskLandscape : UIInterfaceOrientationMaskPortrait;
     UIDeviceOrientation physical = UIDevice.currentDevice.orientation;
     if (physicalOrientationIsValid(physical)) sg_lastPhysicalOrientation = physical;
     SGRPlayerRefreshOrientationPolicy();
-    SGLog(@"redesign player: lyrics requested %@ orientation", landscape ? @"landscape" : @"portrait");
+    SGLog(@"redesign player: lyrics requested %@ orientation from %@",
+          landscape ? @"landscape" : @"portrait",
+          UIInterfaceOrientationIsLandscape(orientation) ? @"landscape" : @"portrait");
 }
 
 void SGRPlayerClearOrientationOverride(void) {
@@ -194,13 +206,20 @@ void SGRPlayerRefreshOrientationPolicy(void) {
                     }
                 }
                 if (player) {
-                    if (@available(iOS 16.0, *)) [player setNeedsUpdateOfSupportedInterfaceOrientations];
+                    if (@available(iOS 16.0, *)) {
+                        for (UIViewController *ancestor = player; ancestor; ancestor = ancestor.parentViewController) {
+                            [ancestor setNeedsUpdateOfSupportedInterfaceOrientations];
+                        }
+                        if (root && root != player) [root setNeedsUpdateOfSupportedInterfaceOrientations];
+                    }
                     requestWindowOrientationIfNeeded(window);
                     return;
                 }
             }
         }
-        sg_forcedOrientationMask = 0;
+        if (sg_forcedOrientationMask) {
+            SGLog(@"redesign player: requested orientation retained while the player scene is being resolved");
+        }
     });
 }
 

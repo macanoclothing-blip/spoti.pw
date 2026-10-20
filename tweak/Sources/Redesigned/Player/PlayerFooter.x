@@ -30,14 +30,13 @@ static NSString *const kLyricsSymbol = @"quote.bubble", *const kLyricsSymbolOpen
 // Where the three glyphs sit, as parts of the footer's width.
 static const CGFloat kLeading = 0.2, kMiddle = 0.5, kTrailing = 0.8;
 static const CGFloat kGlyphMaxWidth = 30;
+static char kPlaybackButtonKey;
 
 // Issue #54: Spotify ends its bottom stack 61pt above the screen's bottom (01.txt:127, 576.67 + 236 of
 // 874), so the row's middle sat 83pt up, well clear of the home indicator, and the controls crowded it.
 // The Music app keeps that row just over the home indicator: its middle this far above the safe area's
 // bottom, and never less than kRowMinBottom above the screen's on a phone without a home indicator.
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
-// The controls follow a share of the footer's move, so some of the room opens above them too.
-static const CGFloat kControlsShare = 0.3;
 static const CGFloat kControlsLift = 12;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey;
@@ -138,10 +137,12 @@ static UIViewController *unitOf(UIView *view) {
 
 // Find the transport unit without relying on its position in Spotify's arranged views.
 static UIView *controlsIn(UIStackView *stack, UIView *footer) {
-    NSUInteger footerIndex = [stack.arrangedSubviews indexOfObject:footer];
+    NSArray<UIView *> *units = [stack.arrangedSubviews containsObject:footer] ? stack.arrangedSubviews : stack.subviews;
+    NSUInteger footerIndex = [units indexOfObject:footer];
     if (footerIndex == NSNotFound) return nil;
     for (NSInteger i = (NSInteger)footerIndex - 1; i >= 0; i--) {
-        UIView *candidate = stack.arrangedSubviews[(NSUInteger)i];
+        UIView *candidate = units[(NSUInteger)i];
+        if (SGRFindByIdentifier(candidate, @"SPTNowPlayingPlayButton", &kPlaybackButtonKey)) return candidate;
         UIViewController *unit = unitOf(candidate);
         if ([NSStringFromClass(unit.class) containsString:@"PlaybackControlsElementsUnit"]) return candidate;
     }
@@ -165,13 +166,7 @@ static void lowerRow(UIView *row) {
     CGFloat controlsMove = controls ? -kControlsLift : 0;
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
-    BOOL volumeFits = SGRPlayerLayoutVolume(stack, controls, row);
-    if (!volumeFits) {
-        controlsMove = controls ? round(move * kControlsShare) : 0;
-        follow = CGAffineTransformMakeTranslation(0, controlsMove);
-        if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
-        SGRPlayerLayoutVolume(stack, controls, row);
-    }
+    SGRPlayerLayoutVolume(stack, controls, row);
 
     SGRFooterReach *reach = objc_getAssociatedObject(row, &kReachKey);
     if (!reach) {

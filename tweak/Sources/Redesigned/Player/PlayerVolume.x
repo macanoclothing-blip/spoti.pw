@@ -1,14 +1,16 @@
 // Place the system output-volume control in the space between the transport controls and footer.
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
+#import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
 
 static const CGFloat kVolumeRowHeight = 34;
 static const CGFloat kVolumeGlyphSize = 16;
 static const CGFloat kVolumeGlyphGap = 8;
 static const CGFloat kVolumeSideInset = 24;
-static const CGFloat kVolumeControlClearance = 10;
+static const CGFloat kVolumeControlClearance = 6;
 static char kVolumeRowKey;
+static char kPreviousButtonKey, kPlayButtonKey, kNextButtonKey;
 
 static UIImage *volumeTrackImage(UIColor *color) {
     CGSize size = CGSizeMake(6, 4);
@@ -46,6 +48,21 @@ static UIImageView *volumeGlyph(NSString *symbol) {
     view.contentMode = UIViewContentModeCenter;
     view.accessibilityElementsHidden = YES;
     return view;
+}
+
+static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
+    static const void *keys[] = {&kPreviousButtonKey, &kPlayButtonKey, &kNextButtonKey};
+    NSArray<NSString *> *identifiers = @[
+        @"SPTNowPlayingPreviousTrackButton", @"SPTNowPlayingPlayButton", @"SPTNowPlayingNextTrackButton"
+    ];
+    CGRect frame = CGRectNull;
+    for (NSUInteger index = 0; index < identifiers.count; index++) {
+        UIView *button = SGRFindByIdentifier(controls, identifiers[index], keys[index]);
+        if (!button || button.hidden || button.alpha < 0.01) continue;
+        CGRect buttonFrame = [button convertRect:button.bounds toView:stack];
+        frame = CGRectIsNull(frame) ? buttonFrame : CGRectUnion(frame, buttonFrame);
+    }
+    return CGRectIsNull(frame) ? [controls convertRect:controls.bounds toView:stack] : frame;
 }
 
 @interface SGRVolumeRow : UIView
@@ -111,27 +128,36 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     if (volume.superview != stack) [stack addSubview:volume];
     if (!controls || !footer || !stack.window) {
         volume.alpha = 0;
+        SGLog(@"redesign player: volume row has no window, controls or footer");
         return NO;
     }
 
-    CGRect controlsFrame = [controls convertRect:controls.bounds toView:stack];
+    CGRect controlsFrame = volumeControlsFrame(controls, stack);
     CGRect footerFrame = [footer convertRect:footer.bounds toView:stack];
     CGFloat top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
     CGFloat bottom = CGRectGetMinY(footerFrame) - kVolumeControlClearance;
     CGFloat room = bottom - top;
     if (room < kVolumeRowHeight) {
-        volume.alpha = 0;
-        return NO;
+        CGFloat shortage = kVolumeRowHeight - room;
+        CGAffineTransform transform = controls.transform;
+        controls.transform = CGAffineTransformMakeTranslation(transform.tx, transform.ty - shortage);
+        controlsFrame = volumeControlsFrame(controls, stack);
+        top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+        room = bottom - top;
     }
 
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
-    CGRect frame = CGRectMake(kVolumeSideInset, round((top + bottom - kVolumeRowHeight) / 2),
+    CGFloat rowHeight = MIN(kVolumeRowHeight, room);
+    CGRect frame = CGRectMake(kVolumeSideInset, round((top + bottom - rowHeight) / 2),
                               width, kVolumeRowHeight);
-    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame)) {
+    frame.size.height = rowHeight;
+    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame) || width < 1) {
         volume.alpha = 0;
+        SGLog(@"redesign player: volume row cannot fit without covering controls or footer (%.0fpt)", room);
         return NO;
     }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;
+    [stack bringSubviewToFront:volume];
     if (volume.alpha != 1) volume.alpha = 1;
     return YES;
 }

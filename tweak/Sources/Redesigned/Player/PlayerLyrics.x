@@ -285,33 +285,29 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     CGRect row = untransformed(info, host), bar = untransformed(duration, host);
     UIEdgeInsets safe = host.window.safeAreaInsets;
     if (host.bounds.size.width > host.bounds.size.height) {
+        UIView *header = sg_header.viewIfLoaded;
+        CGFloat headerBottom = header ? CGRectGetMaxY(SGFrameIn(header, host)) : safe.top;
+        CGFloat contentTop = MAX(CGRectGetMinY(area), MAX(safe.top + 8, headerBottom + 4));
+        CGFloat contentBottom = MIN(CGRectGetMinY(bar) - kLyricsBottom, host.bounds.size.height - safe.bottom - kLyricsBottom);
+        CGFloat contentHeight = contentBottom - contentTop;
         CGFloat leftWidth = floor(area.size.width * 0.42);
-        CGFloat leftBottom = MIN(CGRectGetMaxY(area), CGRectGetMinY(bar)) - safe.bottom;
-        CGFloat roomForArt = leftBottom - CGRectGetMinY(area) - row.size.height - 28;
-        CGFloat side = MIN(leftWidth - 2 * SGRSideMargin,
-                           MIN(area.size.height - safe.top - safe.bottom - 16, roomForArt));
-        if (side < 120) return l;
-        CGFloat left = CGRectGetMinX(area) + (leftWidth - side) / 2;
-        CGFloat top = CGRectGetMinY(area) + MAX(8, (area.size.height - side) / 2);
+        CGFloat side = MIN(140, MIN(leftWidth - 2 * SGRSideMargin, contentHeight));
+        if (side < kThumbSide) return l;
+        CGFloat left = CGRectGetMinX(area) + SGRSideMargin;
+        CGFloat top = contentTop + (contentHeight - side) / 2;
         l.cover = cover;
         l.thumb = CGRectMake(left, top, side, side);
+        l.lift = CGRectGetMidY(l.thumb) - row.size.height / 2 - CGRectGetMinY(row);
+        l.shift = side + kThumbGap;
+        l.titleMaxWidth = leftWidth - side - kThumbGap - 2 * SGRSideMargin;
         CGFloat column = CGRectGetMinX(area) + leftWidth + SGRGrid;
-        CGFloat titleTop = CGRectGetMaxY(l.thumb) + 12;
-        l.lift = titleTop - CGRectGetMinY(row);
-        l.shift = 0;
-        l.titleMaxWidth = leftWidth - 2 * SGRSideMargin;
-        CGFloat buttonTop = MAX(CGRectGetMinY(area) + kRotateButtonGap, safe.top + kRotateButtonGap);
-        CGFloat lines = buttonTop + kRotateButtonSide + kRotateButtonGap;
-        CGFloat stageBottom = MIN(CGRectGetMinY(bar) - kLyricsBottom, host.bounds.size.height - safe.bottom - kLyricsBottom);
-        l.stage = CGRectMake(column, lines, CGRectGetMaxX(area) - column, stageBottom - lines);
+        l.stage = CGRectMake(column, contentTop, CGRectGetMaxX(area) - column, contentHeight);
         l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
-                              buttonTop, kRotateButtonSide, kRotateButtonSide);
-        UIView *header = sg_header.viewIfLoaded;
+                              contentTop, kRotateButtonSide, kRotateButtonSide);
         CGFloat roomTop = MIN(header ? CGRectGetMinY(SGFrameIn(header, host)) : safe.top, CGRectGetMinY(l.stage));
         CGFloat roomBottom = MAX(host.bounds.size.height - safe.bottom, CGRectGetMaxY(l.stage));
         l.room = CGRectMake(column, roomTop, l.stage.size.width, roomBottom - roomTop);
-        l.ok = l.stage.size.width > 140 && l.stage.size.height > 80 &&
-            titleTop + row.size.height < CGRectGetMinY(bar) - kLyricsBottom;
+        l.ok = l.titleMaxWidth >= 64 && l.stage.size.width > 140 && l.stage.size.height >= 64;
         return l;
     }
     // The thumbnail takes the title's own leading edge, so the two line up down the page.
@@ -705,7 +701,12 @@ static void replace(void) {
     UIView *host = sg_host;
     if (!host || sg_moving) return;   // a pass in the middle of the transition would cut it short
     SGRLyricsLayout l = layoutIn(host);
-    if (sg_open && !l.ok) return;
+    if (sg_open && !l.ok) {
+        SGLog(@"redesign player: lyrics layout no longer fits %.0fx%.0f; restoring the player layout",
+              host.bounds.size.width, host.bounds.size.height);
+        setOpen(NO, NO);
+        return;
+    }
     placeTitleRow(l);
     sg_floating.viewIfLoaded.alpha = sg_open ? 0 : 1;
     if (!sg_open) return;

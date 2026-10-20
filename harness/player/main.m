@@ -29,6 +29,7 @@
 #import <objc/runtime.h>
 #import "Shared/Lyrics/Lyrics.h"
 #import "Redesigned/Player/Player.h"
+#import "Redesigned/Player/PlayerOrientation.h"
 #import "Redesigned/Kit/SGRBridges.h"
 #import "Redesigned/Kit/SGRField.h"
 #import "Shared/Player/PlayerEvents.h"
@@ -572,9 +573,9 @@ static void loadLyrics(void) {
 
     UIView *controls = box(bottom, UIView.class, CGRectMake(0, 104, W, 88), nil);
     _controlsView = controls;
-    glyphButton(controls, CGRectMake(W / 2 - 130, 20, 48, 48), @"backward.fill", nil);
-    glyphButton(controls, CGRectMake(W / 2 - 24, 14, 48, 60), @"pause.fill", nil);
-    glyphButton(controls, CGRectMake(W / 2 + 82, 20, 48, 48), @"forward.fill", nil);
+    glyphButton(controls, CGRectMake(W / 2 - 130, 20, 48, 48), @"backward.fill", @"SPTNowPlayingPreviousTrackButton");
+    glyphButton(controls, CGRectMake(W / 2 - 24, 14, 48, 60), @"pause.fill", @"SPTNowPlayingPlayButton");
+    glyphButton(controls, CGRectMake(W / 2 + 82, 20, 48, 48), @"forward.fill", @"SPTNowPlayingNextTrackButton");
 
     if (hasVolume) {
         UIView *volume = box(bottom, UIView.class, CGRectMake(0, 192, W, 44), nil);
@@ -627,6 +628,10 @@ static void loadLyrics(void) {
     NSLog(@"[harness] units: %@, %@, %@, %@", info.class, duration.class, playback.class, footer.class);
     UIViewController *player = [_TtC19NowPlaying_ViewImpl24NowPlayingViewController new];
     player.view = host;
+    [root addChildViewController:scrollUnit];
+    [scrollUnit didMoveToParentViewController:root];
+    [scrollUnit addChildViewController:player];
+    [player didMoveToParentViewController:scrollUnit];
     _units = @[info, duration, floating, playback, footer, scrollUnit, background, player];
     _covers = covers;
     [self start];
@@ -656,6 +661,22 @@ static void loadLyrics(void) {
     else if ([scenario() isEqualToString:@"fluid"]) [self runFluid];
     else if ([scenario() isEqualToString:@"animated"]) [self runAnimated];
     else if ([scenario() isEqualToString:@"taps"]) [self runTaps];
+    else if ([scenario() isEqualToString:@"orientation"]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            SGRPlayerToggleLyrics();
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            SGRPlayerToggleOrientation();
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            NSLog(@"[harness] landscape scene %@, player bounds %@", self.window.windowScene.interfaceOrientation == UIInterfaceOrientationLandscapeLeft ||
+                  self.window.windowScene.interfaceOrientation == UIInterfaceOrientationLandscapeRight ? @"active" : @"inactive",
+                  NSStringFromCGRect(host.bounds));
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            SGRPlayerToggleOrientation();
+        });
+    }
     // Opened, closed and opened again, so a screenshot can be taken of each state and of the move itself.
     else for (NSNumber *at in @[@2, @6, @10]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(at.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1082,7 +1103,10 @@ static UIView *viewWithIdentifier(UIView *root, NSString *identifier) {
 }
 
 - (NSString *)lyricsGlyph {
-    SGRGlyphButton *glyph = (SGRGlyphButton *)viewOfClass(self.window, @"SGRGlyphButton");
+    SGRGlyphButton *glyph = (SGRGlyphButton *)findView(self.window, ^BOOL(UIView *view) {
+        return [NSStringFromClass(view.class) isEqualToString:@"SGRGlyphButton"] &&
+            [view.accessibilityLabel isEqualToString:@"Lyrics"];
+    });
     return glyph.glyph.symbol;
 }
 
@@ -1127,7 +1151,8 @@ static UIView *viewWithIdentifier(UIView *root, NSString *identifier) {
     after(2.5, ^{ [self tapBarAt:0.3 dy:-15 named:@"2 tap 15pt above the bar"]; });
     after(3.3, ^{
         NSUInteger flipped = unit.flipped;
-        [self tapAt:[self middleOf:unit.remaining] named:@"3 tap on the remaining time"];
+        UIView *remaining = viewWithIdentifier(window, @"now-playing-time-remaning-label");
+        [self tapAt:[self middleOf:remaining] named:@"3 tap on the remaining time"];
         after(0.3, ^{ [self expect:unit.flipped == flipped + 1 that:@"3 the remaining time took its own tap"]; });
     });
     after(3.9, ^{

@@ -14,11 +14,12 @@ no scene delegate. `SRC=<another checkout>/tweak/Sources OUT=<dir> ./build.sh` b
 sources, for example an older commit, to see a bug before its fix.
 
 `build.sh` runs `logos.pl -c generator=internal` over `PlayerLyrics.x`, `PlayerArtwork.x`,
-`PlayerFooter.x`, `PlayerControls.x`, `PlayerScroll.x`, `PlayerField.x`, `PlayerAnimated.x` and the Kit's `SGRBridges.x`, and
-links them with the real `Core/`, `Settings/`, `Redesigned/Kit/`, `PlayerBackgroundSettings.m`, `SGRKaraokeView` and
-`Shared/LockScreenArtwork`'s order and canvas reading. `stubs.m` stands in for the hooks the harness does not compile (the Kit's
-accent and repaint, the rest of the player, the lyrics store, the haptics, where Animated artwork's clips come from)
-and plays a mock player: `SGRHarnessSetTrack` reports a track, with the image ids Spotify's metadata
+`PlayerFooter.x`, `PlayerControls.x`, `PlayerScroll.x`, `PlayerField.x`, `PlayerAnimated.x` and the Kit's
+`SGRBridges.x`, and links them with the real `Core/`, `Settings/`, `Redesigned/Kit/`,
+`PlayerOrientation.m`, `PlayerBackgroundSettings.m`, `SGRKaraokeView` and `Shared/LockScreenArtwork`'s
+order and canvas reading. `stubs.m` stands in for the hooks the harness does not compile (the Kit's
+accent and repaint, the rest of the player, the lyrics store, the haptics, where Animated artwork's clips
+come from) and plays a mock player: `SGRHarnessSetTrack` reports a track, with the image ids Spotify's metadata
 carries, to every state observer, and `SGRHarnessSetTrackWith` the same with more metadata and the tracks up next. A song of ten timed lines plays on from launch. `main.m` also answers
 for i.scdn.co through an `NSURLProtocol` handed to every session, so each picture the Kit fetches can
 come late, out of order, or not at all.
@@ -26,6 +27,8 @@ come late, out of order, or not at all.
 `HARNESS_SCENARIO` picks what the harness does:
 
 - `lyrics` (default) opens the lyrics at 2 s, closes them at 6 and opens them again at 10.
+- `orientation` opens the lyrics, requests landscape and then portrait through the real scene-orientation
+  policy, with the player controller attached to the harness hierarchy as it is in Spotify.
 - `look` plays one track, then a track from another album at 8 s, whose picture reaches the screens
   0.4 s later. It shows the field, the moving background and its crossfade, and the footer row. At 3 s
   it logs whether touches on the lowered footer row (issue #54) still reach it.
