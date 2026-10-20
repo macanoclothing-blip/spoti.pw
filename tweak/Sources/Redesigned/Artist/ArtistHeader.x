@@ -28,6 +28,7 @@
 // (SGRPinnedMore) draws and fires it from the top trailing corner of the page, level with the back button.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Settings/SGPageStyle.h"
 #import "SGArtistLogo.h"
 #import "Artist.h"
 
@@ -39,7 +40,7 @@ static const CGFloat kMinCover = 80, kMinHero = 120;
 // The collapsed ImageHeaderView, Spotify's navigation bar; the text fades out over the last kFade before it.
 static const CGFloat kBar = 100, kFade = 150;
 
-static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey;
+static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey, kShuffleKey;
 static char kTitleKey, kMetaKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
 static char kLogoArtistKey, kArtistInfoButtonKey;
 static NSHashTable<UIView *> *sg_artistHeaders;
@@ -456,6 +457,7 @@ static void applyHeader(UIView *header) {
         objc_setAssociatedObject(container, &kArtistInfoButtonKey, artistInfo, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [container addSubview:artistInfo];
     }
+    __weak UIView *weakHeader = header;
     artistInfo.onTap = ^{
         UIView *activeTitle = SGRFindByIdentifier(weakHeader, @"Encore.AdaptiveTitle", &kTitleKey);
         showArtistInfo(firstText(activeTitle) ?: firstText(keepBar(weakHeader)) ?: @"");
@@ -467,12 +469,12 @@ static void applyHeader(UIView *header) {
         objc_setAssociatedObject(header, &kLogoArtistKey, [name copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [info showLogo:nil forTitle:name];
         __weak SGRHeaderInfo *weakInfo = info;
-        __weak UIView *weakHeader = header;
+        __weak UIView *weakLogoHeader = header;
         SGRArtistLogoForArtist(name, ^(UIImage *logo) {
             [weakInfo showLogo:logo forTitle:name];
             if (logo) return;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(6 * 60 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                UIView *active = weakHeader;
+                UIView *active = weakLogoHeader;
                 if (!active || ![objc_getAssociatedObject(active, &kLogoArtistKey) isEqualToString:name]) return;
                 objc_setAssociatedObject(active, &kLogoArtistKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 if (active.window) [active setNeedsLayout];
@@ -480,6 +482,7 @@ static void applyHeader(UIView *header) {
         });
     }
 
+    UIView *shuffle = SGRFindByIdentifier(header, @"Components.UI.ShuffleButton", &kShuffleKey);
     UIView *play = SGRFindByIdentifier(header, @"header-play-button", &kPlayKey);
     UIView *follow = SGRFindByIdentifier(header, @"Curation.FollowButtonElementKit.FollowButton", &kFollowKey);
     // The reference layout puts Artist info immediately left of Play; its own button occupies that slot.
