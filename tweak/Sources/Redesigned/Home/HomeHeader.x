@@ -20,6 +20,7 @@
 // so it follows the app's language.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Settings/SGPageStyle.h"
 #import "Shared/MusicRecognition/SGMusicRecognition.h"
 #import "Home.h"
 
@@ -210,8 +211,8 @@ static void layoutHeader(UIViewController *page) {
     UIFont *font = SGRFont(UIFontTextStyleLargeTitle, UIFontWeightBold, UIContentSizeCategoryLarge);
     if (![title.font isEqual:font]) title.font = font;
 
-    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, "line.3.horizontal", @"Filtri Home");
-    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, "waveform", @"Riconosci una canzone con Shazam");
+    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home");
+    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, @"waveform", @"Riconosci una canzone con Shazam");
     filters.action = ^{ showHomeFilters(header); };
     shazam.action = ^{ SGMusicRecognitionStart(); };
     filters.frame = CGRectMake(SGRSideMargin, round(CGRectGetMidY(stack.frame) - 22), 44, 44);
