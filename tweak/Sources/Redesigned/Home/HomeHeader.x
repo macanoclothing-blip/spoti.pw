@@ -28,7 +28,7 @@
 static const NSUInteger kTitleTries = 8;
 
 static char kTitleKey, kTabKey;
-static char kHomeFilterKey, kHomeShazamKey;
+static char kHomeFilterKey, kHomeShazamKey, kHomePillKey;
 static NSString *sg_tabName;
 
 static void vanish(UIView *view) {
@@ -87,18 +87,22 @@ static __weak UIView *sg_scrim;
 @interface SGRHomeHeaderButton : UIControl
 @property (nonatomic, copy) void (^action)(void);
 - (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title;
+- (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title circularGlass:(BOOL)circularGlass;
 @end
 @implementation SGRHomeHeaderButton {
     SGRGlyphView *_glyph;
 }
 - (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title {
+    return [self initWithSymbol:symbol title:title circularGlass:YES];
+}
+- (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title circularGlass:(BOOL)circularGlass {
     if (!(self = [super initWithFrame:CGRectZero])) return nil;
     self.accessibilityLabel = title;
     self.accessibilityTraits = UIAccessibilityTraitButton;
     self.backgroundColor = UIColor.clearColor;
     self.layer.cornerRadius = 22;
     self.clipsToBounds = YES;
-    SGRGlassInside(self, (__bridge const void *)(self), 44);
+    if (circularGlass) SGRGlassInside(self, (__bridge const void *)(self), 44);
     _glyph = [[SGRGlyphView alloc] initWithSymbol:symbol pointSize:19 weight:UIImageSymbolWeightSemibold];
     _glyph.tintColor = SGRPrimary();
     [self addSubview:_glyph];
@@ -155,14 +159,27 @@ static void showHomeFilters(UIView *header) {
     [presenter presentViewController:menu animated:YES completion:nil];
 }
 
-static SGRHomeHeaderButton *headerButton(UIView *header, const void *key, NSString *symbol, NSString *title) {
+static SGRHomeHeaderButton *headerButton(UIView *header, const void *key, NSString *symbol, NSString *title, BOOL circularGlass) {
     SGRHomeHeaderButton *button = objc_getAssociatedObject(header, key);
     if (!button) {
-        button = [[SGRHomeHeaderButton alloc] initWithSymbol:symbol title:title];
+        button = [[SGRHomeHeaderButton alloc] initWithSymbol:symbol title:title circularGlass:circularGlass];
         objc_setAssociatedObject(header, key, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (button.superview != header) [header addSubview:button];
     return button;
+}
+
+static UIView *homeProfilePill(UIView *header) {
+    UIView *pill = objc_getAssociatedObject(header, &kHomePillKey);
+    if (!pill) {
+        pill = [UIView new];
+        pill.userInteractionEnabled = NO;
+        pill.layer.cornerRadius = 23;
+        pill.clipsToBounds = YES;
+        objc_setAssociatedObject(header, &kHomePillKey, pill, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (pill.superview != header) [header insertSubview:pill atIndex:0];
+    return pill;
 }
 
 static BOOL findHeader(UIView *view) {
@@ -211,15 +228,22 @@ static void layoutHeader(UIViewController *page) {
     UIFont *font = SGRFont(UIFontTextStyleLargeTitle, UIFontWeightBold, UIContentSizeCategoryLarge);
     if (![title.font isEqual:font]) title.font = font;
 
-    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home");
-    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, @"waveform", @"Riconosci una canzone con Shazam");
+    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home", NO);
+    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, @"waveform", @"Riconosci una canzone con Shazam", YES);
     filters.action = ^{ showHomeFilters(header); };
     shazam.action = ^{ SGMusicRecognitionStart(); };
-    filters.frame = CGRectMake(SGRSideMargin, round(CGRectGetMidY(stack.frame) - 22), 44, 44);
-    shazam.frame = CGRectMake(CGRectGetMaxX(filters.frame) + 8, filters.frame.origin.y, 44, 44);
-    CGFloat trailing = face ? CGRectGetMinX([stack convertRect:face.frame toView:header]) - SGRGrid : header.bounds.size.width - SGRSideMargin;
+    CGRect faceFrame = face ? [stack convertRect:face.frame toView:header]
+                            : CGRectMake(header.bounds.size.width - SGRSideMargin - 32, CGRectGetMidY(stack.frame) - 17, 32, 34);
+    CGRect pillFrame = CGRectMake(CGRectGetMinX(faceFrame) - 58, round(CGRectGetMidY(faceFrame) - 23),
+                                  CGRectGetWidth(faceFrame) + 66, 46);
+    UIView *pill = homeProfilePill(header);
+    if (!CGRectEqualToRect(pill.frame, pillFrame)) pill.frame = pillFrame;
+    SGRGlassCapsuleInside(pill, &kHomePillKey, pillFrame.size, NO);
+    filters.frame = CGRectMake(CGRectGetMinX(pillFrame) + 5, CGRectGetMidY(pillFrame) - 22, 44, 44);
+    shazam.frame = CGRectMake(CGRectGetMinX(pillFrame) - 52, filters.frame.origin.y, 44, 44);
+    CGFloat trailing = CGRectGetMinX(shazam.frame) - SGRGrid;
     CGFloat height = ceil(font.lineHeight);
-    CGFloat titleStart = CGRectGetMaxX(shazam.frame) + SGRGrid;
+    CGFloat titleStart = SGRSideMargin;
     CGRect frame = CGRectMake(titleStart, round(CGRectGetMidY(stack.frame) - height / 2), MAX(0, trailing - titleStart), height);
     if (!CGRectEqualToRect(title.frame, frame)) title.frame = frame;
 

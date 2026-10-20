@@ -3,6 +3,8 @@
 #import <objc/runtime.h>
 
 static char kOrientationHookKey;
+static char kControllerOrientationHookKey;
+static char kControllerAutorotationHookKey;
 static NSString *const kPlayerClass = @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController";
 static UIInterfaceOrientationMask sg_forcedOrientationMask;
 static UIDeviceOrientation sg_lastPhysicalOrientation;
@@ -42,6 +44,93 @@ static BOOL visibleControllerTreeContainsPlayer(UIViewController *controller, UI
 static BOOL playerVisibleInWindow(UIWindow *window) {
     if (!window) return NO;
     return visibleControllerTreeContainsPlayer(window.rootViewController, window, 0);
+}
+
+static void installControllerOrientationMethod(UIViewController *controller, SEL selector, const void *hookKey) {
+    if (!controller) return;
+    Class cls = [controller class];
+    if ([NSStringFromClass(cls) isEqualToString:kPlayerClass] || objc_getAssociatedObject(cls, hookKey)) return;
+
+    Method inherited = class_getInstanceMethod(cls, selector);
+    Method own = NULL;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == selector) {
+            own = methods[i];
+            break;
+        }
+    }
+    free(methods);
+
+    IMP original = own ? method_getImplementation(own)
+                       : inherited ? class_getMethodImplementation(class_getSuperclass(cls), selector) : NULL;
+    const char *types = inherited ? method_getTypeEncoding(inherited) : "Q@:";
+    IMP replacement = imp_implementationWithBlock(^UIInterfaceOrientationMask(UIViewController *target) {
+        UIWindow *window = target.viewIfLoaded.window;
+        if (window && playerVisibleInWindow(window)) {
+            return sg_forcedOrientationMask ?: UIInterfaceOrientationMaskAllButUpsideDown;
+        }
+        if (original) {
+            UIInterfaceOrientationMask (*callOriginal)(id, SEL) = (UIInterfaceOrientationMask (*)(id, SEL))original;
+            return callOriginal(target, selector);
+        }
+        return UIInterfaceOrientationMaskPortrait;
+    });
+    BOOL installed = own ? (method_setImplementation(own, replacement), YES)
+                         : class_addMethod(cls, selector, replacement, types);
+    if (!installed) {
+        SGLog(@"redesign player: could not install orientation policy on controller %@", NSStringFromClass(cls));
+        return;
+    }
+    objc_setAssociatedObject(cls, hookKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void installControllerAutorotationMethod(UIViewController *controller) {
+    if (!controller) return;
+    Class cls = [controller class];
+    if ([NSStringFromClass(cls) isEqualToString:kPlayerClass] || objc_getAssociatedObject(cls, &kControllerAutorotationHookKey)) return;
+    SEL selector = @selector(shouldAutorotate);
+    Method inherited = class_getInstanceMethod(cls, selector);
+    Method own = NULL;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == selector) {
+            own = methods[i];
+            break;
+        }
+    }
+    free(methods);
+
+    IMP original = own ? method_getImplementation(own)
+                       : inherited ? class_getMethodImplementation(class_getSuperclass(cls), selector) : NULL;
+    const char *types = inherited ? method_getTypeEncoding(inherited) : "B@:";
+    IMP replacement = imp_implementationWithBlock(^BOOL(UIViewController *target) {
+        UIWindow *window = target.viewIfLoaded.window;
+        if (window && playerVisibleInWindow(window)) return YES;
+        if (original) {
+            BOOL (*callOriginal)(id, SEL) = (BOOL (*)(id, SEL))original;
+            return callOriginal(target, selector);
+        }
+        return YES;
+    });
+    BOOL installed = own ? (method_setImplementation(own, replacement), YES)
+                         : class_addMethod(cls, selector, replacement, types);
+    if (installed) objc_setAssociatedObject(cls, &kControllerAutorotationHookKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void installOnController(UIViewController *controller) {
+    if (!controller || [NSStringFromClass([controller class]) isEqualToString:kPlayerClass]) return;
+    Class cls = [controller class];
+    BOOL needsInstall = !objc_getAssociatedObject(cls, &kControllerOrientationHookKey) ||
+                        !objc_getAssociatedObject(cls, &kControllerAutorotationHookKey);
+    installControllerOrientationMethod(controller, @selector(supportedInterfaceOrientations), &kControllerOrientationHookKey);
+    installControllerAutorotationMethod(controller);
+    if (needsInstall && objc_getAssociatedObject(cls, &kControllerOrientationHookKey) &&
+        objc_getAssociatedObject(cls, &kControllerAutorotationHookKey)) {
+        SGLog(@"redesign player: conditional rotation policy installed on %@", NSStringFromClass(cls));
+    }
 }
 
 #pragma mark - Richiesta di rotazione alla scena
@@ -208,6 +297,9 @@ void SGRPlayerRefreshOrientationPolicy(void) {
                     }
                 }
                 if (player) {
+                    for (UIViewController *ancestor = player; ancestor; ancestor = ancestor.parentViewController) {
+                        installOnController(ancestor);
+                    }
                     if (@available(iOS 16.0, *)) {
                         for (UIViewController *ancestor = player; ancestor; ancestor = ancestor.parentViewController) {
                             [ancestor setNeedsUpdateOfSupportedInterfaceOrientations];

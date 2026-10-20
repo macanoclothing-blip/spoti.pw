@@ -1,4 +1,4 @@
-// Artist redesign: the photo's field behind the whole page, and the tab strip gone.
+// Artist redesign: the photo's field behind the whole page, with Spotify's Music and Video tabs reachable.
 //
 // Tree (trees/clean/artist/01.txt:26-40). The page is a TemplateView holding two scroll views of the page's
 // size -- PCFFTabLayoutViewController.overlayScrollView and .containerScrollView -- and the container's stack:
@@ -7,11 +7,9 @@
 // under all of it, as the page's bottom-most view, and what Spotify paints the page, its lists and its rows
 // with -- the base surface -- is kept clear by the Kit's repaint hook while sgr_artistRoot is this page.
 //
-// The strip is Music, Video and Merch. The Music list is the page the Music app gives an artist: the videos
-// and the merch have their own tabs only so that they can be left out, so the strip goes and the Music list
-// stays. The strip sits in an AutoLayoutStackView, which traps when a view in it hides, so it goes invisible
-// and the pages under it move up into its place and stop paging, the way the native look's switch does it
-// (Native/Artist/Artist.x).
+// The strip is Music, Video and Merch. Keeping it reachable is necessary because Spotify supplies many
+// artists' videos only in the Video tab, not as a shelf in the Music list. The page and its video cells stay
+// Spotify's; the redesign keeps its own field behind them.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Artist.h"
@@ -97,22 +95,20 @@ static SGRArtworkField *fieldIn(UIView *page) {
 
 #pragma mark - the tab strip
 
-static void hideStrip(UIView *strip) {
-    if (strip.alpha != 0) strip.alpha = 0;
-    if (strip.userInteractionEnabled) strip.userInteractionEnabled = NO;
-    strip.accessibilityElementsHidden = YES;
-    CGFloat lift = CGRectGetHeight(strip.bounds);
+static void showStrip(UIView *strip) {
+    if (strip.alpha != 1) strip.alpha = 1;
+    if (!strip.userInteractionEnabled) strip.userInteractionEnabled = YES;
+    strip.accessibilityElementsHidden = NO;
     for (UIView *v in strip.superview.subviews) {
         if (![v isKindOfClass:UIScrollView.class]) continue;
         UIScrollView *pages = (UIScrollView *)v;
-        if (pages.scrollEnabled) pages.scrollEnabled = NO;
-        CGAffineTransform move = CGAffineTransformMakeTranslation(0, -lift);
-        if (!CGAffineTransformEqualToTransform(pages.transform, move)) pages.transform = move;
+        if (!pages.scrollEnabled) pages.scrollEnabled = YES;
+        if (!CGAffineTransformIsIdentity(pages.transform)) pages.transform = CGAffineTransformIdentity;
     }
     static BOOL logged;
     if (!logged) {
         logged = YES;
-        SGLog(@"redesign artist: the tab strip gone, the Music list up %.0fpt into its place", lift);
+        SGLog(@"redesign artist: Spotify's Music and Video tabs are reachable");
     }
 }
 
@@ -122,7 +118,7 @@ static void hideStrip(UIView *strip) {
     %orig;
     for (UIView *v = ((UIView *)self).superview; v; v = v.superview) {
         if (![v.accessibilityIdentifier isEqualToString:@"Components.UI.TabsSectionHeading"]) continue;
-        if (SGRArtistPageOf(v)) hideStrip(v);
+        if (SGRArtistPageOf(v)) showStrip(v);
         return;
     }
 }

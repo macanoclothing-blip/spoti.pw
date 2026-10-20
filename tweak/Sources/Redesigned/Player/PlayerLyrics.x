@@ -83,6 +83,7 @@ static const CGFloat kThumbAppearScale = 0.8;
 
 static char kOverlayKey, kPlateKey, kTitleKey, kWatcherKey, kRotateGlassKey;
 static char kLandscapeDurationFrameKey, kLandscapeControlsFrameKey;
+static char kLandscapeDurationMovedKey, kLandscapeControlsMovedKey;
 static BOOL sg_open;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
@@ -403,35 +404,34 @@ static CGRect baselineFrameForUnit(UIView *unit, UIView *host, const void *key) 
     if (!unit || !host) return CGRectZero;
     NSValue *saved = objc_getAssociatedObject(unit, key);
     if (saved) return saved.CGRectValue;
-    CGAffineTransform transform = unit.transform;
-    unit.transform = CGAffineTransformIdentity;
     CGRect frame = SGFrameIn(unit, host);
-    unit.transform = transform;
     objc_setAssociatedObject(unit, key, [NSValue valueWithCGRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return frame;
 }
 
 static void captureUnitFrame(UIView *unit, UIView *host, const void *key) {
-    if (!unit || !host) return;
-    unit.transform = CGAffineTransformIdentity;
+    if (!unit || !host || objc_getAssociatedObject(unit, key) || !CGAffineTransformIsIdentity(unit.transform)) return;
     CGRect frame = SGFrameIn(unit, host);
     objc_setAssociatedObject(unit, key, [NSValue valueWithCGRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-static void restoreUnitFrame(UIView *unit, UIView *host, const void *key) {
-    if (!unit || !host) return;
-    CGRect frame = baselineFrameForUnit(unit, host, key);
+static void restoreUnitFrame(UIView *unit, UIView *host, const void *frameKey, const void *movedKey) {
+    if (!unit || !host || ![objc_getAssociatedObject(unit, movedKey) boolValue]) return;
+    CGRect frame = baselineFrameForUnit(unit, host, frameKey);
     unit.transform = CGAffineTransformIdentity;
     unit.center = [unit.superview convertPoint:CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)) fromView:host];
+    objc_setAssociatedObject(unit, movedKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(unit, frameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-static void fitUnit(UIView *unit, UIView *host, CGRect target, const void *key) {
+static void fitUnit(UIView *unit, UIView *host, CGRect target, const void *frameKey, const void *movedKey) {
     if (!unit || !host || CGRectIsEmpty(target)) return;
-    CGRect source = baselineFrameForUnit(unit, host, key);
+    CGRect source = baselineFrameForUnit(unit, host, frameKey);
     if (CGRectIsEmpty(source)) return;
     unit.transform = CGAffineTransformMakeScale(target.size.width / source.size.width,
                                                  target.size.height / source.size.height);
     unit.center = [unit.superview convertPoint:CGPointMake(CGRectGetMidX(target), CGRectGetMidY(target)) fromView:host];
+    objc_setAssociatedObject(unit, movedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 static void placeTitleRow(SGRLyricsLayout l) {
@@ -441,11 +441,11 @@ static void placeTitleRow(SGRLyricsLayout l) {
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
     if (landscape && duration && controls) {
-        fitUnit(duration, sg_host, l.duration, &kLandscapeDurationFrameKey);
-        fitUnit(controls, sg_host, l.controls, &kLandscapeControlsFrameKey);
+        fitUnit(duration, sg_host, l.duration, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+        fitUnit(controls, sg_host, l.controls, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     } else {
-        restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey);
-        restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey);
+        restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+        restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     }
     [SGRowIn(info) layoutIfNeeded];
     CGFloat lift = sg_open ? l.lift : 0, shift = sg_open ? l.shift : 0;
@@ -795,6 +795,15 @@ static void replace(void) {
     SGRPlayerRefreshOrientationPolicy();
 }
 
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
+    UIView *duration = sg_duration.viewIfLoaded, *controls = sg_controls.viewIfLoaded;
+    restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+    restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
+    if (duration) objc_setAssociatedObject(duration, &kLandscapeDurationFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (controls) objc_setAssociatedObject(controls, &kLandscapeControlsFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    %orig;
+}
+
 - (void)viewDidLayoutSubviews {
     %orig;
     UIView *host = ((UIViewController *)self).viewIfLoaded;
@@ -848,7 +857,7 @@ static void durationLaidOut(UIViewController *unit) {
 static void controlsLaidOut(UIViewController *unit) {
     sg_controls = unit;
     captureUnitFrame(unit.viewIfLoaded, sg_host, &kLandscapeControlsFrameKey);
-    replace();
+    if (sg_open) replace();
 }
 
 %hook _TtC20NowPlaying_ModesImpl18HeaderElementsUnit

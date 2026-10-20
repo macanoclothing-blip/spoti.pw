@@ -42,7 +42,7 @@ static const CGFloat kBar = 100, kFade = 150;
 
 static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey, kShuffleKey;
 static char kTitleKey, kMetaKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
-static char kLogoArtistKey, kArtistInfoButtonKey;
+static char kLogoArtistKey, kArtistInfoButtonKey, kArtistInfoGlassKey;
 static NSHashTable<UIView *> *sg_artistHeaders;
 static void applyHeader(UIView *header);
 
@@ -50,9 +50,14 @@ static void applyHeader(UIView *header);
 @property (nonatomic, copy) NSString *artistName;
 @end
 
+@interface SGRArtistInfoSheet ()
+- (void)loadSummaryLanguage:(NSString *)language;
+@end
+
 @implementation SGRArtistInfoSheet {
     UIImageView *_hero;
     UILabel *_title, *_subtitle, *_facts, *_aboutTitle, *_about;
+    UIStackView *_sources;
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -83,6 +88,18 @@ static void applyHeader(UIView *header);
     [content addSubview:_aboutTitle];
     _about = [UILabel new]; _about.translatesAutoresizingMaskIntoConstraints = NO; _about.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; _about.textColor = [UIColor colorWithWhite:1 alpha:0.78]; _about.numberOfLines = 0; _about.text = @"Caricamento delle informazioni…";
     [content addSubview:_about];
+    _sources = [UIStackView new]; _sources.translatesAutoresizingMaskIntoConstraints = NO; _sources.axis = UILayoutConstraintAxisHorizontal; _sources.alignment = UIStackViewAlignmentCenter; _sources.distribution = UIStackViewDistributionFillEqually; _sources.spacing = 8;
+    NSArray<NSString *> *sourceNames = @[@"Wikipedia", @"Wikidata", @"MusicBrainz"];
+    for (NSInteger index = 0; index < 3; index++) {
+        UIButton *source = [UIButton buttonWithType:UIButtonTypeSystem];
+        [source setTitle:sourceNames[index] forState:UIControlStateNormal];
+        source.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+        source.accessibilityLabel = [NSString stringWithFormat:@"Apri la fonte %@", source.titleLabel.text];
+        source.tag = index;
+        [source addTarget:self action:@selector(openSource:) forControlEvents:UIControlEventTouchUpInside];
+        [_sources addArrangedSubview:source];
+    }
+    [content addSubview:_sources];
     UILayoutGuide *g = content.safeAreaLayoutGuide;
     [NSLayoutConstraint activateConstraints:@[
         [_hero.topAnchor constraintEqualToAnchor:g.topAnchor], [_hero.leadingAnchor constraintEqualToAnchor:content.leadingAnchor], [_hero.trailingAnchor constraintEqualToAnchor:content.trailingAnchor], [_hero.heightAnchor constraintEqualToConstant:230],
@@ -90,14 +107,32 @@ static void applyHeader(UIView *header);
         [_subtitle.topAnchor constraintEqualToAnchor:_title.bottomAnchor constant:6], [_subtitle.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_subtitle.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor],
         [_facts.topAnchor constraintEqualToAnchor:_subtitle.bottomAnchor constant:20], [_facts.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_facts.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor],
         [_aboutTitle.topAnchor constraintEqualToAnchor:_facts.bottomAnchor constant:24], [_aboutTitle.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor],
-        [_about.topAnchor constraintEqualToAnchor:_aboutTitle.bottomAnchor constant:10], [_about.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_about.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor], [_about.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-28]
+        [_about.topAnchor constraintEqualToAnchor:_aboutTitle.bottomAnchor constant:10], [_about.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_about.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor],
+        [_sources.topAnchor constraintEqualToAnchor:_about.bottomAnchor constant:18], [_sources.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_sources.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor], [_sources.heightAnchor constraintEqualToConstant:44], [_sources.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-20]
     ]];
     [self loadSummary];
 }
+- (void)openSource:(UIButton *)sender {
+    NSMutableCharacterSet *allowed = [NSCharacterSet.URLQueryAllowedCharacterSet mutableCopy];
+    [allowed removeCharactersInString:@"&=+#"];
+    NSString *query = [self.artistName stringByAddingPercentEncodingWithAllowedCharacters:allowed];
+    NSString *urlString = sender.tag == 0
+        ? [NSString stringWithFormat:@"https://it.wikipedia.org/w/index.php?search=%@", query ?: @""]
+        : (sender.tag == 1
+           ? [NSString stringWithFormat:@"https://www.wikidata.org/w/index.php?search=%@", query ?: @""]
+           : [NSString stringWithFormat:@"https://musicbrainz.org/search?query=%@&type=artist&method=advanced", query ?: @""]);
+    NSURL *url = [NSURL URLWithString:urlString];
+    if (url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
+}
 - (void)loadSummary {
+    [self loadSummaryLanguage:@"it"];
+}
+- (void)loadSummaryLanguage:(NSString *)language {
     NSString *slug = [self.artistName stringByReplacingOccurrencesOfString:@" " withString:@"_"];
-    NSString *escaped = [slug stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
-    NSURL *url = escaped.length ? [NSURL URLWithString:[NSString stringWithFormat:@"https://en.wikipedia.org/api/rest_v1/page/summary/%@", escaped]] : nil;
+    NSMutableCharacterSet *allowed = [NSCharacterSet.URLPathAllowedCharacterSet mutableCopy];
+    [allowed removeCharactersInString:@"/?#"];
+    NSString *escaped = [slug stringByAddingPercentEncodingWithAllowedCharacters:allowed];
+    NSURL *url = escaped.length ? [NSURL URLWithString:[NSString stringWithFormat:@"https://%@.wikipedia.org/api/rest_v1/page/summary/%@", language, escaped]] : nil;
     if (!url) { _about.text = @"Le informazioni non sono disponibili."; return; }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
     [request setValue:@"spoti.pw/1.0 (artist information)" forHTTPHeaderField:@"User-Agent"];
@@ -107,6 +142,10 @@ static void applyHeader(UIView *header);
         NSString *description = [json[@"description"] isKindOfClass:NSString.class] ? json[@"description"] : nil;
         NSString *wikidata = [json[@"wikibase_item"] isKindOfClass:NSString.class] ? json[@"wikibase_item"] : nil;
         NSString *imageURL = [json[@"originalimage"] isKindOfClass:NSDictionary.class] ? json[@"originalimage"][@"source"] : nil;
+        if (!extract.length && [language isEqualToString:@"it"]) {
+            [self loadSummaryLanguage:@"en"];
+            return;
+        }
         dispatch_async(dispatch_get_main_queue(), ^{
             if (!self.isViewLoaded || !self.view.window) return;
             if (extract.length) self->_about.text = extract;
@@ -457,13 +496,14 @@ static void applyHeader(UIView *header) {
         objc_setAssociatedObject(container, &kArtistInfoButtonKey, artistInfo, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [container addSubview:artistInfo];
     }
+    SGRGlassInside(artistInfo, &kArtistInfoGlassKey, 48);
     __weak UIView *weakHeader = header;
     artistInfo.onTap = ^{
         UIView *activeTitle = SGRFindByIdentifier(weakHeader, @"Encore.AdaptiveTitle", &kTitleKey);
         showArtistInfo(firstText(activeTitle) ?: firstText(keepBar(weakHeader)) ?: @"");
     };
-    artistInfo.frame = CGRectMake(round((container.bounds.size.width - 148) / 2 - 60),
-                                  container.bounds.size.height - SGRHeaderInfoBottom - SGRActionHeight + 2, 44, 44);
+    artistInfo.frame = CGRectMake(round((container.bounds.size.width - 148) / 2 - 62),
+                                  container.bounds.size.height - SGRHeaderInfoBottom - SGRActionHeight, 48, 48);
     NSString *logoArtist = objc_getAssociatedObject(header, &kLogoArtistKey);
     if (name.length && ![logoArtist isEqualToString:name]) {
         objc_setAssociatedObject(header, &kLogoArtistKey, [name copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
