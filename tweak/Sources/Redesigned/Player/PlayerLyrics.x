@@ -271,6 +271,7 @@ typedef struct {
     CGFloat lift;     // how far the title row rises
     CGFloat shift;    // how far the title slides right to clear the thumbnail, 0 when it sits under it
     CGFloat titleMaxWidth;
+    CGFloat titleScale;
 } SGRLyricsLayout;
 
 // What a view's frame would be with the translation this file put on it left out.
@@ -309,6 +310,8 @@ static SGRLyricsLayout layoutIn(UIView *host) {
         l.lift = CGRectGetMaxY(l.thumb) + 12 - CGRectGetMinY(row);
         l.shift = 0;
         l.titleMaxWidth = leftWidth - 2 * SGRSideMargin;
+        CGFloat titleWidth = title ? title.bounds.size.width : 0;
+        l.titleScale = titleWidth > 0 ? MIN(1, l.titleMaxWidth / titleWidth) : 1;
         CGFloat controlsWidth = leftWidth - 2 * SGRSideMargin;
         l.duration = CGRectMake(left, CGRectGetMaxY(l.thumb) + 12 + row.size.height + 4,
                                 controlsWidth, durationHeight);
@@ -453,7 +456,9 @@ static void placeTitleRow(SGRLyricsLayout l) {
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
     UIView *title = sg_titleElement;
     if (!title) return;
-    CGAffineTransform slide = CGAffineTransformMakeTranslation(round(shift), 0);
+    CGFloat scale = sg_open && landscape ? MAX(0.62, l.titleScale) : 1;
+    CGAffineTransform slide = CGAffineTransformMakeScale(scale, scale);
+    slide.tx = round(shift);
     if (!CGAffineTransformEqualToTransform(title.transform, slide)) title.transform = slide;
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
     CGFloat room = CGFLOAT_MAX;
@@ -598,6 +603,11 @@ BOOL SGRPlayerLyricsAvailable(void) {
     return track != nil && (SGKaraokeLinesForTrack(track) != nil || SGSingAvailable());
 }
 
+BOOL SGRPlayerLyricsCanOpen(void) {
+    // A current track is enough to open the lyrics surface and request its text on demand.
+    return SGKaraokePlayingTrack() != nil;
+}
+
 BOOL SGRPlayerLyricsOpen(void) {
     return sg_open;
 }
@@ -660,13 +670,9 @@ static void setOpen(BOOL open, BOOL animated) {
         SGLog(@"redesign player: the lyrics have nowhere to go (stage %.0fx%.0f, lift %.0f)", l.stage.size.width, l.stage.size.height, l.lift);
         return;
     }
-    // The thumbnail is the Kit's picture drawn again, and Spotify's cover goes as it appears: without a
-    // picture there would be a hole where the cover was, so the cover stays and the lyrics wait.
+    // The thumbnail is the Kit's picture drawn again. If it has not loaded yet, leave Spotify's cover
+    // visible and still open the lyrics; the artwork notification fills the thumbnail when it arrives.
     UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
-    if (open && !picture) {
-        SGLog(@"redesign player: no artwork read yet, the lyrics stay down");
-        return;
-    }
     // The controls come back first: the thumbnail flying back to the cover is one of them.
     if (!open) {
         setAlone(NO, animated);
@@ -690,8 +696,8 @@ static void setOpen(BOOL open, BOOL animated) {
     overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || !open);
     if (open) {
         SGRVinylLyricsControlsDidChange(1);
-        overlay.thumb.alpha = inPlace ? 0 : 1;
-        overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
+        overlay.thumb.alpha = (inPlace || !picture) ? 0 : 1;
+        overlay.cover.image = picture;
         // Vinyl mode: replace the cover thumbnail with a mini spinning vinyl disc.
         SGRVinylInstallMiniDisc(overlay.thumb.face, overlay.cover);
         overlay.stage.alpha = 0;
@@ -702,12 +708,12 @@ static void setOpen(BOOL open, BOOL animated) {
         // Spotify's cover goes the moment the redesign's own takes its place: the same picture at the
         // same size with the same corners, so there is nothing to see in the swap. Coming back it waits
         // for the thumbnail to land on it, or the two would be on screen at once, one of them half size.
-        SGRPlayerCoverList().alpha = 0;
+        if (picture) SGRPlayerCoverList().alpha = 0;
     }
 
     void (^move)(void) = ^{
         overlay.thumb.transform = open ? away : (vinylClosing ? vinylClosingTransform : full);
-        if (inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : 0;
+        if (picture && inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : 0;
         overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || open);
         SGRVinylLyricsDidChange(open, sg_info.viewIfLoaded);
         placeTitleRow(l);
@@ -748,7 +754,11 @@ static void setOpen(BOOL open, BOOL animated) {
 }
 
 void SGRPlayerToggleLyrics(void) {
-    if (!sg_open && !SGRPlayerLyricsAvailable()) return;
+    if (!sg_open) {
+        NSString *track = SGKaraokePlayingTrack();
+        if (!track) return;
+        SGKaraokeRequestLyrics(track);
+    }
     setOpen(!sg_open, YES);
 }
 
@@ -931,18 +941,14 @@ static void controlsLaidOut(UIViewController *unit) {
 
 #pragma mark - the track changing under them
 
-// Lyrics arrive a moment after the track does: the glyph is asked again while they would be coming, and
-// the lines already up wait out the same grace before they go. Not in the background, where Spotify may
-// not ask for lyrics until the app is back, so coming back starts it over.
+// Lyrics arrive a moment after the track does: refresh the glyph while they are being fetched, and keep
+// the lyrics surface open while sources answer. Not in the background, where Spotify may not ask until
+// the app is back, so coming back starts the refresh over.
 static void awaitLyrics(void) {
     for (NSNumber *delay in @[@1, @(kLyricsGrace)]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return;
             SGRPlayerLyricsChanged();
-            if (sg_open && delay.doubleValue >= kLyricsGrace && !SGRPlayerLyricsAvailable()) {
-                SGLog(@"redesign player: no lyrics for the track that came on, the cover is back");
-                setOpen(NO, YES);
-            }
         });
     }
 }
@@ -981,6 +987,8 @@ static void singAvailabilityChanged(void) {
     NSString *track = SGURIString(state.track.URI);
     if (!track || [track isEqualToString:_track]) return;
     _track = track;
+    SGKaraokeRequestLyrics(SGKaraokePlayingTrack());
+    SGRPlayerLyricsChanged();
     awaitLyrics();
 }
 
@@ -1013,7 +1021,13 @@ static SGRPlayerLyricsWatcher *sg_watcher;
     [NSNotificationCenter.defaultCenter addObserverForName:SGRNowPlayingArtworkDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
         if (!sg_open) return;
         SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
-        overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
+        UIImage *artwork = SGRNowPlayingArtwork(NULL, NULL);
+        if (!overlay || !artwork) return;
+        overlay.cover.image = artwork;
+        SGRAnimate(SGRMotionFade, ^{
+            overlay.thumb.alpha = 1;
+            SGRPlayerCoverList().alpha = 0;
+        }, nil);
     }];
     SGRequireClasses(@[
         @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController",

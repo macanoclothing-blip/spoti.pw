@@ -108,6 +108,7 @@ void SGRPlayerCoversFollowClip(NSTimeInterval duration);
 
 // Whether the playing track has lyrics the player can show.
 BOOL SGRPlayerLyricsAvailable(void);
+BOOL SGRPlayerLyricsCanOpen(void);
 // Whether the player is showing them.
 BOOL SGRPlayerLyricsOpen(void);
 // Shows them, or puts the cover back; does nothing when there are none to show.

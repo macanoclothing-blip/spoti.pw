@@ -7,8 +7,8 @@
 // transform survives the stack view laying them out again, and moving the holder keeps its touches
 // inside its own bounds. The device name goes transparent, since the glyph alone sits in the middle.
 // Spotify has no lyrics control down here, so that one is the Kit's glyph button, and it turns the
-// lyrics in the player on and off (PlayerLyrics.x): filled while they are up, dimmed and dead for a
-// track that has none.
+// lyrics in the player on and off (PlayerLyrics.x): filled while they are up, dimmed when closed, and
+// enabled whenever a track is active so the first tap can request its lyrics.
 //
 // The row sits lower than Spotify puts it, just over the home indicator the way the Music app's does
 // (issue #54): the footer unit's view is translated down, the controls follow it part of the way, and a
@@ -70,7 +70,7 @@ static CGFloat moveTo(UIView *arranged, UIView *view, CGPoint point, UIView *hos
 void SGRPlayerLyricsChanged(void) {
     SGRGlyphButton *glyph = sg_lyricsGlyph;
     if (!glyph) return;
-    BOOL enabled = SGRPlayerLyricsAvailable() || SGRPlayerLyricsOpen(), open = SGRPlayerLyricsOpen();
+    BOOL enabled = SGRPlayerLyricsCanOpen() || SGRPlayerLyricsOpen(), open = SGRPlayerLyricsOpen();
     BOOL wasOpen = [glyph.glyph.symbol isEqualToString:kLyricsSymbolOpen];
     if (glyph.enabled == enabled && wasOpen == open) return;
     // Lyrics turn up once the player has fetched them, well after the footer laid out: a fade, not a pop.
