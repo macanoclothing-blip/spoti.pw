@@ -7,7 +7,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/gen" "$OUT/PlayerHarness.app"
 
 for f in Redesigned/Player/PlayerLyrics.x Redesigned/Player/PlayerArtwork.x Redesigned/Player/PlayerFooter.x \
          Redesigned/Player/PlayerControls.x Redesigned/Player/PlayerScroll.x Redesigned/Player/PlayerField.x \
-         Redesigned/Player/PlayerAnimated.x Redesigned/Kit/SGRBridges.x; do
+         Redesigned/Player/PlayerAnimated.x Redesigned/Player/PlayerVolume.x Redesigned/Kit/SGRBridges.x; do
     name=$(basename "$f" .x)
     "$THEOS/bin/logos.pl" -c generator=internal "$SRC/$f" > "$OUT/gen/$name.m"
 done

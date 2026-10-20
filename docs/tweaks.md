@@ -277,13 +277,15 @@ Redesigned:
                   scripts/merge-local-network-plist.py also adds landscape to Spotify's device-specific orientation
                   keys, which take precedence over the generic plist key. Device-orientation changes request a
                   matching scene geometry update while the player is visible. In landscape the lyrics layout uses
-                  a cover column and a separate lyrics column; Vinyl mode scales the disc to the shorter screen
-                  dimension and places its metadata beside it.
+                  a cover and track-details column on the left and a separate lyrics column on the right; a glass
+                  rotate control can request the opposite orientation when device rotation is unavailable. Vinyl
+                  mode scales the disc to the shorter screen dimension and places its metadata beside it.
                   Player/PlayerVolume.x places iOS's native MPVolumeView as a non-arranged overlay below the
                   transport controls and above the lyrics, Connect and queue row, flanked by low and high speaker
                   symbols like the Music app's volume row in the standard redesign, with a flat two-tone track and
                   no thumb. Its frame is recalculated from the controls and footer after layout, and MPVolumeView
-                  gets its fitted height rather than relying on adjustments to its private slider. Vinyl mode keeps
+                  gets its fitted height rather than relying on adjustments to its private slider; the row is hidden
+                  whenever a gap with clearance from both controls and footer is unavailable. Vinyl mode keeps
                   its own retro slider styling, raises the volume row and lowers the progress row. The standard
                   player lifts the transport controls only when the available gap can fit the volume row; otherwise
                   it keeps the normal controls layout. The slider adjusts the iPhone's output

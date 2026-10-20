@@ -16,8 +16,9 @@
 //     PlayerFooter.x     share gone, lyrics, Connect and queue as one row of three glyphs
 //     PlayerCards.x      every card under the player collapsed, so the list closes up
 //     PlayerScroll.x     the list held at its top, so the player is one screen and cannot be scrolled up
-//     PlayerLyrics.x     the lyrics in the player: the cover as a thumbnail, the title up beside it,
-//                        and after a few seconds untouched the lines alone on the whole player
+//     PlayerLyrics.x     the lyrics in the player: in portrait the cover is a thumbnail, in landscape
+//                        the cover and metadata occupy the left with lines on the right; a control can
+//                        request the opposite orientation when rotation is unavailable
 //     PlayerGestures.x   the gestures' hookup
 //     PlayerMorph.x      the open and close grown out of the now playing bar's card, the cover flown
 //     PlayerMenu.x       the ⋯ opening a menu the way the Music app draws one (SGRPlayerMenu.h), over

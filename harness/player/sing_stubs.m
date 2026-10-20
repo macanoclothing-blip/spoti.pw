@@ -3,7 +3,7 @@
 #import "Shared/Sing/SGSingController.h"
 NSString *const SGSingDidChangeNotification = @"spotifyglass.singChanged";
 static SGSingState state = SGSingIdle;
-static float level = SGSingMinimumVocalLevel, reduced = SGSingMinimumVocalLevel;
+static float level = SGSingMinimumLevel, reduced = SGSingMinimumLevel;
 static NSUInteger generation;
 SGSingState SGSingCurrentState(void) {
     return [NSUserDefaults.standardUserDefaults boolForKey:@"sing-ui"] ? state : SGSingUnavailable;

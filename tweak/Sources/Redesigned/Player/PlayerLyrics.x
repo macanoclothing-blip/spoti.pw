@@ -56,13 +56,14 @@
 #import "PlayerVinyl.h"
 #import "PlayerOrientation.h"
 
-static const CGFloat kThumbSide = 72;          // the cover once the lyrics are up
+static const CGFloat kThumbSide = 72;          // the portrait thumbnail once the lyrics are up
 static const CGFloat kThumbGap = 16;           // between the thumbnail and the title beside it
 static const CGFloat kTitleGap = 12;           // between the title and the controls at the trailing edge
 static const CGFloat kTitleFade = 20;          // over how much of its end a title too long to fit fades out
 static const CGFloat kThumbTop = 8;            // below the top of the artwork band
 static const CGFloat kLyricsTop = 20;          // between the title row and the first line
 static const CGFloat kLyricsBottom = 8;        // above the progress bar
+static const CGFloat kRotateButtonSide = 44, kRotateButtonGap = 8;
 // The lines are a surface arriving, not something moving: they come up from just under full size as the
 // room for them opens, and go at once when it closes. An exit the eye waits through reads as a stall.
 static const CGFloat kLyricsEnterScale = 0.96;
@@ -80,7 +81,7 @@ static const CGFloat kThumbPressScale = 0.94, kThumbPressAlpha = 0.8;
 // Over a clip the thumbnail grows in from this in its place, and shrinks back to it going.
 static const CGFloat kThumbAppearScale = 0.8;
 
-static char kOverlayKey, kPlateKey, kTitleKey, kWatcherKey;
+static char kOverlayKey, kPlateKey, kTitleKey, kWatcherKey, kRotateGlassKey;
 static BOOL sg_open;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
@@ -154,6 +155,7 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
 @property (nonatomic, readonly) UIView *stage;       // holds the lines' view alone
 @property (nonatomic, readonly) UILabel *empty;      // Sing's "no lyrics"
 @property (nonatomic, readonly) SGRKaraokeView *lyrics;
+@property (nonatomic, readonly) SGRGlyphButton *rotate;
 @end
 
 @implementation SGRPlayerLyricsOverlay {
@@ -162,6 +164,7 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
     UIImageView *_cover;
     UILabel *_empty;
     SGRKaraokeView *_lyrics;
+    SGRGlyphButton *_rotate;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -186,6 +189,10 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
     [_stage addSubview:_empty];
     [self addSubview:_stage];
     [self addSubview:_thumb];
+    _rotate = [SGRGlyphButton buttonWithSymbol:@"rotate.left" pointSize:20 title:@"Rotate screen"];
+    _rotate.accessibilityLabel = @"Rotate screen";
+    _rotate.onTap = ^{ SGRPlayerToggleOrientation(); };
+    [self addSubview:_rotate];
     return self;
 }
 
@@ -193,6 +200,7 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
 - (UIImageView *)cover { return _cover; }
 - (UIView *)stage { return _stage; }
 - (UILabel *)empty { return _empty; }
+- (SGRGlyphButton *)rotate { return _rotate; }
 
 // The lines seek when they are tapped and the thumbnail puts the cover back, so everywhere else the
 // overlay would only swallow touches: a view that takes touches does, even with nothing on it.
@@ -255,8 +263,10 @@ typedef struct {
     CGRect thumb;     // where it goes
     CGRect stage;     // where the lines go
     CGRect room;      // where they go with the controls away, which is the stage's frame throughout
+    CGRect rotate;    // the orientation control, outside the lyric lines' reading area
     CGFloat lift;     // how far the title row rises
     CGFloat shift;    // how far the title slides right to clear the thumbnail, 0 when it sits under it
+    CGFloat titleMaxWidth;
 } SGRLyricsLayout;
 
 // What a view's frame would be with the translation this file put on it left out.
@@ -276,24 +286,32 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     UIEdgeInsets safe = host.window.safeAreaInsets;
     if (host.bounds.size.width > host.bounds.size.height) {
         CGFloat leftWidth = floor(area.size.width * 0.42);
-        CGFloat side = MIN(kThumbSide, MIN(leftWidth - 2 * SGRSideMargin, area.size.height - safe.top - safe.bottom - 16));
+        CGFloat leftBottom = MIN(CGRectGetMaxY(area), CGRectGetMinY(bar)) - safe.bottom;
+        CGFloat roomForArt = leftBottom - CGRectGetMinY(area) - row.size.height - 28;
+        CGFloat side = MIN(leftWidth - 2 * SGRSideMargin,
+                           MIN(area.size.height - safe.top - safe.bottom - 16, roomForArt));
         if (side < 120) return l;
         CGFloat left = CGRectGetMinX(area) + (leftWidth - side) / 2;
-        CGFloat top = CGRectGetMinY(area) + (area.size.height - side) / 2;
+        CGFloat top = CGRectGetMinY(area) + MAX(8, (area.size.height - side) / 2);
         l.cover = cover;
         l.thumb = CGRectMake(left, top, side, side);
         CGFloat column = CGRectGetMinX(area) + leftWidth + SGRGrid;
-        CGFloat titleTop = MAX(CGRectGetMinY(area) + safe.top + 8, top);
+        CGFloat titleTop = CGRectGetMaxY(l.thumb) + 12;
         l.lift = titleTop - CGRectGetMinY(row);
-        l.shift = title ? column - CGRectGetMinX(untransformed(title, host)) : 0;
-        CGFloat lines = titleTop + row.size.height + kLyricsTop;
-        CGFloat stageBottom = CGRectGetMinY(bar) - kLyricsBottom;
+        l.shift = 0;
+        l.titleMaxWidth = leftWidth - 2 * SGRSideMargin;
+        CGFloat buttonTop = MAX(CGRectGetMinY(area) + kRotateButtonGap, safe.top + kRotateButtonGap);
+        CGFloat lines = buttonTop + kRotateButtonSide + kRotateButtonGap;
+        CGFloat stageBottom = MIN(CGRectGetMinY(bar) - kLyricsBottom, host.bounds.size.height - safe.bottom - kLyricsBottom);
         l.stage = CGRectMake(column, lines, CGRectGetMaxX(area) - column, stageBottom - lines);
+        l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
+                              buttonTop, kRotateButtonSide, kRotateButtonSide);
         UIView *header = sg_header.viewIfLoaded;
         CGFloat roomTop = MIN(header ? CGRectGetMinY(SGFrameIn(header, host)) : safe.top, CGRectGetMinY(l.stage));
         CGFloat roomBottom = MAX(host.bounds.size.height - safe.bottom, CGRectGetMaxY(l.stage));
         l.room = CGRectMake(column, roomTop, l.stage.size.width, roomBottom - roomTop);
-        l.ok = l.stage.size.width > 140 && l.stage.size.height > 80 && l.lift < 0;
+        l.ok = l.stage.size.width > 140 && l.stage.size.height > 80 &&
+            titleTop + row.size.height < CGRectGetMinY(bar) - kLyricsBottom;
         return l;
     }
     // The thumbnail takes the title's own leading edge, so the two line up down the page.
@@ -305,7 +323,10 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     l.lift = top - CGRectGetMinY(row);
     l.shift = title ? kThumbSide + kThumbGap : 0;
     CGFloat lines = MAX(CGRectGetMaxY(l.thumb), top + row.size.height) + kLyricsTop;
-    l.stage = CGRectMake(CGRectGetMinX(area), lines, area.size.width, CGRectGetMinY(bar) - kLyricsBottom - lines);
+    l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
+                          lines, kRotateButtonSide, kRotateButtonSide);
+    CGFloat stageTop = lines + kRotateButtonSide + kRotateButtonGap;
+    l.stage = CGRectMake(CGRectGetMinX(area), stageTop, area.size.width, CGRectGetMinY(bar) - kLyricsBottom - stageTop);
     // With the controls away: from the header row's top, just under the status bar, down to the home
     // indicator. The lines fade out at both ends, so nothing needs clearing beyond that.
     UIView *header = sg_header.viewIfLoaded;
@@ -384,6 +405,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
     CGFloat room = CGFLOAT_MAX;
     if (sg_open) room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift);
+    if (sg_open && l.titleMaxWidth > 0) room = MIN(room, l.titleMaxWidth);
     clipTitle(title, room);
 }
 
@@ -547,6 +569,13 @@ static void place(SGRPlayerLyricsOverlay *overlay, UIView *host, SGRLyricsLayout
     overlay.stage.bounds = (CGRect){CGPointZero, stage.size};
     overlay.stage.center = CGPointMake(CGRectGetMidX(stage), CGRectGetMidY(stage));
     overlay.empty.frame = UIEdgeInsetsInsetRect(overlay.stage.bounds, bandOf(l, NO));
+    overlay.rotate.bounds = CGRectMake(0, 0, kRotateButtonSide, kRotateButtonSide);
+    CGRect rotate = [overlay convertRect:l.rotate fromView:host];
+    overlay.rotate.center = CGPointMake(CGRectGetMidX(rotate), CGRectGetMidY(rotate));
+    SGRGlassInside(overlay.rotate, &kRotateGlassKey, kRotateButtonSide);
+    overlay.rotate.accessibilityLabel = host.bounds.size.width > host.bounds.size.height
+        ? @"Rotate to portrait" : @"Rotate to landscape";
+    [overlay bringSubviewToFront:overlay.rotate];
 }
 
 // Where the thumbnail's view has to go to land on `l.thumb`, as a transform about its own centre: the
@@ -723,6 +752,7 @@ static void replace(void) {
 
 // The bar morphs back out of a full size cover as the player closes, so the thumbnail is put away first.
 - (void)viewWillDisappear:(BOOL)animated {
+    SGRPlayerClearOrientationOverride();
     if (sg_open) setOpen(NO, NO);
     %orig;
 }

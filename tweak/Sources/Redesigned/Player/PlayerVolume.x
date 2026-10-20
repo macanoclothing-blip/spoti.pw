@@ -7,6 +7,7 @@ static const CGFloat kVolumeRowHeight = 34;
 static const CGFloat kVolumeGlyphSize = 16;
 static const CGFloat kVolumeGlyphGap = 8;
 static const CGFloat kVolumeSideInset = 24;
+static const CGFloat kVolumeControlClearance = 10;
 static char kVolumeRowKey;
 
 static UIImage *volumeTrackImage(UIColor *color) {
@@ -100,14 +101,6 @@ static UIImageView *volumeGlyph(NSString *symbol) {
 
 @end
 
-static UIView *playButtonIn(UIView *root) {
-    __block UIView *button = nil;
-    SGForEachView(root, ^(UIView *view) {
-        if (!button && [view.accessibilityIdentifier isEqualToString:@"SPTNowPlayingPlayButton"]) button = view;
-    });
-    return button;
-}
-
 BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     if (!stack) return NO;
     SGRVolumeRow *volume = objc_getAssociatedObject(stack, &kVolumeRowKey);
@@ -121,14 +114,10 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         return NO;
     }
 
-    UIView *play = playButtonIn(controls);
     CGRect controlsFrame = [controls convertRect:controls.bounds toView:stack];
-    CGFloat top = play ? CGRectGetMaxY([play convertRect:play.bounds toView:stack])
-                       : CGRectGetMaxY(controlsFrame);
-    CGFloat footerMiddle = [footer convertPoint:CGPointMake(CGRectGetMidX(footer.bounds),
-                                                            CGRectGetMidY(footer.bounds))
-                                         toView:stack].y;
-    CGFloat bottom = footerMiddle - kVolumeGlyphSize / 2;
+    CGRect footerFrame = [footer convertRect:footer.bounds toView:stack];
+    CGFloat top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+    CGFloat bottom = CGRectGetMinY(footerFrame) - kVolumeControlClearance;
     CGFloat room = bottom - top;
     if (room < kVolumeRowHeight) {
         volume.alpha = 0;
@@ -138,6 +127,10 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
     CGRect frame = CGRectMake(kVolumeSideInset, round((top + bottom - kVolumeRowHeight) / 2),
                               width, kVolumeRowHeight);
+    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame)) {
+        volume.alpha = 0;
+        return NO;
+    }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;
     if (volume.alpha != 1) volume.alpha = 1;
     return YES;

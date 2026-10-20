@@ -10,6 +10,9 @@
 #import "Shared/LockScreenArtwork/SGCanvas.h"
 #import "Headers/SPTPlayer.h"
 #import "Shared/Player/PlayerState.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
+#import "Redesigned/Player/PlayerOrientation.h"
+#import "Redesigned/Player/PlayerVinyl.h"
 
 #pragma mark - SGRAccent.x, SGRRepaint.x
 
@@ -156,6 +159,30 @@ void SGLyricsOpenCredit(SGLyricsCredit *credit) {}
 BOOL SGLyricsActive(void) { return NO; }
 void SGLyricsMeaningsFor(NSString *trackID, NSArray *lines, void (^done)(NSDictionary *byLine)) {}
 void SGRShowMeanings(NSString *lineText, NSArray *meanings) {}
+
+void SGRPlayerToggleOrientation(void) {}
+void SGRPlayerClearOrientationOverride(void) {}
+void SGRPlayerRefreshOrientationPolicy(void) {}
+
+NSNotificationName const SGLocalArtworkDidChangeNotification = @"harness.localArtworkDidChange";
+BOOL SGLocalArtworkIsLocalTrack(NSString *uri) { (void)uri; return NO; }
+NSString *SGLocalArtworkCoverURL(NSString *uri) { (void)uri; return nil; }
+UIImage *SGLocalArtworkCachedCover(NSString *uri) { (void)uri; return nil; }
+void SGLocalArtworkLoadCover(NSString *uri, void (^completion)(UIImage *image)) {
+    (void)uri;
+    completion(nil);
+}
+
+void SGRVinylInstallMiniDisc(UIView *face, UIImageView *cover) { (void)face; (void)cover; }
+void SGRVinylRemoveMiniDisc(void) {}
+BOOL SGRVinylLyricsClosingTransform(UIView *thumbnail, CGAffineTransform *transform) {
+    (void)thumbnail;
+    (void)transform;
+    return NO;
+}
+void SGRVinylLyricsDidChange(BOOL open, UIView *informationUnit) { (void)open; (void)informationUnit; }
+void SGRVinylLyricsControlsDidChange(CGFloat alpha) { (void)alpha; }
+void SGRVinylLyricsDidSettleClosed(void) {}
 
 #pragma mark - Shared/Lyrics/KaraokeSource.x
 

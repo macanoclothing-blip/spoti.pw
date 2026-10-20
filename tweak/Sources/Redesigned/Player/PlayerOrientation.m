@@ -4,6 +4,17 @@
 
 static char kOrientationHookKey;
 static NSString *const kPlayerClass = @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController";
+static UIInterfaceOrientationMask sg_forcedOrientationMask;
+static UIDeviceOrientation sg_lastPhysicalOrientation;
+
+static BOOL physicalOrientationIsValid(UIDeviceOrientation orientation) {
+    return UIDeviceOrientationIsPortrait(orientation) || UIDeviceOrientationIsLandscape(orientation);
+}
+
+static UIInterfaceOrientationMask maskForPhysicalOrientation(UIDeviceOrientation orientation) {
+    return UIDeviceOrientationIsLandscape(orientation) ? UIInterfaceOrientationMaskLandscape
+                                                       : UIInterfaceOrientationMaskPortrait;
+}
 
 #pragma mark - Ricerca del player nell'albero dei controller
 
@@ -39,14 +50,16 @@ static void requestWindowOrientationIfNeeded(UIWindow *window) {
     if (@available(iOS 16.0, *)) {
         UIWindowScene *windowScene = window.windowScene;
         UIDeviceOrientation deviceOrientation = UIDevice.currentDevice.orientation;
-        BOOL deviceLandscape = UIDeviceOrientationIsLandscape(deviceOrientation);
-        BOOL devicePortrait = UIDeviceOrientationIsPortrait(deviceOrientation);
+        UIInterfaceOrientationMask requested = sg_forcedOrientationMask;
+        if (!requested && physicalOrientationIsValid(deviceOrientation)) {
+            requested = maskForPhysicalOrientation(deviceOrientation);
+        }
+        if (!requested) return;
+        BOOL deviceLandscape = (requested & UIInterfaceOrientationMaskLandscape) != 0;
         UIInterfaceOrientation interfaceOrientation = windowScene.interfaceOrientation;
         BOOL orientationMismatch = (deviceLandscape && !UIInterfaceOrientationIsLandscape(interfaceOrientation)) ||
-                                   (devicePortrait && !UIInterfaceOrientationIsPortrait(interfaceOrientation));
+                                   (!deviceLandscape && !UIInterfaceOrientationIsPortrait(interfaceOrientation));
         if (windowScene && orientationMismatch) {
-            UIInterfaceOrientationMask requested = deviceLandscape ? UIInterfaceOrientationMaskLandscape
-                                                                  : UIInterfaceOrientationMaskPortrait;
             UIWindowSceneGeometryPreferencesIOS *preferences =
                 [[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:requested];
             [windowScene requestGeometryUpdateWithPreferences:preferences errorHandler:^(NSError *error) {
@@ -93,7 +106,9 @@ static void installOnDelegate(id delegate) {
                 if (checkedWindow) break;
             }
         }
-        if (playerVisibleInWindow(checkedWindow)) return UIInterfaceOrientationMaskAllButUpsideDown;
+        if (playerVisibleInWindow(checkedWindow)) {
+            return sg_forcedOrientationMask ?: UIInterfaceOrientationMaskAllButUpsideDown;
+        }
         if (original) {
             UIInterfaceOrientationMask (*callOriginal)(id, SEL, UIApplication *, UIWindow *) =
                 (UIInterfaceOrientationMask (*)(id, SEL, UIApplication *, UIWindow *))original;
@@ -115,6 +130,39 @@ static void installOnDelegate(id delegate) {
 void SGRPlayerInstallOrientationPolicy(void) {
     NSCAssert(NSThread.isMainThread, @"Orientation policy must be installed on the main thread");
     installOnDelegate(UIApplication.sharedApplication.delegate);
+}
+
+void SGRPlayerToggleOrientation(void) {
+    NSCAssert(NSThread.isMainThread, @"Orientation changes must be requested on the main thread");
+    UIWindow *window = nil;
+    for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (![scene isKindOfClass:UIWindowScene.class]) continue;
+        for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+            if (candidate.isKeyWindow && playerVisibleInWindow(candidate)) {
+                window = candidate;
+                break;
+            }
+        }
+        if (window) break;
+    }
+    if (!window) return;
+
+    UIInterfaceOrientation orientation = window.windowScene.interfaceOrientation;
+    BOOL landscape = UIInterfaceOrientationIsPortrait(orientation);
+    if (!UIInterfaceOrientationIsPortrait(orientation) && !UIInterfaceOrientationIsLandscape(orientation)) {
+        landscape = window.bounds.size.height >= window.bounds.size.width;
+    }
+    sg_forcedOrientationMask = landscape ? UIInterfaceOrientationMaskLandscape : UIInterfaceOrientationMaskPortrait;
+    UIDeviceOrientation physical = UIDevice.currentDevice.orientation;
+    if (physicalOrientationIsValid(physical)) sg_lastPhysicalOrientation = physical;
+    SGRPlayerRefreshOrientationPolicy();
+    SGLog(@"redesign player: lyrics requested %@ orientation", landscape ? @"landscape" : @"portrait");
+}
+
+void SGRPlayerClearOrientationOverride(void) {
+    if (!sg_forcedOrientationMask) return;
+    sg_forcedOrientationMask = 0;
+    SGRPlayerRefreshOrientationPolicy();
 }
 
 void SGRPlayerRefreshOrientationPolicy(void) {
@@ -152,6 +200,7 @@ void SGRPlayerRefreshOrientationPolicy(void) {
                 }
             }
         }
+        sg_forcedOrientationMask = 0;
     });
 }
 
@@ -168,6 +217,16 @@ __attribute__((constructor)) static void SGRPlayerOrientationStart(void) {
         [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue
                         usingBlock:^(NSNotification *note) { (void)note; SGRPlayerInstallOrientationPolicy(); }];
         [center addObserverForName:UIDeviceOrientationDidChangeNotification object:nil queue:NSOperationQueue.mainQueue
-                        usingBlock:^(NSNotification *note) { (void)note; SGRPlayerRefreshOrientationPolicy(); }];
+                        usingBlock:^(NSNotification *note) {
+            (void)note;
+            UIDeviceOrientation physical = UIDevice.currentDevice.orientation;
+            if (sg_forcedOrientationMask && physicalOrientationIsValid(physical) &&
+                physicalOrientationIsValid(sg_lastPhysicalOrientation) &&
+                UIDeviceOrientationIsLandscape(physical) != UIDeviceOrientationIsLandscape(sg_lastPhysicalOrientation)) {
+                sg_forcedOrientationMask = 0;
+            }
+            if (physicalOrientationIsValid(physical)) sg_lastPhysicalOrientation = physical;
+            SGRPlayerRefreshOrientationPolicy();
+        }];
     });
 }
