@@ -261,7 +261,7 @@ static SGRPlayerLyricsOverlay *overlayIn(UIView *host) {
 
 typedef struct {
     BOOL ok;
-    CGRect cover;     // where Spotify draws the cover now, in the player
+    CGRect cover;     // where the redesign's cover starts: the large landscape cover, or Spotify's in portrait
     CGRect thumb;     // where it goes
     CGRect stage;     // where the lines go
     CGRect room;      // where they go with the controls away, which is the stage's frame throughout
@@ -270,6 +270,7 @@ typedef struct {
     CGRect controls;  // landscape: transport row in the left column
     CGFloat lift;     // how far the title row rises
     CGFloat shift;    // how far the title slides right to clear the thumbnail, 0 when it sits under it
+    CGFloat baseShift; // the title sits to the right of the large cover before lyrics open
     CGFloat titleMaxWidth;
     CGFloat titleScale;
 } SGRLyricsLayout;
@@ -286,33 +287,49 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     UIView *info = sg_info.viewIfLoaded, *duration = sg_duration.viewIfLoaded, *title = sg_titleElement;
     if (!host || host.bounds.size.height < kLivingHeight || !info || !duration) return l;
     CGRect area = SGRPlayerArtworkAreaIn(host), cover = SGRPlayerCoverFrameIn(host);
-    if (CGRectIsNull(area) || CGRectIsNull(cover)) return l;
+    BOOL landscape = host.bounds.size.width > host.bounds.size.height;
+    // Spotify's cover band can be a zero-sized/off-screen view after the player rotates. The player
+    // itself is the reliable canvas in that case; lyrics and the stand-in cover must still be usable.
+    if (landscape && (CGRectIsNull(area) || CGRectIsEmpty(area) || area.size.width < host.bounds.size.width * 0.6)) {
+        area = host.bounds;
+    }
+    if (CGRectIsNull(area) || CGRectIsEmpty(area) || (!landscape && (CGRectIsNull(cover) || CGRectIsEmpty(cover)))) return l;
     CGRect row = untransformed(info, host), bar = untransformed(duration, host);
     UIEdgeInsets safe = host.window.safeAreaInsets;
-    if (host.bounds.size.width > host.bounds.size.height) {
+    if (landscape) {
         UIView *header = sg_header.viewIfLoaded;
         CGFloat headerBottom = header ? CGRectGetMaxY(SGFrameIn(header, host)) : safe.top;
         CGFloat contentTop = MAX(safe.top + 8, headerBottom + 4);
         CGFloat contentBottom = host.bounds.size.height - safe.bottom - kLyricsBottom;
         CGFloat contentHeight = contentBottom - contentTop;
-        CGFloat leftWidth = floor(area.size.width * 0.39);
+        CGFloat leftWidth = floor(area.size.width * 0.28);
         UIView *controlsView = sg_controls.viewIfLoaded;
         CGRect controlsOriginal = controlsView ? untransformed(controlsView, host) : CGRectZero;
         CGFloat controlsHeight = controlsOriginal.size.height > 0 ? MIN(56, controlsOriginal.size.height) : 56;
         CGFloat durationHeight = MIN(40, MAX(24, bar.size.height));
-        CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 34;
-        CGFloat side = MIN(190, MIN(leftWidth - 2 * SGRSideMargin, leftContentHeight));
-        if (side < kThumbSide) return l;
-        CGFloat left = CGRectGetMinX(area) + SGRSideMargin;
+        CGFloat left = title ? CGRectGetMinX(untransformed(title, host)) : CGRectGetMinX(area) + SGRSideMargin;
+        left = MAX(CGRectGetMinX(area) + SGRSideMargin,
+                   MIN(left, CGRectGetMinX(area) + leftWidth - kThumbSide - SGRSideMargin));
+        CGFloat controlsWidth = CGRectGetMinX(area) + leftWidth - left - SGRSideMargin;
+        CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 24;
+        CGFloat side = MIN(140, MIN(controlsWidth - 12, leftContentHeight));
+        if (side < kThumbSide) {
+            // Keep a workable lyric column on compact landscape heights rather than rejecting the tap.
+            side = MIN(kThumbSide, MIN(controlsWidth, MAX(64, contentHeight - row.size.height - durationHeight - controlsHeight - 16)));
+        }
+        if (side < 64 || controlsWidth < 64 || contentHeight < 120) return l;
         CGFloat top = contentTop;
-        l.cover = cover;
+        CGFloat sourceSide = MIN(150, MIN(controlsWidth, CGRectGetMinY(bar) - top - 8));
+        sourceSide = MAX(side, sourceSide);
+        l.cover = CGRectMake(left, top, sourceSide, sourceSide);
         l.thumb = CGRectMake(left, top, side, side);
         l.lift = CGRectGetMaxY(l.thumb) + 12 - CGRectGetMinY(row);
         l.shift = 0;
-        l.titleMaxWidth = leftWidth - 2 * SGRSideMargin;
+        l.titleMaxWidth = controlsWidth;
         CGFloat titleWidth = title ? title.bounds.size.width : 0;
         l.titleScale = titleWidth > 0 ? MIN(1, l.titleMaxWidth / titleWidth) : 1;
-        CGFloat controlsWidth = leftWidth - 2 * SGRSideMargin;
+        CGRect sourceTitle = title ? untransformed(title, host) : row;
+        l.baseShift = MAX(0, CGRectGetMaxX(l.cover) + kThumbGap - CGRectGetMinX(sourceTitle));
         l.duration = CGRectMake(left, CGRectGetMaxY(l.thumb) + 12 + row.size.height + 4,
                                 controlsWidth, durationHeight);
         l.controls = CGRectMake(left, CGRectGetMaxY(l.duration) + 8, controlsWidth, controlsHeight);
@@ -440,10 +457,10 @@ static void fitUnit(UIView *unit, UIView *host, CGRect target, const void *frame
 static void placeTitleRow(SGRLyricsLayout l) {
     UIView *info = sg_info.viewIfLoaded;
     if (!info) return;
-    BOOL landscape = sg_open && sg_host.bounds.size.width > sg_host.bounds.size.height;
+    BOOL landscape = sg_host.bounds.size.width > sg_host.bounds.size.height;
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
-    if (landscape && duration && controls) {
+    if (landscape && sg_open && duration && controls) {
         fitUnit(duration, sg_host, l.duration, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         fitUnit(controls, sg_host, l.controls, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     } else {
@@ -451,7 +468,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
         restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     }
     [SGRowIn(info) layoutIfNeeded];
-    CGFloat lift = sg_open ? l.lift : 0, shift = sg_open ? l.shift : 0;
+    CGFloat lift = sg_open ? l.lift : 0, shift = sg_open ? l.shift : (landscape ? l.baseShift : 0);
     CGAffineTransform rise = CGAffineTransformMakeTranslation(0, round(lift));
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
     UIView *title = sg_titleElement;
@@ -462,7 +479,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     if (!CGAffineTransformEqualToTransform(title.transform, slide)) title.transform = slide;
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
     CGFloat room = CGFLOAT_MAX;
-    if (sg_open) room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift);
+    if (sg_open || landscape) room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift);
     if (sg_open && l.titleMaxWidth > 0) room = MIN(room, l.titleMaxWidth);
     clipTitle(title, room);
 }
@@ -658,6 +675,33 @@ static CGFloat thumbRadius(SGRLyricsLayout l, BOOL open) {
     return scale > 0 ? SGRRadiusCover / scale : SGRRadiusArtwork;
 }
 
+// Keep a sharp, large cover at the left of the title while the landscape player is closed. The blurred
+// artwork field beneath it still fills the whole player when a track has no live Canvas.
+static void keepLandscapeCover(UIView *host, SGRLyricsLayout l) {
+    if (!host || host.bounds.size.width <= host.bounds.size.height || !l.ok) return;
+    UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
+    if (!picture) {
+        SGRPlayerSetCoverHidden(NO);
+        return;
+    }
+    SGRPlayerLyricsOverlay *overlay = overlayIn(host);
+    place(overlay, host, l);
+    overlay.cover.image = picture;
+    overlay.cover.layer.cornerRadius = SGRRadiusArtwork;
+    overlay.thumb.transform = CGAffineTransformIdentity;
+    overlay.thumb.alpha = 1;
+    overlay.stage.alpha = 0;
+    overlay.rotate.alpha = 0;
+    SGRPlayerSetCoverHidden(YES);
+}
+
+static void restoreSpotifyCover(UIView *host) {
+    SGRPlayerSetCoverHidden(NO);
+    SGRPlayerCoverList().alpha = 1;
+    SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
+    if (overlay && !sg_open) [overlay removeFromSuperview];
+}
+
 static void setOpen(BOOL open, BOOL animated) {
     UIView *host = sg_host;
     if (open == sg_open) return;
@@ -673,6 +717,7 @@ static void setOpen(BOOL open, BOOL animated) {
     // The thumbnail is the Kit's picture drawn again. If it has not loaded yet, leave Spotify's cover
     // visible and still open the lyrics; the artwork notification fills the thumbnail when it arrives.
     UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
+    BOOL landscape = host.bounds.size.width > host.bounds.size.height;
     // The controls come back first: the thumbnail flying back to the cover is one of them.
     if (!open) {
         setAlone(NO, animated);
@@ -690,13 +735,13 @@ static void setOpen(BOOL open, BOOL animated) {
     CGAffineTransform away = thumbTransform(l);
     BOOL inPlace = SGRPlayerAnimatedShowing(NULL, NULL);
     CGAffineTransform small = CGAffineTransformConcat(CGAffineTransformMakeScale(kThumbAppearScale, kThumbAppearScale), away);
-    CGAffineTransform full = inPlace ? small : CGAffineTransformIdentity;
+    CGAffineTransform full = inPlace && !landscape ? small : CGAffineTransformIdentity;
     // The state it starts from, so the animation has both ends of every value and nothing jumps into it.
     overlay.thumb.transform = open ? full : away;
     overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || !open);
     if (open) {
         SGRVinylLyricsControlsDidChange(1);
-        overlay.thumb.alpha = (inPlace || !picture) ? 0 : 1;
+        overlay.thumb.alpha = (inPlace && !landscape) || !picture ? 0 : 1;
         overlay.cover.image = picture;
         // Vinyl mode: replace the cover thumbnail with a mini spinning vinyl disc.
         SGRVinylInstallMiniDisc(overlay.thumb.face, overlay.cover);
@@ -708,12 +753,17 @@ static void setOpen(BOOL open, BOOL animated) {
         // Spotify's cover goes the moment the redesign's own takes its place: the same picture at the
         // same size with the same corners, so there is nothing to see in the swap. Coming back it waits
         // for the thumbnail to land on it, or the two would be on screen at once, one of them half size.
-        if (picture) SGRPlayerCoverList().alpha = 0;
+        if (landscape) {
+            SGRPlayerSetCoverHidden(YES);
+        } else {
+            SGRPlayerSetCoverHidden(NO);
+            if (picture) SGRPlayerCoverList().alpha = 0;
+        }
     }
 
     void (^move)(void) = ^{
         overlay.thumb.transform = open ? away : (vinylClosing ? vinylClosingTransform : full);
-        if (picture && inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : 0;
+        if (picture && inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : (landscape ? 1 : 0);
         overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || open);
         SGRVinylLyricsDidChange(open, sg_info.viewIfLoaded);
         placeTitleRow(l);
@@ -723,16 +773,21 @@ static void setOpen(BOOL open, BOOL animated) {
         overlay.stage.alpha = open ? 1 : 0;
         overlay.stage.transform = open ? CGAffineTransformIdentity
                                        : CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
+        overlay.rotate.alpha = open ? 1 : 0;
         sg_sing.alpha = open ? 1 : 0;
     };
     void (^settled)(BOOL) = ^(BOOL finished) {
         sg_moving = NO;
         if (sg_open) return;   // opened again while it was going away
-        SGRPlayerCoverList().alpha = 1;
         SGRVinylLyricsDidSettleClosed();
         // Vinyl mode: restore the cover thumbnail.
         SGRVinylRemoveMiniDisc();
-        [overlay removeFromSuperview];
+        if (host.bounds.size.width > host.bounds.size.height) {
+            SGRLyricsLayout closed = layoutIn(host);
+            keepLandscapeCover(host, closed);
+        } else {
+            restoreSpotifyCover(host);
+        }
     };
 
     if (!animated) {
@@ -776,9 +831,13 @@ static void replace(void) {
     }
     placeTitleRow(l);
     sg_floating.viewIfLoaded.alpha = sg_open ? 0 : 1;
-    if (!sg_open) return;
+    if (!sg_open) {
+        if (host.bounds.size.width > host.bounds.size.height && l.ok) keepLandscapeCover(host, l);
+        else restoreSpotifyCover(host);
+        return;
+    }
     SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(host, &kOverlayKey);
-    if (!overlay.superview) return;
+    if (!overlay.superview) overlay = overlayIn(host);
     place(overlay, host, l);
     overlay.thumb.transform = thumbTransform(l);
     overlay.cover.layer.cornerRadius = thumbRadius(l, YES);
@@ -786,7 +845,11 @@ static void replace(void) {
     [overlay.lyrics setLineInsets:bandOf(l, sg_alone) duration:0];
     if (sg_alone) showControls(0, overlay);
     placeSing(overlay, l);
-    SGRPlayerCoverList().alpha = 0;
+    if (host.bounds.size.width > host.bounds.size.height) SGRPlayerSetCoverHidden(YES);
+    else {
+        SGRPlayerSetCoverHidden(NO);
+        SGRPlayerCoverList().alpha = 0;
+    }
 }
 
 #pragma mark - the units
@@ -831,6 +894,13 @@ static void replace(void) {
 - (void)viewWillDisappear:(BOOL)animated {
     SGRPlayerOrientationPlayerWillDisappear((UIViewController *)self);
     if (sg_open) setOpen(NO, NO);
+    restoreSpotifyCover(sg_host);
+    UIView *info = sg_info.viewIfLoaded, *title = sg_titleElement;
+    info.transform = CGAffineTransformIdentity;
+    title.transform = CGAffineTransformIdentity;
+    title.layer.mask = nil;
+    restoreUnitFrame(sg_duration.viewIfLoaded, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+    restoreUnitFrame(sg_controls.viewIfLoaded, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     %orig;
 }
 %end
@@ -1019,14 +1089,21 @@ static SGRPlayerLyricsWatcher *sg_watcher;
         if (!sg_aloneTimer) scheduleAlone();   // the wait gave up while the app was away
     }];
     [NSNotificationCenter.defaultCenter addObserverForName:SGRNowPlayingArtworkDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-        if (!sg_open) return;
+        if (!sg_open) {
+            if (sg_host.bounds.size.width > sg_host.bounds.size.height) replace();
+            return;
+        }
         SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
         UIImage *artwork = SGRNowPlayingArtwork(NULL, NULL);
         if (!overlay || !artwork) return;
         overlay.cover.image = artwork;
         SGRAnimate(SGRMotionFade, ^{
             overlay.thumb.alpha = 1;
-            SGRPlayerCoverList().alpha = 0;
+            if (sg_host.bounds.size.width > sg_host.bounds.size.height) SGRPlayerSetCoverHidden(YES);
+            else {
+                SGRPlayerSetCoverHidden(NO);
+                SGRPlayerCoverList().alpha = 0;
+            }
         }, nil);
     }];
     SGRequireClasses(@[
