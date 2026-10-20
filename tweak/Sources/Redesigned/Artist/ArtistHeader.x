@@ -40,10 +40,155 @@ static const CGFloat kMinCover = 80, kMinHero = 120;
 static const CGFloat kBar = 100, kFade = 150;
 
 static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatchedKey;
-static char kTitleKey, kMetaKey, kShuffleKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
-static char kLogoArtistKey;
+static char kTitleKey, kMetaKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
+static char kLogoArtistKey, kArtistInfoButtonKey;
 static NSHashTable<UIView *> *sg_artistHeaders;
 static void applyHeader(UIView *header);
+
+@interface SGRArtistInfoSheet : UIViewController
+@property (nonatomic, copy) NSString *artistName;
+@end
+
+@implementation SGRArtistInfoSheet {
+    UIImageView *_hero;
+    UILabel *_title, *_subtitle, *_facts, *_aboutTitle, *_about;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithRed:0.035 green:0.035 blue:0.04 alpha:1];
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    UIScrollView *scroll = [UIScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scroll];
+    [NSLayoutConstraint activateConstraints:@[
+        [scroll.topAnchor constraintEqualToAnchor:self.view.topAnchor], [scroll.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor], [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor]
+    ]];
+    UIView *content = [UIView new]; content.translatesAutoresizingMaskIntoConstraints = NO; [scroll addSubview:content];
+    [NSLayoutConstraint activateConstraints:@[
+        [content.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor], [content.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [content.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor], [content.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [content.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]
+    ]];
+    _hero = [UIImageView new]; _hero.translatesAutoresizingMaskIntoConstraints = NO; _hero.contentMode = UIViewContentModeScaleAspectFill; _hero.clipsToBounds = YES;
+    [content addSubview:_hero];
+    _title = [UILabel new]; _title.translatesAutoresizingMaskIntoConstraints = NO; _title.text = self.artistName; _title.font = [UIFont systemFontOfSize:32 weight:UIFontWeightBold]; _title.textColor = UIColor.whiteColor; _title.numberOfLines = 0;
+    [content addSubview:_title];
+    _subtitle = [UILabel new]; _subtitle.translatesAutoresizingMaskIntoConstraints = NO; _subtitle.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; _subtitle.textColor = [UIColor colorWithWhite:1 alpha:0.62]; _subtitle.numberOfLines = 0;
+    [content addSubview:_subtitle];
+    _facts = [UILabel new]; _facts.translatesAutoresizingMaskIntoConstraints = NO; _facts.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline]; _facts.textColor = [UIColor colorWithWhite:1 alpha:0.72]; _facts.numberOfLines = 0;
+    [content addSubview:_facts];
+    _aboutTitle = [UILabel new]; _aboutTitle.translatesAutoresizingMaskIntoConstraints = NO; _aboutTitle.text = @"Informazioni"; _aboutTitle.font = [UIFont systemFontOfSize:24 weight:UIFontWeightBold]; _aboutTitle.textColor = UIColor.whiteColor;
+    [content addSubview:_aboutTitle];
+    _about = [UILabel new]; _about.translatesAutoresizingMaskIntoConstraints = NO; _about.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; _about.textColor = [UIColor colorWithWhite:1 alpha:0.78]; _about.numberOfLines = 0; _about.text = @"Caricamento delle informazioni…";
+    [content addSubview:_about];
+    UILayoutGuide *g = content.safeAreaLayoutGuide;
+    [NSLayoutConstraint activateConstraints:@[
+        [_hero.topAnchor constraintEqualToAnchor:g.topAnchor], [_hero.leadingAnchor constraintEqualToAnchor:content.leadingAnchor], [_hero.trailingAnchor constraintEqualToAnchor:content.trailingAnchor], [_hero.heightAnchor constraintEqualToConstant:230],
+        [_title.topAnchor constraintEqualToAnchor:_hero.bottomAnchor constant:18], [_title.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:22], [_title.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-22],
+        [_subtitle.topAnchor constraintEqualToAnchor:_title.bottomAnchor constant:6], [_subtitle.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_subtitle.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor],
+        [_facts.topAnchor constraintEqualToAnchor:_subtitle.bottomAnchor constant:20], [_facts.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_facts.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor],
+        [_aboutTitle.topAnchor constraintEqualToAnchor:_facts.bottomAnchor constant:24], [_aboutTitle.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor],
+        [_about.topAnchor constraintEqualToAnchor:_aboutTitle.bottomAnchor constant:10], [_about.leadingAnchor constraintEqualToAnchor:_title.leadingAnchor], [_about.trailingAnchor constraintEqualToAnchor:_title.trailingAnchor], [_about.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-28]
+    ]];
+    [self loadSummary];
+}
+- (void)loadSummary {
+    NSString *slug = [self.artistName stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+    NSString *escaped = [slug stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet];
+    NSURL *url = escaped.length ? [NSURL URLWithString:[NSString stringWithFormat:@"https://en.wikipedia.org/api/rest_v1/page/summary/%@", escaped]] : nil;
+    if (!url) { _about.text = @"Le informazioni non sono disponibili."; return; }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [request setValue:@"spoti.pw/1.0 (artist information)" forHTTPHeaderField:@"User-Agent"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSString *extract = [json[@"extract"] isKindOfClass:NSString.class] ? json[@"extract"] : nil;
+        NSString *description = [json[@"description"] isKindOfClass:NSString.class] ? json[@"description"] : nil;
+        NSString *wikidata = [json[@"wikibase_item"] isKindOfClass:NSString.class] ? json[@"wikibase_item"] : nil;
+        NSString *imageURL = [json[@"originalimage"] isKindOfClass:NSDictionary.class] ? json[@"originalimage"][@"source"] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.isViewLoaded || !self.view.window) return;
+            if (extract.length) self->_about.text = extract;
+            else self->_about.text = error ? @"Connessione non disponibile." : @"Non sono state trovate informazioni per questo artista.";
+            self->_subtitle.text = description;
+            if (wikidata.length) [self loadFacts:wikidata];
+            if (imageURL.length) {
+                NSURL *image = [NSURL URLWithString:imageURL];
+                if (image) [[NSURLSession.sharedSession dataTaskWithURL:image completionHandler:^(NSData *imageData, NSURLResponse *r, NSError *e) {
+                    (void)r; (void)e; UIImage *picture = imageData ? [UIImage imageWithData:imageData] : nil;
+                    if (picture) dispatch_async(dispatch_get_main_queue(), ^{ if (self.isViewLoaded) self->_hero.image = picture; });
+                }] resume];
+            }
+        });
+    }] resume];
+}
+- (void)loadFacts:(NSString *)identifier {
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://www.wikidata.org/wiki/Special:EntityData/%@.json", identifier]];
+    if (!url) return;
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [request setValue:@"spoti.pw/1.0 (artist information)" forHTTPHeaderField:@"User-Agent"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)response; (void)error;
+        NSDictionary *root = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSDictionary *entity = root[@"entities"][identifier];
+        NSDictionary *claims = entity[@"claims"];
+        NSDictionary *labels = entity[@"labels"];
+        NSString *(^firstEntityID)(NSString *) = ^NSString *(NSString *property) {
+            NSDictionary *claim = [claims[property] isKindOfClass:NSArray.class] ? [claims[property] firstObject] : nil;
+            NSDictionary *value = claim[@"mainsnak"][@"datavalue"][@"value"];
+            return [value[@"id"] isKindOfClass:NSString.class] ? value[@"id"] : nil;
+        };
+        NSString *originID = firstEntityID(@"P19") ?: firstEntityID(@"P27");
+        NSString *genreID = firstEntityID(@"P136");
+        NSDictionary *birthClaim = [claims[@"P569"] isKindOfClass:NSArray.class] ? [claims[@"P569"] firstObject] : nil;
+        NSString *birthDate = birthClaim[@"mainsnak"][@"datavalue"][@"value"][@"time"];
+        if (birthDate.length > 11) birthDate = [birthDate substringWithRange:NSMakeRange(1, 10)];
+        (void)labels;
+        NSMutableArray<NSString *> *ids = [NSMutableArray array];
+        if (originID) [ids addObject:originID];
+        if (genreID && ![ids containsObject:genreID]) [ids addObject:genreID];
+        if (!ids.count) return;
+        NSString *idList = [ids componentsJoinedByString:@"|"];
+        NSString *encodedIDs = [idList stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+        NSURL *labelsURL = encodedIDs ? [NSURL URLWithString:[NSString stringWithFormat:@"https://www.wikidata.org/w/api.php?action=wbgetentities&ids=%@&props=labels&languages=it%%7Cen&format=json", encodedIDs]] : nil;
+        if (!labelsURL) return;
+        NSMutableURLRequest *labelsRequest = [NSMutableURLRequest requestWithURL:labelsURL];
+        [labelsRequest setValue:@"spoti.pw/1.0 (artist information)" forHTTPHeaderField:@"User-Agent"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:labelsRequest completionHandler:^(NSData *labelsData, NSURLResponse *labelsResponse, NSError *labelsError) {
+            (void)labelsResponse; (void)labelsError;
+            NSDictionary *labelsRoot = labelsData ? [NSJSONSerialization JSONObjectWithData:labelsData options:0 error:nil] : nil;
+            NSDictionary *entities = labelsRoot[@"entities"];
+            NSString *(^readLabel)(NSString *) = ^NSString *(NSString *itemID) {
+                NSDictionary *entityLabels = entities[itemID][@"labels"];
+                NSDictionary *entry = entityLabels[@"it"] ?: entityLabels[@"en"];
+                return [entry[@"value"] isKindOfClass:NSString.class] ? entry[@"value"] : nil;
+            };
+            NSString *origin = readLabel(originID), *genre = readLabel(genreID);
+            NSMutableArray<NSString *> *parts = [NSMutableArray array];
+            if (origin.length) [parts addObject:[NSString stringWithFormat:@"Da  %@", origin]];
+            if (birthDate.length) [parts addObject:[NSString stringWithFormat:@"Nato  %@", birthDate]];
+            if (genre.length) [parts addObject:[NSString stringWithFormat:@"Genere  %@", genre]];
+            NSString *facts = [parts componentsJoinedByString:@"     •     "];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (self.isViewLoaded && facts.length) self->_facts.text = facts; });
+        }] resume];
+    }] resume];
+}
+@end
+
+static void showArtistInfo(NSString *name) {
+    if (!name.length) return;
+    UIViewController *presenter = SGTopController();
+    if (!presenter || presenter.presentedViewController) return;
+    SGRArtistInfoSheet *sheet = [SGRArtistInfoSheet new];
+    sheet.artistName = name;
+    sheet.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) {
+        sheet.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent];
+        sheet.sheetPresentationController.prefersGrabberVisible = YES;
+        sheet.sheetPresentationController.preferredCornerRadius = 28;
+    }
+    [presenter presentViewController:sheet animated:YES completion:nil];
+}
 
 #pragma mark - Spotify's views
 
@@ -305,6 +450,18 @@ static void applyHeader(UIView *header) {
     UIView *listeners = SGRFindByIdentifier(header, @"Components.Header.UI.Metadata", &kMetaKey);
     NSString *name = firstText(title) ?: firstText(bar), *listening = firstText(listeners);
     [info showTitle:name creator:nil length:listening about:nil];
+    SGRGlyphButton *artistInfo = objc_getAssociatedObject(container, &kArtistInfoButtonKey);
+    if (!artistInfo) {
+        artistInfo = [SGRGlyphButton buttonWithSymbol:@"info" pointSize:22 title:@"Informazioni artista"];
+        objc_setAssociatedObject(container, &kArtistInfoButtonKey, artistInfo, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [container addSubview:artistInfo];
+    }
+    artistInfo.onTap = ^{
+        UIView *activeTitle = SGRFindByIdentifier(weakHeader, @"Encore.AdaptiveTitle", &kTitleKey);
+        showArtistInfo(firstText(activeTitle) ?: firstText(keepBar(weakHeader)) ?: @"");
+    };
+    artistInfo.frame = CGRectMake(round((container.bounds.size.width - 148) / 2 - 60),
+                                  container.bounds.size.height - SGRHeaderInfoBottom - SGRActionHeight + 2, 44, 44);
     NSString *logoArtist = objc_getAssociatedObject(header, &kLogoArtistKey);
     if (name.length && ![logoArtist isEqualToString:name]) {
         objc_setAssociatedObject(header, &kLogoArtistKey, [name copy], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -323,10 +480,10 @@ static void applyHeader(UIView *header) {
         });
     }
 
-    UIView *shuffle = SGRFindByIdentifier(header, @"Components.UI.ShuffleButton", &kShuffleKey);
     UIView *play = SGRFindByIdentifier(header, @"header-play-button", &kPlayKey);
     UIView *follow = SGRFindByIdentifier(header, @"Curation.FollowButtonElementKit.FollowButton", &kFollowKey);
-    [info showShuffle:shuffle play:play trailing:follow trailingFallback:nil playColor:SGRArtistFieldColor(container)];
+    // The reference layout puts Artist info immediately left of Play; its own button occupies that slot.
+    [info showShuffle:nil play:play trailing:follow trailingFallback:nil playColor:SGRArtistFieldColor(container)];
     // The listeners are waited for with the name and Play: arriving late they pushed the name up by a line.
     if (name && play && listening) SGRRevealMark(page, SGRRevealHeader);
 

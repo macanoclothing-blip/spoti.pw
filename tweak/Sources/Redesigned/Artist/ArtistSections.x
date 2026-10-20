@@ -1,4 +1,4 @@
-// Artist redesign: the Music list without the artist's videos, and nothing of it painted over the field.
+// Artist redesign: the Music list, including Spotify's own music video shelf, with nothing painted over the field.
 //
 // Tree (trees/clean/artist/05.txt, the Music list top to bottom): Popular, Artist pick, Popular releases and
 // its Show all, Featuring, Release Countdown, Music videos, Watch more from…, About, Artist playlists, Fans
@@ -8,10 +8,8 @@
 // pick), HomeCard (a carousel), UpcomingReleaseRow, CreatorBiographyCard (About),
 // Components.UI.MusicVideoShelfHeader and WatchFeedCarouselEntryPointElement (videos).
 //
-// So the rule is by kind, never by the heading's words, which are the app's language: a video shelf reports
-// no height, and so do the heading and the spacer in the two cells before it. They were sized before it, so
-// the list is asked to lay out again once they are known. Every carousel is the same kind whatever it holds,
-// so the carousels all stay; merch has a tab of its own, which ArtistField.x takes away.
+// The Music video shelf remains in the artist's Music feed, alongside its other Spotify supplied carousels.
+// The type walk is retained to keep Spotify's cell sizing stable if the shelf is absent from a particular artist.
 //
 // A dropped cell is 0 tall but what it holds keeps the height it measured at, hidden and cut off by the
 // cell: content squeezed to 0 breaks Spotify's required constraints on every pass (Album/AlbumSections.x).
@@ -92,34 +90,6 @@ static void unsettle(UICollectionViewCell *cell) {
     cell.accessibilityElementsHidden = NO;
 }
 
-// The cell `back` items before `path` in the list, across the end of a section if it has to.
-static NSIndexPath *before(UICollectionView *list, NSIndexPath *path, NSInteger back) {
-    NSInteger section = path.section, item = path.item - back;
-    while (item < 0 && section > 0) {
-        section--;
-        item += [list numberOfItemsInSection:section];
-    }
-    return item >= 0 ? [NSIndexPath indexPathForItem:item inSection:section] : nil;
-}
-
-// A video shelf takes its heading and the spacer over it with it. Those were sized before it, so the list lays
-// out again, once, to ask them again.
-static void dropHeadingOf(UICollectionView *list, NSIndexPath *path) {
-    NSMutableDictionary *kinds = kindsOf(list);
-    NSMutableSet *dropped = droppedOf(list);
-    BOOL added = NO;
-    NSIndexPath *heading = before(list, path, 1);
-    if (heading && [kinds[heading] integerValue] == SGRArtistCellHeading && ![dropped containsObject:heading]) {
-        [dropped addObject:heading];
-        added = YES;
-        NSIndexPath *spacer = before(list, path, 2);
-        if (spacer && [kinds[spacer] integerValue] == SGRArtistCellSpacer) [dropped addObject:spacer];
-    }
-    if (!added) return;
-    __weak UICollectionView *weakList = list;
-    dispatch_async(dispatch_get_main_queue(), ^{ [weakList.collectionViewLayout invalidateLayout]; });
-}
-
 static void logOnce(NSString *what) {
     static NSMutableSet<NSString *> *logged;
     if (!logged) logged = [NSMutableSet set];
@@ -144,11 +114,7 @@ static void logOnce(NSString *what) {
     SGRArtistCell kind = kindOf(content, result.size.height);
     kindsOf(list)[path] = @(kind);
 
-    BOOL drop = kind == SGRArtistCellVideos || [droppedOf(list) containsObject:path];
-    if (kind == SGRArtistCellVideos) {
-        [droppedOf(list) addObject:path];
-        dropHeadingOf(list, path);
-    }
+    BOOL drop = [droppedOf(list) containsObject:path];
     if (!drop) {
         if (objc_getAssociatedObject(cell, &kSettledKey)) unsettle(cell);
         return result;

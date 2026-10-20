@@ -282,6 +282,12 @@ static char kReadyContext;
         [CATransaction setAnimationDuration:SGRCrossfade];
         self->_motion.opacity = 1;
         [CATransaction commit];
+        // Keep the static cover in place until the first video frame is ready, then let it
+        // grow and dissolve away together with the animated cover's fade in.
+        [UIView animateWithDuration:SGRCrossfade delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionCurveEaseInOut animations:^{
+            self->_picture.alpha = 0;
+            self->_picture.transform = CGAffineTransformMakeScale(1.12, 1.12);
+        } completion:nil];
     });
 }
 

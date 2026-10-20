@@ -77,7 +77,9 @@ static void requestWindowOrientationIfNeeded(UIWindow *window) {
 
 static void installOnDelegate(id delegate) {
     if (!delegate) return;
-    Class cls = object_getClass(delegate);
+    // The app delegate's orientation callback is an instance method. Using object_getClass
+    // here returns its metaclass, so UIKit never sees the policy we install.
+    Class cls = [delegate class];
     SEL selector = @selector(application:supportedInterfaceOrientationsForWindow:);
     if (objc_getAssociatedObject(cls, &kOrientationHookKey)) return;
 

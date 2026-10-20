@@ -82,6 +82,7 @@ static const CGFloat kThumbPressScale = 0.94, kThumbPressAlpha = 0.8;
 static const CGFloat kThumbAppearScale = 0.8;
 
 static char kOverlayKey, kPlateKey, kTitleKey, kWatcherKey, kRotateGlassKey;
+static char kLandscapeDurationFrameKey, kLandscapeControlsFrameKey;
 static BOOL sg_open;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
@@ -91,7 +92,7 @@ static BOOL sg_singHeld;                    // Sing's microphone is open, prepar
 static __weak UIView *sg_sing;              // the microphone, when Sing is on
 static __weak UIView *sg_host;              // SPTNowPlayingView
 static __weak UIViewController *sg_player;  // its controller
-static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_floating;
+static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_controls, *sg_floating;
 static __weak UIView *sg_titleElement;      // the arranged element view holding the title and the artist
 
 #pragma mark - the overlay
@@ -264,6 +265,8 @@ typedef struct {
     CGRect stage;     // where the lines go
     CGRect room;      // where they go with the controls away, which is the stage's frame throughout
     CGRect rotate;    // the orientation control, outside the lyric lines' reading area
+    CGRect duration;  // landscape: progress row in the left column
+    CGRect controls;  // landscape: transport row in the left column
     CGFloat lift;     // how far the title row rises
     CGFloat shift;    // how far the title slides right to clear the thumbnail, 0 when it sits under it
     CGFloat titleMaxWidth;
@@ -287,19 +290,28 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     if (host.bounds.size.width > host.bounds.size.height) {
         UIView *header = sg_header.viewIfLoaded;
         CGFloat headerBottom = header ? CGRectGetMaxY(SGFrameIn(header, host)) : safe.top;
-        CGFloat contentTop = MAX(CGRectGetMinY(area), MAX(safe.top + 8, headerBottom + 4));
-        CGFloat contentBottom = MIN(CGRectGetMinY(bar) - kLyricsBottom, host.bounds.size.height - safe.bottom - kLyricsBottom);
+        CGFloat contentTop = MAX(safe.top + 8, headerBottom + 4);
+        CGFloat contentBottom = host.bounds.size.height - safe.bottom - kLyricsBottom;
         CGFloat contentHeight = contentBottom - contentTop;
-        CGFloat leftWidth = floor(area.size.width * 0.42);
-        CGFloat side = MIN(140, MIN(leftWidth - 2 * SGRSideMargin, contentHeight));
+        CGFloat leftWidth = floor(area.size.width * 0.39);
+        UIView *controlsView = sg_controls.viewIfLoaded;
+        CGRect controlsOriginal = controlsView ? untransformed(controlsView, host) : CGRectZero;
+        CGFloat controlsHeight = controlsOriginal.size.height > 0 ? MIN(56, controlsOriginal.size.height) : 56;
+        CGFloat durationHeight = MIN(40, MAX(24, bar.size.height));
+        CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 34;
+        CGFloat side = MIN(190, MIN(leftWidth - 2 * SGRSideMargin, leftContentHeight));
         if (side < kThumbSide) return l;
         CGFloat left = CGRectGetMinX(area) + SGRSideMargin;
-        CGFloat top = contentTop + (contentHeight - side) / 2;
+        CGFloat top = contentTop;
         l.cover = cover;
         l.thumb = CGRectMake(left, top, side, side);
-        l.lift = CGRectGetMidY(l.thumb) - row.size.height / 2 - CGRectGetMinY(row);
-        l.shift = side + kThumbGap;
-        l.titleMaxWidth = leftWidth - side - kThumbGap - 2 * SGRSideMargin;
+        l.lift = CGRectGetMaxY(l.thumb) + 12 - CGRectGetMinY(row);
+        l.shift = 0;
+        l.titleMaxWidth = leftWidth - 2 * SGRSideMargin;
+        CGFloat controlsWidth = leftWidth - 2 * SGRSideMargin;
+        l.duration = CGRectMake(left, CGRectGetMaxY(l.thumb) + 12 + row.size.height + 4,
+                                controlsWidth, durationHeight);
+        l.controls = CGRectMake(left, CGRectGetMaxY(l.duration) + 8, controlsWidth, controlsHeight);
         CGFloat column = CGRectGetMinX(area) + leftWidth + SGRGrid;
         l.stage = CGRectMake(column, contentTop, CGRectGetMaxX(area) - column, contentHeight);
         l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
@@ -387,9 +399,54 @@ static void clipTitle(UIView *element, CGFloat width) {
 }
 
 // The unit's row lays its arranged views out after the unit's own pass, so the transforms go on after it.
+static CGRect baselineFrameForUnit(UIView *unit, UIView *host, const void *key) {
+    if (!unit || !host) return CGRectZero;
+    NSValue *saved = objc_getAssociatedObject(unit, key);
+    if (saved) return saved.CGRectValue;
+    CGAffineTransform transform = unit.transform;
+    unit.transform = CGAffineTransformIdentity;
+    CGRect frame = SGFrameIn(unit, host);
+    unit.transform = transform;
+    objc_setAssociatedObject(unit, key, [NSValue valueWithCGRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return frame;
+}
+
+static void captureUnitFrame(UIView *unit, UIView *host, const void *key) {
+    if (!unit || !host) return;
+    unit.transform = CGAffineTransformIdentity;
+    CGRect frame = SGFrameIn(unit, host);
+    objc_setAssociatedObject(unit, key, [NSValue valueWithCGRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void restoreUnitFrame(UIView *unit, UIView *host, const void *key) {
+    if (!unit || !host) return;
+    CGRect frame = baselineFrameForUnit(unit, host, key);
+    unit.transform = CGAffineTransformIdentity;
+    unit.center = [unit.superview convertPoint:CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame)) fromView:host];
+}
+
+static void fitUnit(UIView *unit, UIView *host, CGRect target, const void *key) {
+    if (!unit || !host || CGRectIsEmpty(target)) return;
+    CGRect source = baselineFrameForUnit(unit, host, key);
+    if (CGRectIsEmpty(source)) return;
+    unit.transform = CGAffineTransformMakeScale(target.size.width / source.size.width,
+                                                 target.size.height / source.size.height);
+    unit.center = [unit.superview convertPoint:CGPointMake(CGRectGetMidX(target), CGRectGetMidY(target)) fromView:host];
+}
+
 static void placeTitleRow(SGRLyricsLayout l) {
     UIView *info = sg_info.viewIfLoaded;
     if (!info) return;
+    BOOL landscape = sg_open && sg_host.bounds.size.width > sg_host.bounds.size.height;
+    UIView *duration = sg_duration.viewIfLoaded;
+    UIView *controls = sg_controls.viewIfLoaded;
+    if (landscape && duration && controls) {
+        fitUnit(duration, sg_host, l.duration, &kLandscapeDurationFrameKey);
+        fitUnit(controls, sg_host, l.controls, &kLandscapeControlsFrameKey);
+    } else {
+        restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey);
+        restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey);
+    }
     [SGRowIn(info) layoutIfNeeded];
     CGFloat lift = sg_open ? l.lift : 0, shift = sg_open ? l.shift : 0;
     CGAffineTransform rise = CGAffineTransformMakeTranslation(0, round(lift));
@@ -784,6 +841,13 @@ static void infoLaidOut(UIViewController *unit) {
 
 static void durationLaidOut(UIViewController *unit) {
     sg_duration = unit;
+    captureUnitFrame(unit.viewIfLoaded, sg_host, &kLandscapeDurationFrameKey);
+    replace();
+}
+
+static void controlsLaidOut(UIViewController *unit) {
+    sg_controls = unit;
+    captureUnitFrame(unit.viewIfLoaded, sg_host, &kLandscapeControlsFrameKey);
     replace();
 }
 
@@ -808,6 +872,13 @@ static void durationLaidOut(UIViewController *unit) {
 }
 %end
 
+%hook _TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    controlsLaidOut((UIViewController *)self);
+}
+%end
+
 // Spotify Free's player builds the same elements into units of its own (Player.h); its floating unit
 // is the shared one below.
 %hook _TtC32ReinventFree_ReinventFreeNpvImpl43ReinventFreeNavigationBarUnitViewController
@@ -828,6 +899,13 @@ static void durationLaidOut(UIViewController *unit) {
 - (void)viewDidLayoutSubviews {
     %orig;
     durationLaidOut((UIViewController *)self);
+}
+%end
+
+%hook _TtC32ReinventFree_ReinventFreeNpvImpl40ReinventFreePlaybackControlsElementsUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    controlsLaidOut((UIViewController *)self);
 }
 %end
 
@@ -933,9 +1011,11 @@ static SGRPlayerLyricsWatcher *sg_watcher;
         @"_TtC20NowPlaying_ModesImpl18HeaderElementsUnit",
         @"_TtC20NowPlaying_ModesImpl23InformationElementsUnit",
         @"_TtC20NowPlaying_ModesImpl19DurationElementUnit",
+        @"_TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit",
         @"_TtC20NowPlaying_ModesImpl20FloatingElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl43ReinventFreeNavigationBarUnitViewController",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl35ReinventFreeInformationElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl20DurationElementsUnit",
+        @"_TtC32ReinventFree_ReinventFreeNpvImpl40ReinventFreePlaybackControlsElementsUnit",
     ]);
 }

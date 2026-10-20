@@ -68,6 +68,31 @@ static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
 @interface SGRVolumeRow : UIView
 @end
 
+@interface SGRInteractiveVolumeView : MPVolumeView
+@end
+
+@implementation SGRInteractiveVolumeView
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.transform = CGAffineTransformMakeScale(1, 1.55);
+    } completion:nil];
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    [self sgr_restoreTrack];
+}
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    [self sgr_restoreTrack];
+}
+- (void)sgr_restoreTrack {
+    [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+@end
+
 @implementation SGRVolumeRow {
     MPVolumeView *_volume;
     UIImageView *_quiet;
@@ -76,7 +101,7 @@ static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
-    _volume = [MPVolumeView new];
+    _volume = [SGRInteractiveVolumeView new];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _volume.showsRouteButton = NO;
@@ -145,15 +170,30 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
         room = bottom - top;
     }
+    if (room < 18) {
+        CGFloat extra = 18 - room;
+        CGAffineTransform transform = controls.transform;
+        controls.transform = CGAffineTransformMakeTranslation(transform.tx, transform.ty - extra);
+        controlsFrame = volumeControlsFrame(controls, stack);
+        top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+        room = bottom - top;
+    }
 
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
-    CGFloat rowHeight = MIN(kVolumeRowHeight, room);
-    CGRect frame = CGRectMake(kVolumeSideInset, round((top + bottom - rowHeight) / 2),
-                              width, kVolumeRowHeight);
-    frame.size.height = rowHeight;
-    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame) || width < 1) {
+    CGFloat rowHeight = MIN(kVolumeRowHeight, MAX(18, room));
+    CGFloat rowY;
+    if (room >= 18) {
+        rowY = round((top + bottom - rowHeight) / 2);
+    } else {
+        // Some player modes leave almost no gap. Preserve a compact, touchable volume track
+        // just above the footer instead of making the system volume control disappear.
+        rowY = CGRectGetMinY(footerFrame) - rowHeight - 2;
+        rowY = MIN(MAX(0, rowY), MAX(0, CGRectGetHeight(stack.bounds) - rowHeight));
+        SGLog(@"redesign player: volume row uses compact fallback in a %.0fpt gap", room);
+    }
+    CGRect frame = CGRectMake(kVolumeSideInset, rowY, width, rowHeight);
+    if (width < 1) {
         volume.alpha = 0;
-        SGLog(@"redesign player: volume row cannot fit without covering controls or footer (%.0fpt)", room);
         return NO;
     }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;

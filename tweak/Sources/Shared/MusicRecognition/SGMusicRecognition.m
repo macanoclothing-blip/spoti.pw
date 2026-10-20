@@ -212,6 +212,10 @@ static SGMusicRecognition *recognition(void) {
     return [SGMusicRecognition shared];
 }
 
+void SGMusicRecognitionStart(void) {
+    [recognition() start];
+}
+
 SGModSection *SGMusicRecognitionSection(void) {
     SGModRow *enabled = SGOptionRow(@"ShazamKit recognition",
         @"Identify music audible nearby, including from another device. Requires ShazamKit access in the signing app ID.",

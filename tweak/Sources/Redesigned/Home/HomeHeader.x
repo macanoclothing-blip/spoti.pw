@@ -20,12 +20,14 @@
 // so it follows the app's language.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Shared/MusicRecognition/SGMusicRecognition.h"
 #import "Home.h"
 
 // Tries at finding the tab's name before settling for the English one: a miss walks the window.
 static const NSUInteger kTitleTries = 8;
 
 static char kTitleKey, kTabKey;
+static char kHomeFilterKey, kHomeShazamKey;
 static NSString *sg_tabName;
 
 static void vanish(UIView *view) {
@@ -81,6 +83,87 @@ static __weak UIView *sg_header;
 static __weak UIStackView *sg_stack;
 static __weak UIView *sg_scrim;
 
+@interface SGRHomeHeaderButton : UIControl
+@property (nonatomic, copy) void (^action)(void);
+- (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title;
+@end
+@implementation SGRHomeHeaderButton {
+    SGRGlyphView *_glyph;
+}
+- (instancetype)initWithSymbol:(NSString *)symbol title:(NSString *)title {
+    if (!(self = [super initWithFrame:CGRectZero])) return nil;
+    self.accessibilityLabel = title;
+    self.accessibilityTraits = UIAccessibilityTraitButton;
+    self.backgroundColor = UIColor.clearColor;
+    self.layer.cornerRadius = 22;
+    self.clipsToBounds = YES;
+    SGRGlassInside(self, (__bridge const void *)(self), 44);
+    _glyph = [[SGRGlyphView alloc] initWithSymbol:symbol pointSize:19 weight:UIImageSymbolWeightSemibold];
+    _glyph.tintColor = SGRPrimary();
+    [self addSubview:_glyph];
+    [self addTarget:self action:@selector(sgr_activate) forControlEvents:UIControlEventTouchUpInside];
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    _glyph.frame = self.bounds;
+}
+- (void)sgr_activate { if (self.action) self.action(); }
+@end
+
+static void selectHomePill(UIView *header, NSArray<NSString *> *names) {
+    __block UIControl *match = nil;
+    SGForEachView(header, ^(UIView *view) {
+        if (match || ![view isKindOfClass:UIControl.class]) return;
+        NSMutableArray<NSString *> *words = [NSMutableArray array];
+        if (view.accessibilityLabel.length) [words addObject:view.accessibilityLabel];
+        SGForEachView(view, ^(UIView *child) {
+            if ([child isKindOfClass:UILabel.class] && ((UILabel *)child).text.length) [words addObject:((UILabel *)child).text];
+        });
+        NSString *label = [[words componentsJoinedByString:@" "] lowercaseString];
+        for (NSString *name in names) if ([label containsString:name.lowercaseString]) { match = (UIControl *)view; break; }
+    });
+    if (!match) {
+        SGLog(@"redesign home: filter pill was not found for %@", [names componentsJoinedByString:@"/"]);
+        return;
+    }
+    [match sendActionsForControlEvents:UIControlEventTouchUpInside];
+}
+
+static void showHomeFilters(UIView *header) {
+    UIViewController *presenter = SGTopController();
+    if (!presenter || presenter.presentedViewController) return;
+    UIAlertController *menu = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    NSArray *choices = @[
+        @[@"Tutti", @[@"All", @"Tutti"]],
+        @[@"Musica", @[@"Music", @"Musica"]],
+        @[@"Podcast", @[@"Podcast", @"Show", @"Programmi"]],
+        @[@"Audiolibri", @[@"Audiobook", @"Audiolibri"]],
+    ];
+    for (NSArray *choice in choices) {
+        [menu addAction:[UIAlertAction actionWithTitle:choice[0] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            (void)action;
+            selectHomePill(header, choice[1]);
+        }]];
+    }
+    [menu addAction:[UIAlertAction actionWithTitle:@"Annulla" style:UIAlertActionStyleCancel handler:nil]];
+    if (menu.popoverPresentationController) {
+        menu.popoverPresentationController.sourceView = header;
+        menu.popoverPresentationController.sourceRect = CGRectMake(18, CGRectGetMidY(header.bounds), 1, 1);
+    }
+    [presenter presentViewController:menu animated:YES completion:nil];
+}
+
+static SGRHomeHeaderButton *headerButton(UIView *header, const void *key, NSString *symbol, NSString *title) {
+    SGRHomeHeaderButton *button = objc_getAssociatedObject(header, key);
+    if (!button) {
+        button = [[SGRHomeHeaderButton alloc] initWithSymbol:symbol title:title];
+        objc_setAssociatedObject(header, key, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (button.superview != header) [header addSubview:button];
+    return button;
+}
+
 static BOOL findHeader(UIView *view) {
     if (sg_stack && [sg_stack isDescendantOfView:view]) return YES;
     for (UIView *wrapper in view.subviews) {
@@ -127,9 +210,16 @@ static void layoutHeader(UIViewController *page) {
     UIFont *font = SGRFont(UIFontTextStyleLargeTitle, UIFontWeightBold, UIContentSizeCategoryLarge);
     if (![title.font isEqual:font]) title.font = font;
 
+    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, "line.3.horizontal", @"Filtri Home");
+    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, "waveform", @"Riconosci una canzone con Shazam");
+    filters.action = ^{ showHomeFilters(header); };
+    shazam.action = ^{ SGMusicRecognitionStart(); };
+    filters.frame = CGRectMake(SGRSideMargin, round(CGRectGetMidY(stack.frame) - 22), 44, 44);
+    shazam.frame = CGRectMake(CGRectGetMaxX(filters.frame) + 8, filters.frame.origin.y, 44, 44);
     CGFloat trailing = face ? CGRectGetMinX([stack convertRect:face.frame toView:header]) - SGRGrid : header.bounds.size.width - SGRSideMargin;
     CGFloat height = ceil(font.lineHeight);
-    CGRect frame = CGRectMake(SGRSideMargin, round(CGRectGetMidY(stack.frame) - height / 2), MAX(0, trailing - SGRSideMargin), height);
+    CGFloat titleStart = CGRectGetMaxX(shazam.frame) + SGRGrid;
+    CGRect frame = CGRectMake(titleStart, round(CGRectGetMidY(stack.frame) - height / 2), MAX(0, trailing - titleStart), height);
     if (!CGRectEqualToRect(title.frame, frame)) title.frame = frame;
 
     static dispatch_once_t once;
