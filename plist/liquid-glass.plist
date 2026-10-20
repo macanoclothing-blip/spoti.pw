@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Identify music playing nearby with ShazamKit. The microphone is used only after you tap Identify nearby music, for up to 20 seconds; spoti.pw does not save microphone audio.</string>
 	<key>MusicHapticsSupported</key>
 	<true/>
 	<key>UIDesignRequiresCompatibility</key>

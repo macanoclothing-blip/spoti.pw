@@ -304,6 +304,12 @@ Redesigned:
                   documented public artist-logo endpoint).
                   A missing logo is retried on a later visit. The Fanart.tv key stays in local preferences and is shown
                   partially in Mod Settings; Apple Music lookup is an opt-in Redesigned setting and sends only the artist name.
+    MusicRecognition/ ShazamKit identification is opt-in in Player settings and listens through the microphone only after an
+                  explicit tap, for at most 20 seconds. It restores Spotify's audio-session category after stopping, reports
+                  matches, and opens a Spotify search for the recognized title and artist. Audio signatures are checked against
+                  Shazam's catalog; spoti.pw does not save microphone audio. Listening to another device requires
+                  the iPhone microphone to hear it; pause Spotify on this iPhone to avoid matching its own speaker output.
+                  The injected app's signing App ID must have ShazamKit access enabled (MusicRecognition/SGMusicRecognition.m).
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
                   edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred
@@ -329,15 +335,12 @@ Redesigned:
                   Spotify's: they were taken out when this was first
                   built and put back in 0.21 (issue #20), since sorting a library is not something the page can do
                   without, and Spotify already draws them on the system's own glass
-    Playlist/     the playlist page (Liked Songs and one's own too, all three being the same page) the way the Music
-                  app lays one out: the cover full bleed across the top dissolving into the page's field with no seam,
-                  stretching into the top overscroll so the field or system background does not flash through; animated
-                  UIImageView covers mirror their frame sequence in the hero,
-                  the title, the creator after their picture and the length centred under it, one row of glass
-                  controls (shuffle, a prominent Play capsule taking its glyph and its word from Spotify's own button,
-                  add), the find bar and the curation pills gone, and the track rows on the field with a hairline between them
-                  (Playlist.h lists its files). Sort and Mix, the two of those pills the ⋯ menu does not already offer,
-                  are put on that menu's own sheet instead, above Spotify's rows, and fire Spotify's own buttons.
+    Playlist/     the playlist page (Liked Songs and one's own too, all three being the same page), plus the separate
+                  CollectionArtist page of songs liked by one artist, each in the Music app's style. Playlists get the
+                  full-bleed cover dissolving into the field, title, creator and length, glass controls, and track rows
+                  with a hairline; the artist collection has no cover, and gets the artist title, shuffle, Play and
+                  Spotify's download state above its table rows (Playlist.h lists the hooks). Sort and Mix on a regular
+                  playlist's ⋯ sheet fire Spotify's own buttons. The artist collection keeps Spotify's own ⋯ sheet.
                   Laid out on the Mac against harness/playlist/
     Album/        the album page laid out the same way, on the page the Creative Work Platform builds rather than the
                   playlist's, so it shares nothing with Playlist/ but the Kit: the cover full bleed dissolving into the

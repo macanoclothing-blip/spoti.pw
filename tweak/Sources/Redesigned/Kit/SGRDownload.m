@@ -50,17 +50,22 @@ static BOOL stateFromIdentifier(NSString *identifier, SGRDownloadState *state) {
 
 BOOL SGRReadDownload(UIView *source, SGRDownloadState *state, CGFloat *progress) {
     UIView *button = source ? identifiedIn(source, kIdentifierPrefix) : nil;
+    BOOL plain = NO;
+    if (!button) {
+        button = source ? identifiedIn(source, @"Components.UI.DownloadButton") : nil;
+        plain = button != nil;
+    }
     if (!button) return NO;
     SGRDownloadState said = SGRDownloadNone;
-    BOOL named = stateFromIdentifier(button.accessibilityIdentifier, &said);
+    BOOL named = !plain && stateFromIdentifier(button.accessibilityIdentifier, &said);
 
     // What the button draws from. Its state is a Swift enum without payloads, one byte, its cases numbered
     // in the order they are declared; its progress an optional 8 byte number, the value then a byte that is
     // 1 when there is none. The identifier says the same state in words, and is what counts when the model
     // cannot be read.
-    id owner = ownerOf(button, @"GranularDownloadButton");
-    const uint8_t *current = propertyBytes(owner, "currentState", 1);
-    const uint8_t *stored = propertyBytes(owner, "progress", 9);
+    id owner = ownerOf(button, plain ? @"DownloadButton" : @"GranularDownloadButton");
+    const uint8_t *current = propertyBytes(owner, plain ? "currentStatus" : "currentState", 1);
+    const uint8_t *stored = plain ? NULL : propertyBytes(owner, "progress", 9);
     BOOL modelled = current && *current <= 5;
     static const SGRDownloadState fromModel[] = {
         SGRDownloadNone, SGRDownloadWaiting, SGRDownloadDownloading, SGRDownloadWaiting, SGRDownloadDownloaded, SGRDownloadError,

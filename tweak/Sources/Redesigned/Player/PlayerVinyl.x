@@ -61,7 +61,6 @@ static char kVinylProgressSliderKey;
 static char kVinylProgressStyledKey;
 static char kVinylVolumeSliderStyledKey;
 static const CGFloat kVinylProgressShift = 12;
-static const CGFloat kVinylVolumeShift = -12;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -281,6 +280,7 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (instancetype)initWithSymbol:(NSString *)symbol iconSize:(CGFloat)iconSize label:(NSString *)label;
 - (void)setSymbol:(NSString *)symbol;
 - (void)setCaption:(NSString *)text;
+- (void)animateSkip;
 @end
 
 @implementation SGRVinylPillButton {
@@ -371,6 +371,30 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setCaption:(NSString *)text {
     _label.text = text;
     self.accessibilityLabel = text;
+}
+
+- (void)animateSkip {
+    if (!self.window) return;
+    if (SGRReduceMotion()) {
+        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{ _icon.alpha = 0.62; }
+                         completion:^(BOOL finished) {
+            (void)finished;
+            _icon.alpha = 1;
+        }];
+        return;
+    }
+
+    [UIView animateWithDuration:0.12 delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ _icon.transform = CGAffineTransformMakeScale(0.84, 0.84); }
+                     completion:^(BOOL finished) {
+        if (!finished || !self.window) return;
+        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0.45
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ _icon.transform = CGAffineTransformIdentity; }
+                         completion:nil];
+    }];
 }
 
 - (void)layoutSubviews {
@@ -781,9 +805,11 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
         SGRPlayerToggleLyrics();
     } else if (CGRectContainsPoint(_btnPrev.frame, point)) {
         SGLog(@"redesign player: vinyl previous tapped");
+        [_btnPrev animateSkip];
         vinylSkip(NO);
     } else if (CGRectContainsPoint(_btnNext.frame, point)) {
         SGLog(@"redesign player: vinyl next tapped");
+        [_btnNext animateSkip];
         vinylSkip(YES);
     } else {
         CGFloat dx = point.x - _discCenter.x;
@@ -1290,8 +1316,7 @@ static void updateVinylPlaybackSpacing(UIView *host) {
         if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;
     }
     if (volumeRow) {
-        CGAffineTransform up = CGAffineTransformMakeTranslation(0, kVinylVolumeShift);
-        if (!CGAffineTransformEqualToTransform(volumeRow.transform, up)) volumeRow.transform = up;
+        if (!CGAffineTransformIsIdentity(volumeRow.transform)) volumeRow.transform = CGAffineTransformIdentity;
     }
 }
 

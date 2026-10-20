@@ -32,6 +32,7 @@ static const NSTimeInterval kSpinnerCheck = 0.6;
 static const NSTimeInterval kTapTrust = 1.2;
 
 static char kPreviousKey, kNextKey, kPlayKey, kGlyphKey, kTakeKey, kRemainingKey;
+static char kSkipAnimatorKey;
 static __weak UIView *sg_playView;
 static __weak UIButton *sg_playButton;
 static CFTimeInterval sg_tappedUntil;
@@ -79,6 +80,64 @@ static void keepOnTop(UIView *view, UIView *host) {
 
 #pragma mark - previous and next
 
+@interface SGRSkipGlyphAnimator : NSObject
+@property (nonatomic, weak) SGRGlyphView *glyph;
+@property (nonatomic) CGFloat direction;
+- (void)activated:(UIControl *)sender;
+@end
+
+@implementation SGRSkipGlyphAnimator
+
+- (void)activated:(UIControl *)sender {
+    (void)sender;
+    SGRGlyphView *glyph = self.glyph;
+    if (!glyph.window) return;
+    CGAffineTransform resting = CGAffineTransformIdentity;
+    if (SGRReduceMotion()) {
+        [UIView animateWithDuration:0.1 delay:0 options:UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{ glyph.alpha = 0.62; }
+                         completion:^(BOOL finished) {
+            (void)finished;
+            glyph.alpha = 1;
+        }];
+        return;
+    }
+
+    CGAffineTransform pressed = CGAffineTransformConcat(resting, CGAffineTransformMakeTranslation(self.direction * 3, 0));
+    pressed = CGAffineTransformScale(pressed, 0.84, 0.84);
+    [UIView animateWithDuration:0.12 delay:0
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ glyph.transform = pressed; }
+                     completion:^(BOOL finished) {
+        if (!finished || !glyph.window) return;
+        [UIView animateWithDuration:0.34 delay:0 usingSpringWithDamping:0.68 initialSpringVelocity:0.45
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                         animations:^{ glyph.transform = resting; }
+                         completion:nil];
+    }];
+}
+
+@end
+
+static void observeSkipAction(UIView *button, SGRGlyphView *glyph, CGFloat direction) {
+    __block UIControl *control = [button isKindOfClass:UIControl.class] ? (UIControl *)button : nil;
+    if (!control) {
+        SGForEachView(button, ^(UIView *view) {
+            if (!control && [view isKindOfClass:UIControl.class]) control = (UIControl *)view;
+        });
+    }
+    if (!control) return;
+
+    SGRSkipGlyphAnimator *animator = objc_getAssociatedObject(control, &kSkipAnimatorKey);
+    if (!animator) {
+        animator = [SGRSkipGlyphAnimator new];
+        objc_setAssociatedObject(control, &kSkipAnimatorKey, animator, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [control addTarget:animator action:@selector(activated:) forControlEvents:UIControlEventTouchUpInside];
+    }
+    animator.glyph = glyph;
+    animator.direction = direction;
+}
+
 static void skipGlyph(UIView *host, NSString *identifier, const void *findKey, NSString *symbol) {
     UIView *button = SGRFindByIdentifier(host, identifier, findKey);
     UIView *content = button.subviews.firstObject;
@@ -93,6 +152,7 @@ static void skipGlyph(UIView *host, NSString *identifier, const void *findKey, N
         if (view != glyph && [view isKindOfClass:icon]) SGRPlayerVanish(view);
     });
     keepOnTop(glyph, content);
+    observeSkipAction(button, glyph, [symbol isEqualToString:@"forward.fill"] ? 1 : -1);
 }
 
 #pragma mark - play

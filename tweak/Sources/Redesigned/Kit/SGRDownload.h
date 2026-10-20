@@ -21,8 +21,9 @@ typedef NS_ENUM(NSInteger, SGRDownloadState) {
     SGRDownloadError,
 };
 
-// YES when `source`, or something under it, is Spotify's download button, with what it says: `progress`
-// is 0...1 while downloading, -1 when Spotify has none to give (an endless download, or not readable).
+// YES when `source`, or something under it, is Spotify's download button, with what it says. Reads both the
+// Granular button used by playlists and the plain button used by an artist's liked songs; `progress` is 0...1
+// while downloading, -1 when Spotify has none to give (including the plain button, which reports no progress).
 BOOL SGRReadDownload(UIView *source, SGRDownloadState *state, CGFloat *progress);
 
 // YES when `source`, or something under it, is Spotify's add-to button (Components.UI.AddToButton, saving an

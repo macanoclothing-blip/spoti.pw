@@ -43,6 +43,9 @@ static const CGFloat kMinHero = 120, kMinCover = 80;
 static char kCoverKey, kMetaKey, kPlayKey, kLayoutKey, kToolbarKey, kScrimKey, kBarScrimKey;
 static char kShuffleKey, kAddKey, kDownloadKey, kInfoKey, kBlockHeightKey, kBlockWatchedKey;
 static char kHeroKey, kHeroHeightKey, kRestPlaneKey, kRowKey, kRowWatchedKey, kMoreKey, kCreatorKey, kPinnedMoreKey, kSortKey;
+static char kCollectionArtistInfoKey, kCollectionArtistTitleKey, kCollectionArtistMetaKey;
+static char kCollectionArtistShuffleKey, kCollectionArtistPlayKey, kCollectionArtistDownloadKey;
+static char kCollectionArtistMoreKey, kCollectionArtistObservedKey;
 
 #pragma mark - finding things
 
@@ -584,10 +587,72 @@ static UIView *layoutIn(UIView *root) {
     return layout;
 }
 
+static void applyCollectionArtistHeader(UIView *layout) {
+    UIViewController *headerVC = SGRCollectionArtistHeaderOf(layout);
+    UIView *headerRoot = headerVC.viewIfLoaded;
+    if (!headerRoot) return;
+
+    UIView *block = blockIn(layout, nil, nil);
+    if (!block) return;
+    applyBackground(layout);
+    applyToolbar(headerRoot);
+    applyScrims(headerRoot);
+
+    SGRHeaderInfo *info = objc_getAssociatedObject(headerRoot, &kCollectionArtistInfoKey);
+    if (!info) {
+        info = [[SGRHeaderInfo alloc] initWithFrame:CGRectZero];
+        objc_setAssociatedObject(headerRoot, &kCollectionArtistInfoKey, info, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (info.superview != block) [block addSubview:info];
+    else if (block.subviews.lastObject != info) [block bringSubviewToFront:info];
+    for (UIView *sub in block.subviews) {
+        if (sub != info) conceal(sub);
+    }
+
+    CGFloat x = -[block convertPoint:CGPointZero toView:headerRoot].x;
+    CGRect frame = CGRectMake(round(x), 0, headerRoot.bounds.size.width, block.bounds.size.height);
+    if (!CGRectEqualToRect(info.frame, frame)) info.frame = frame;
+
+    UIView *adaptiveTitle = SGRFindByIdentifier(block, @"Encore.AdaptiveTitle", &kCollectionArtistTitleKey);
+    id model = viewModelOf(headerVC);
+    NSString *title = firstText(adaptiveTitle, nil) ?: modelString(model, @"artistName")
+        ?: modelString(model, @"name") ?: modelString(model, @"title");
+    UIView *metadata = SGRFindByIdentifier(block, @"Components.Header.UI.Metadata", &kCollectionArtistMetaKey);
+    UIView *shuffle = SGRFindByIdentifier(block, @"Components.UI.ShuffleButton", &kCollectionArtistShuffleKey);
+    UIView *play = SGRFindByIdentifier(headerRoot, @"header-play-button", &kCollectionArtistPlayKey);
+    UIView *download = SGRFindByIdentifier(block, @"Components.UI.DownloadButton", &kCollectionArtistDownloadKey)
+        ?: SGRFindByIdentifier(block, @"DownloadButton.Granular*", &kDownloadKey);
+    [info showTitle:title creator:nil length:firstText(metadata, nil) about:nil];
+    [info showShuffle:shuffle play:play trailing:download
+     trailingFallback:[UIImage systemImageNamed:@"arrow.down"] playColor:SGRNeutralField()];
+    conceal(play);
+    SGRPinnedMore(SGRCollectionArtistPageOf(layout), &kCollectionArtistMoreKey,
+                  SGRFindByIdentifier(block, @"Components.UI.ContextMenuButton*", &kMoreKey));
+
+    UIView *actions = SGRFindByIdentifier(block, @"HeaderActionsRow", &kRowKey);
+    if (actions && !objc_getAssociatedObject(actions, &kCollectionArtistObservedKey)) {
+        objc_setAssociatedObject(actions, &kCollectionArtistObservedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        __weak UIView *weakLayout = layout;
+        SGRObserveLayout(actions, ^(UIView *view) {
+            (void)view;
+            if (weakLayout) applyCollectionArtistHeader(weakLayout);
+        });
+    }
+}
+
+void SGRCollectionArtistApplyHeader(UIView *view) {
+    UIViewController *headerVC = SGRCollectionArtistHeaderOf(view);
+    UIView *headerRoot = headerVC.viewIfLoaded;
+    UIView *layout = layoutIn(headerRoot);
+    if (layout) applyCollectionArtistHeader(layout);
+}
+
 %hook _TtC28EncoreConsumerMobile_BaseKit19HeaderContentLayout
 - (void)layoutSubviews {
     %orig;
-    if (SGRPlaylistHeaderOf((UIView *)self)) applyHeader((UIView *)self);
+    UIView *layout = (UIView *)self;
+    if (SGRPlaylistHeaderOf(layout)) applyHeader(layout);
+    else if (SGRCollectionArtistHeaderOf(layout)) applyCollectionArtistHeader(layout);
 }
 %end
 
@@ -603,6 +668,7 @@ static UIView *layoutIn(UIView *root) {
     UIView *button = (UIView *)self;
     if (button.layer.hidden || ![button.accessibilityIdentifier isEqualToString:@"header-play-button"]) return;
     if (SGRPlaylistHeaderOf(button)) conceal(button);
+    else if (SGRCollectionArtistHeaderOf(button)) SGRCollectionArtistApplyHeader(button);
 }
 %end
 

@@ -36,6 +36,11 @@ UIViewController *SGRPlaylistHeaderOf(UIView *view);
 // or nil when it is on no playlist page.
 UIView *SGRPlaylistPageOf(UIView *view);
 
+// The page of one artist's liked songs, which Spotify builds separately from a playlist.
+UIViewController *SGRCollectionArtistHeaderOf(UIView *view);
+UIView *SGRCollectionArtistPageOf(UIView *view);
+void SGRCollectionArtistApplyHeader(UIView *view);
+
 // PlaylistField.x. The field belongs to the page `view` is on, found by walking up from it, so two playlist
 // pages on the navigation stack keep a field each.
 //
