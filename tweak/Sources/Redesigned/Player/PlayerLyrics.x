@@ -802,7 +802,7 @@ static void replace(void) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    SGRPlayerRefreshOrientationPolicy();
+    SGRPlayerOrientationPlayerDidAppear((UIViewController *)self);
 }
 
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
@@ -829,7 +829,7 @@ static void replace(void) {
 
 // The bar morphs back out of a full size cover as the player closes, so the thumbnail is put away first.
 - (void)viewWillDisappear:(BOOL)animated {
-    SGRPlayerClearOrientationOverride();
+    SGRPlayerOrientationPlayerWillDisappear((UIViewController *)self);
     if (sg_open) setOpen(NO, NO);
     %orig;
 }

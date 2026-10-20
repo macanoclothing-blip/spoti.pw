@@ -31,6 +31,8 @@
 #import "Settings/SGPageStyle.h"
 #import "SGArtistLogo.h"
 #import "Artist.h"
+#import "Shared/LockScreenArtwork/SGAppleArtwork.h"
+#import <AVFoundation/AVFoundation.h>
 
 // How much of the photo's height the dissolve into the field covers, and the scrim over the top of it that
 // keeps the status bar and the back button legible on a bright picture. The playlist's and the album's.
@@ -44,7 +46,121 @@ static char kInfoKey, kHeroKey, kHeroHeightKey, kContainerHeightKey, kRowWatched
 static char kTitleKey, kMetaKey, kPlayKey, kFollowKey, kArtworkKey, kBarKey, kMoreKey, kMoreButtonKey;
 static char kLogoArtistKey, kArtistInfoButtonKey, kArtistInfoGlassKey;
 static NSHashTable<UIView *> *sg_artistHeaders;
+static NSMutableDictionary<NSString *, id> *sg_artistVideoCache;
+static NSMutableSet<NSString *> *sg_artistVideoRequests;
+static NSMutableDictionary<NSString *, NSMutableArray *> *sg_artistVideoWaiters;
 static void applyHeader(UIView *header);
+
+static NSString *artistSearchKey(NSString *name) {
+    NSString *folded = [[name stringByFoldingWithOptions:NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch locale:nil]
+                        lowercaseString];
+    NSMutableArray<NSString *> *words = [NSMutableArray array];
+    for (NSString *word in [folded componentsSeparatedByCharactersInSet:NSCharacterSet.alphanumericCharacterSet.invertedSet]) {
+        if (word.length) [words addObject:word];
+    }
+    return [words componentsJoinedByString:@" "];
+}
+
+static void artistVideoGET(NSURL *url, NSString *token, void (^done)(NSDictionary *json, NSInteger status)) {
+    if (!url || !token.length) { done(nil, 0); return; }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"spoti.pw/1.0 (artist video preview)" forHTTPHeaderField:@"User-Agent"];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        (void)error;
+        dispatch_async(dispatch_get_main_queue(), ^{ done([json isKindOfClass:NSDictionary.class] ? json : nil, status); });
+    }] resume];
+}
+
+static NSURL *artistVideoPreview(NSDictionary *attributes) {
+    NSArray *previews = [attributes[@"previews"] isKindOfClass:NSArray.class] ? attributes[@"previews"] : nil;
+    for (id preview in previews) {
+        NSString *address = [preview isKindOfClass:NSDictionary.class] && [preview[@"url"] isKindOfClass:NSString.class]
+            ? preview[@"url"] : nil;
+        NSURL *url = address ? [NSURL URLWithString:address] : nil;
+        if ([url.scheme.lowercaseString isEqualToString:@"https"]) return url;
+    }
+    return nil;
+}
+
+static void artistVideoFinish(NSString *key, NSURL *url) {
+    if (!sg_artistVideoCache) sg_artistVideoCache = [NSMutableDictionary dictionary];
+    sg_artistVideoCache[key] = url ?: NSNull.null;
+    [sg_artistVideoRequests removeObject:key];
+    NSArray *waiters = [sg_artistVideoWaiters[key] copy];
+    [sg_artistVideoWaiters removeObjectForKey:key];
+    SGLog(@"redesign artist: %@ Apple Music preview for %@", url ? @"found" : @"no", key);
+    for (void (^waiter)(NSURL *) in waiters) waiter(url);
+}
+
+static void findArtistVideo(NSString *name, void (^done)(NSURL *url)) {
+    NSString *key = artistSearchKey(name);
+    if (!key.length) { done(nil); return; }
+    id cached = sg_artistVideoCache[key];
+    if (cached) { done(cached == NSNull.null ? nil : cached); return; }
+    if (!sg_artistVideoRequests) sg_artistVideoRequests = [NSMutableSet set];
+    if (!sg_artistVideoWaiters) sg_artistVideoWaiters = [NSMutableDictionary dictionary];
+    if ([sg_artistVideoRequests containsObject:key]) {
+        [sg_artistVideoWaiters[key] addObject:[done copy]];
+        return;
+    }
+    [sg_artistVideoRequests addObject:key];
+    sg_artistVideoWaiters[key] = [NSMutableArray arrayWithObject:[done copy]];
+    SGAppleCatalogToken(NO, ^(NSString *token) {
+        NSURLComponents *search = [NSURLComponents componentsWithString:@"https://amp-api.music.apple.com/v1/catalog/us/search"];
+        search.queryItems = @[[NSURLQueryItem queryItemWithName:@"term" value:name],
+                              [NSURLQueryItem queryItemWithName:@"types" value:@"artists"],
+                              [NSURLQueryItem queryItemWithName:@"limit" value:@"12"]];
+        artistVideoGET(search.URL, token, ^(NSDictionary *json, NSInteger status) {
+            if (status == 401) {
+                SGAppleCatalogToken(YES, ^(NSString *fresh) {
+                    NSURLComponents *retry = [NSURLComponents componentsWithString:@"https://amp-api.music.apple.com/v1/catalog/us/search"];
+                    retry.queryItems = search.queryItems;
+                    artistVideoGET(retry.URL, fresh, ^(NSDictionary *retryJSON, NSInteger retryStatus) {
+                        NSArray *artists = retryJSON[@"results"][@"artists"][@"data"];
+                        NSString *artistID = nil;
+                        for (id entry in artists) {
+                            NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
+                            if ([artistSearchKey(attributes[@"name"]) isEqualToString:key]) { artistID = entry[@"id"]; break; }
+                        }
+                        if (!artistID.length || retryStatus != 200) { artistVideoFinish(key, nil); return; }
+                        NSURL *relation = [NSURL URLWithString:[NSString stringWithFormat:@"https://amp-api.music.apple.com/v1/catalog/us/artists/%@/music-videos?limit=25", artistID]];
+                        artistVideoGET(relation, fresh, ^(NSDictionary *videosJSON, NSInteger videosStatus) {
+                            NSURL *preview = nil;
+                            for (id entry in videosJSON[@"data"]) {
+                                NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
+                                if ([artistSearchKey(attributes[@"artistName"]) isEqualToString:key] && (preview = artistVideoPreview(attributes))) break;
+                            }
+                            if (videosStatus != 200) preview = nil;
+                            artistVideoFinish(key, preview);
+                        });
+                    });
+                });
+                return;
+            }
+            NSArray *artists = json[@"results"][@"artists"][@"data"];
+            NSString *artistID = nil;
+            for (id entry in artists) {
+                NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
+                if ([artistSearchKey(attributes[@"name"]) isEqualToString:key]) { artistID = entry[@"id"]; break; }
+            }
+            if (status != 200 || !artistID.length) { artistVideoFinish(key, nil); return; }
+            NSURL *relation = [NSURL URLWithString:[NSString stringWithFormat:@"https://amp-api.music.apple.com/v1/catalog/us/artists/%@/music-videos?limit=25", artistID]];
+            artistVideoGET(relation, token, ^(NSDictionary *videosJSON, NSInteger videosStatus) {
+                NSURL *preview = nil;
+                for (id entry in videosJSON[@"data"]) {
+                    NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
+                    if ([artistSearchKey(attributes[@"artistName"]) isEqualToString:key] && (preview = artistVideoPreview(attributes))) break;
+                }
+                if (videosStatus != 200) preview = nil;
+                artistVideoFinish(key, preview);
+            });
+        });
+    });
+}
 
 @interface SGRArtistInfoSheet : UIViewController
 @property (nonatomic, copy) NSString *artistName;
@@ -89,8 +205,8 @@ static void applyHeader(UIView *header);
     _about = [UILabel new]; _about.translatesAutoresizingMaskIntoConstraints = NO; _about.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; _about.textColor = [UIColor colorWithWhite:1 alpha:0.78]; _about.numberOfLines = 0; _about.text = @"Caricamento delle informazioni…";
     [content addSubview:_about];
     _sources = [UIStackView new]; _sources.translatesAutoresizingMaskIntoConstraints = NO; _sources.axis = UILayoutConstraintAxisHorizontal; _sources.alignment = UIStackViewAlignmentCenter; _sources.distribution = UIStackViewDistributionFillEqually; _sources.spacing = 8;
-    NSArray<NSString *> *sourceNames = @[@"Wikipedia", @"Wikidata", @"MusicBrainz"];
-    for (NSInteger index = 0; index < 3; index++) {
+    NSArray<NSString *> *sourceNames = @[@"Wikipedia", @"Wikidata", @"MusicBrainz", @"AllMusic", @"Discogs"];
+    for (NSInteger index = 0; index < sourceNames.count; index++) {
         UIButton *source = [UIButton buttonWithType:UIButtonTypeSystem];
         [source setTitle:sourceNames[index] forState:UIControlStateNormal];
         source.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
@@ -116,11 +232,14 @@ static void applyHeader(UIView *header);
     NSMutableCharacterSet *allowed = [NSCharacterSet.URLQueryAllowedCharacterSet mutableCopy];
     [allowed removeCharactersInString:@"&=+#"];
     NSString *query = [self.artistName stringByAddingPercentEncodingWithAllowedCharacters:allowed];
-    NSString *urlString = sender.tag == 0
-        ? [NSString stringWithFormat:@"https://it.wikipedia.org/w/index.php?search=%@", query ?: @""]
-        : (sender.tag == 1
-           ? [NSString stringWithFormat:@"https://www.wikidata.org/w/index.php?search=%@", query ?: @""]
-           : [NSString stringWithFormat:@"https://musicbrainz.org/search?query=%@&type=artist&method=advanced", query ?: @""]);
+    NSArray<NSString *> *sources = @[
+        [NSString stringWithFormat:@"https://it.wikipedia.org/w/index.php?search=%@", query ?: @""],
+        [NSString stringWithFormat:@"https://www.wikidata.org/w/index.php?search=%@", query ?: @""],
+        [NSString stringWithFormat:@"https://musicbrainz.org/search?query=%@&type=artist&method=advanced", query ?: @""],
+        [NSString stringWithFormat:@"https://www.allmusic.com/search/artists/%@", query ?: @""],
+        [NSString stringWithFormat:@"https://www.discogs.com/search/?type=artist&q=%@", query ?: @""]
+    ];
+    NSString *urlString = sender.tag >= 0 && sender.tag < (NSInteger)sources.count ? sources[(NSUInteger)sender.tag] : nil;
     NSURL *url = [NSURL URLWithString:urlString];
     if (url) [UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
@@ -172,22 +291,40 @@ static void applyHeader(UIView *header);
         NSDictionary *root = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         NSDictionary *entity = root[@"entities"][identifier];
         NSDictionary *claims = entity[@"claims"];
-        NSDictionary *labels = entity[@"labels"];
-        NSString *(^firstEntityID)(NSString *) = ^NSString *(NSString *property) {
-            NSDictionary *claim = [claims[property] isKindOfClass:NSArray.class] ? [claims[property] firstObject] : nil;
-            NSDictionary *value = claim[@"mainsnak"][@"datavalue"][@"value"];
-            return [value[@"id"] isKindOfClass:NSString.class] ? value[@"id"] : nil;
-        };
-        NSString *originID = firstEntityID(@"P19") ?: firstEntityID(@"P27");
-        NSString *genreID = firstEntityID(@"P136");
-        NSDictionary *birthClaim = [claims[@"P569"] isKindOfClass:NSArray.class] ? [claims[@"P569"] firstObject] : nil;
-        NSString *birthDate = birthClaim[@"mainsnak"][@"datavalue"][@"value"][@"time"];
-        if (birthDate.length > 11) birthDate = [birthDate substringWithRange:NSMakeRange(1, 10)];
-        (void)labels;
+        NSArray<NSString *> *properties = @[@"P19", @"P740", @"P27", @"P136", @"P106", @"P1303", @"P166", @"P800", @"P527"];
+        NSArray<NSString *> *titles = @[@"Luogo di nascita", @"Formati a", @"Paese", @"Generi", @"Professione", @"Strumenti", @"Riconoscimenti", @"Opere note", @"Membri"];
+        NSMutableDictionary<NSString *, NSArray<NSString *> *> *idsByProperty = [NSMutableDictionary dictionary];
         NSMutableArray<NSString *> *ids = [NSMutableArray array];
-        if (originID) [ids addObject:originID];
-        if (genreID && ![ids containsObject:genreID]) [ids addObject:genreID];
-        if (!ids.count) return;
+        for (NSString *property in properties) {
+            NSArray *propertyClaims = [claims[property] isKindOfClass:NSArray.class] ? claims[property] : nil;
+            NSMutableArray<NSString *> *propertyIDs = [NSMutableArray array];
+            for (NSDictionary *claim in propertyClaims) {
+                NSDictionary *value = claim[@"mainsnak"][@"datavalue"][@"value"];
+                NSString *itemID = [value[@"id"] isKindOfClass:NSString.class] ? value[@"id"] : nil;
+                if (itemID.length && ![propertyIDs containsObject:itemID]) {
+                    [propertyIDs addObject:itemID];
+                    if (![ids containsObject:itemID]) [ids addObject:itemID];
+                }
+                if (propertyIDs.count == 2) break;
+            }
+            if (propertyIDs.count) idsByProperty[property] = propertyIDs;
+        }
+        NSString *(^dateFor)(NSString *) = ^NSString *(NSString *property) {
+            NSArray *dateClaims = [claims[property] isKindOfClass:NSArray.class] ? claims[property] : nil;
+            NSDictionary *claim = dateClaims.firstObject;
+            NSString *time = claim[@"mainsnak"][@"datavalue"][@"value"][@"time"];
+            return time.length >= 11 ? [time substringWithRange:NSMakeRange(1, 10)] : nil;
+        };
+        NSString *birthDate = dateFor(@"P569"), *deathDate = dateFor(@"P570"), *foundedDate = dateFor(@"P571");
+        if (!ids.count) {
+            NSMutableArray<NSString *> *dateParts = [NSMutableArray array];
+            if (birthDate.length) [dateParts addObject:[NSString stringWithFormat:@"Nascita  %@", birthDate]];
+            if (deathDate.length) [dateParts addObject:[NSString stringWithFormat:@"Morte  %@", deathDate]];
+            if (foundedDate.length) [dateParts addObject:[NSString stringWithFormat:@"Fondazione  %@", foundedDate]];
+            NSString *dateFacts = [dateParts componentsJoinedByString:@"\n"];
+            dispatch_async(dispatch_get_main_queue(), ^{ if (self.isViewLoaded && dateFacts.length) self->_facts.text = dateFacts; });
+            return;
+        }
         NSString *idList = [ids componentsJoinedByString:@"|"];
         NSString *encodedIDs = [idList stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
         NSURL *labelsURL = encodedIDs ? [NSURL URLWithString:[NSString stringWithFormat:@"https://www.wikidata.org/w/api.php?action=wbgetentities&ids=%@&props=labels&languages=it%%7Cen&format=json", encodedIDs]] : nil;
@@ -203,12 +340,20 @@ static void applyHeader(UIView *header);
                 NSDictionary *entry = entityLabels[@"it"] ?: entityLabels[@"en"];
                 return [entry[@"value"] isKindOfClass:NSString.class] ? entry[@"value"] : nil;
             };
-            NSString *origin = readLabel(originID), *genre = readLabel(genreID);
             NSMutableArray<NSString *> *parts = [NSMutableArray array];
-            if (origin.length) [parts addObject:[NSString stringWithFormat:@"Da  %@", origin]];
-            if (birthDate.length) [parts addObject:[NSString stringWithFormat:@"Nato  %@", birthDate]];
-            if (genre.length) [parts addObject:[NSString stringWithFormat:@"Genere  %@", genre]];
-            NSString *facts = [parts componentsJoinedByString:@"     •     "];
+            if (birthDate.length) [parts addObject:[NSString stringWithFormat:@"Nascita  %@", birthDate]];
+            if (deathDate.length) [parts addObject:[NSString stringWithFormat:@"Morte  %@", deathDate]];
+            if (foundedDate.length) [parts addObject:[NSString stringWithFormat:@"Fondazione  %@", foundedDate]];
+            [properties enumerateObjectsUsingBlock:^(NSString *property, NSUInteger index, BOOL *stop) {
+                (void)stop;
+                NSMutableArray<NSString *> *values = [NSMutableArray array];
+                for (NSString *itemID in idsByProperty[property]) {
+                    NSString *label = readLabel(itemID);
+                    if (label.length) [values addObject:label];
+                }
+                if (values.count) [parts addObject:[NSString stringWithFormat:@"%@  %@", titles[index], [values componentsJoinedByString:@", "]]];
+            }];
+            NSString *facts = [parts componentsJoinedByString:@"\n"];
             dispatch_async(dispatch_get_main_queue(), ^{ if (self.isViewLoaded && facts.length) self->_facts.text = facts; });
         }] resume];
     }] resume];
@@ -284,6 +429,7 @@ static UIView *containerOf(UIView *header) {
 @interface SGRArtistHero : UIView
 @property (nonatomic, readonly) UIImageView *picture;
 @property (nonatomic, copy) UIColor *fieldColor;
+- (void)followArtistVideo:(NSString *)artist;
 // The photo in Spotify's artwork view, and every photo it puts there afterwards: the hero keeps itself
 // right, rather than being handed a picture on each of the header's passes and staying empty between them.
 // The same view again only re-reads it.
@@ -293,6 +439,10 @@ static UIView *containerOf(UIView *header) {
 @implementation SGRArtistHero {
     CAGradientLayer *_scrim, *_dissolve;
     __weak UIImageView *_artwork;
+    AVPlayerLayer *_videoLayer;
+    AVPlayer *_videoPlayer;
+    NSString *_videoArtist;
+    id _videoEndObserver;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -300,6 +450,12 @@ static UIView *containerOf(UIView *header) {
     self.userInteractionEnabled = NO;
     self.accessibilityElementsHidden = YES;
     self.clipsToBounds = YES;
+
+    _videoLayer = [AVPlayerLayer playerLayerWithPlayer:nil];
+    _videoLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+    _videoLayer.opacity = 0;
+    [self.layer insertSublayer:_videoLayer atIndex:0];
+    [_videoLayer addObserver:self forKeyPath:@"readyForDisplay" options:NSKeyValueObservingOptionNew context:NULL];
 
     _picture = [[UIImageView alloc] initWithFrame:self.bounds];
     _picture.contentMode = UIViewContentModeScaleAspectFill;
@@ -319,11 +475,80 @@ static UIView *containerOf(UIView *header) {
     // The colour is read off the main thread, so it can land after the last layout pass of the page.
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sgr_fieldColorDidChange)
                                                name:SGRFieldColorDidChangeNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sgr_pauseVideo)
+                                               name:UIApplicationWillResignActiveNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(sgr_resumeVideo)
+                                               name:UIApplicationDidBecomeActiveNotification object:nil];
     return self;
 }
 
 - (void)dealloc {
     [NSNotificationCenter.defaultCenter removeObserver:self];
+    [_videoLayer removeObserver:self forKeyPath:@"readyForDisplay"];
+    if (_videoEndObserver) [NSNotificationCenter.defaultCenter removeObserver:_videoEndObserver];
+    [_videoPlayer pause];
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary<NSKeyValueChangeKey,id> *)change context:(void *)context {
+    if (object == _videoLayer && [keyPath isEqualToString:@"readyForDisplay"]) {
+        if (!_videoLayer.readyForDisplay || !self.window) return;
+        SGRArtistHero *hero = self;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (hero.window && hero->_videoLayer.readyForDisplay) {
+                [UIView animateWithDuration:0.45 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+                    hero->_picture.alpha = 0;
+                    hero->_videoLayer.opacity = 1;
+                } completion:nil];
+            }
+        });
+        return;
+    }
+    [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (self.window) [self sgr_resumeVideo];
+    else [self sgr_pauseVideo];
+}
+
+- (void)sgr_pauseVideo { [_videoPlayer pause]; }
+- (void)sgr_resumeVideo {
+    if (self.window && UIApplication.sharedApplication.applicationState == UIApplicationStateActive) [_videoPlayer play];
+}
+
+- (void)followArtistVideo:(NSString *)artist {
+    if (!artist.length || [artistSearchKey(artist) isEqualToString:artistSearchKey(_videoArtist)]) return;
+    _videoArtist = [artist copy];
+    _picture.alpha = 1;
+    _videoLayer.opacity = 0;
+    [_videoPlayer pause];
+    _videoPlayer = nil;
+    _videoLayer.player = nil;
+    if (_videoEndObserver) [NSNotificationCenter.defaultCenter removeObserver:_videoEndObserver];
+    _videoEndObserver = nil;
+    NSString *artistKey = artistSearchKey(artist);
+    __weak SGRArtistHero *weakSelf = self;
+    findArtistVideo(artist, ^(NSURL *url) {
+        SGRArtistHero *hero = weakSelf;
+        if (!hero || !url || ![artistSearchKey(hero->_videoArtist) isEqualToString:artistKey]) return;
+        AVPlayerItem *item = [AVPlayerItem playerItemWithURL:url];
+        AVPlayer *player = [AVPlayer playerWithPlayerItem:item];
+        player.muted = YES;
+        player.volume = 0;
+        player.actionAtItemEnd = AVPlayerActionAtItemEndNone;
+        hero->_videoPlayer = player;
+        hero->_videoLayer.player = player;
+        __weak SGRArtistHero *weakHero = hero;
+        hero->_videoEndObserver = [NSNotificationCenter.defaultCenter addObserverForName:AVPlayerItemDidPlayToEndTimeNotification object:item queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            (void)note;
+            SGRArtistHero *liveHero = weakHero;
+            if (!liveHero || liveHero->_videoPlayer.currentItem != item) return;
+            __weak AVPlayer *weakPlayer = liveHero->_videoPlayer;
+            [weakPlayer seekToTime:kCMTimeZero completionHandler:^(BOOL finished) { if (finished) [weakPlayer play]; }];
+        }];
+        [hero sgr_resumeVideo];
+    });
 }
 
 - (void)sgr_fieldColorDidChange {
@@ -346,6 +571,7 @@ static UIView *containerOf(UIView *header) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect bounds = self.bounds;
+    _videoLayer.frame = bounds;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     _scrim.frame = CGRectMake(0, 0, bounds.size.width, MIN(kTopScrim, bounds.size.height));
@@ -399,7 +625,7 @@ static UIImageView *photoIn(UIView *artwork) {
 
 // The picture from the top of the container down to `bottom`, which comes from the container at rest and only
 // ever grows, so it does not change size while the page loads or scrolls.
-static void applyHero(UIView *container, UIView *artwork, CGFloat bottom) {
+static void applyHero(UIView *container, UIView *artwork, CGFloat bottom, NSString *artist) {
     SGRArtistHero *hero = objc_getAssociatedObject(container, &kHeroKey);
     if (!hero) {
         hero = [[SGRArtistHero alloc] initWithFrame:CGRectZero];
@@ -419,6 +645,7 @@ static void applyHero(UIView *container, UIView *artwork, CGFloat bottom) {
     setFrame(hero, CGRectMake(0, -overscroll, container.bounds.size.width, height + overscroll));
     hero.fieldColor = SGRArtistFieldColor(container);
     [hero followArtwork:photoIn(artwork)];
+    [hero followArtistVideo:artist];
 }
 
 #pragma mark - the header's pass
@@ -541,13 +768,16 @@ static void applyHeader(UIView *header) {
     // outside the header and has nothing to pass over.
     CGFloat alpha = MAX(0, MIN(1, (header.bounds.size.height - kBar) / kFade));
     if (fabs(info.alpha - alpha) > 0.01) info.alpha = alpha;
+    if (fabs(artistInfo.alpha - alpha) > 0.01) artistInfo.alpha = alpha;
+    artistInfo.userInteractionEnabled = alpha > 0.02;
+    artistInfo.accessibilityElementsHidden = alpha <= 0.02;
 
     // The picture reaches to where the content's top is at rest, plus the name. The container keeps its
     // height as the header collapses, and only ever grows as the page loads.
     CGFloat rest = MAX([objc_getAssociatedObject(container, &kContainerHeightKey) doubleValue], container.bounds.size.height);
     objc_setAssociatedObject(container, &kContainerHeightKey, @(rest), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     CGFloat bottom = rest - SGRHeaderInfoBottom - [info contentHeightForWidth:container.bounds.size.width] + SGRHeaderInfoTitleRise;
-    applyHero(container, artwork, bottom);
+    applyHero(container, artwork, bottom, name);
 
     // The buttons arrive after the header has laid out, in a row that keeps its size and so lays nothing out
     // again (Native/Artist/Artist.x): the row's own pass is watched, a plain UIStackView.

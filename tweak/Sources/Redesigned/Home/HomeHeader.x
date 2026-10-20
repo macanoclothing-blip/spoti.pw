@@ -29,6 +29,7 @@ static const NSUInteger kTitleTries = 8;
 
 static char kTitleKey, kTabKey;
 static char kHomeFilterKey, kHomeShazamKey, kHomePillKey;
+static char kHomeFilterPopoverDelegateKey;
 static NSString *sg_tabName;
 
 static void vanish(UIView *view) {
@@ -135,7 +136,18 @@ static void selectHomePill(UIView *header, NSArray<NSString *> *names) {
     [match sendActionsForControlEvents:UIControlEventTouchUpInside];
 }
 
-static void showHomeFilters(UIView *header) {
+@interface SGRHomeFilterPopoverDelegate : NSObject <UIPopoverPresentationControllerDelegate>
+@end
+@implementation SGRHomeFilterPopoverDelegate
+- (UIModalPresentationStyle)adaptivePresentationStyleForPresentationController:(UIPresentationController *)controller
+                                                               traitCollection:(UITraitCollection *)traitCollection {
+    (void)controller;
+    (void)traitCollection;
+    return UIModalPresentationNone;
+}
+@end
+
+static void showHomeFilters(UIView *header, UIView *anchor) {
     UIViewController *presenter = SGTopController();
     if (!presenter || presenter.presentedViewController) return;
     UIAlertController *menu = [UIAlertController alertControllerWithTitle:nil message:nil preferredStyle:UIAlertControllerStyleActionSheet];
@@ -152,9 +164,16 @@ static void showHomeFilters(UIView *header) {
         }]];
     }
     [menu addAction:[UIAlertAction actionWithTitle:@"Annulla" style:UIAlertActionStyleCancel handler:nil]];
+    menu.modalPresentationStyle = UIModalPresentationPopover;
     if (menu.popoverPresentationController) {
         menu.popoverPresentationController.sourceView = header;
-        menu.popoverPresentationController.sourceRect = CGRectMake(18, CGRectGetMidY(header.bounds), 1, 1);
+        CGRect anchorRect = anchor ? [anchor convertRect:anchor.bounds toView:header] : header.bounds;
+        menu.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMaxX(anchorRect) - 1,
+                                                                    CGRectGetMidY(anchorRect), 1, 1);
+        menu.popoverPresentationController.permittedArrowDirections = UIPopoverArrowDirectionUp;
+        SGRHomeFilterPopoverDelegate *delegate = [SGRHomeFilterPopoverDelegate new];
+        menu.popoverPresentationController.delegate = delegate;
+        objc_setAssociatedObject(menu, &kHomeFilterPopoverDelegateKey, delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [presenter presentViewController:menu animated:YES completion:nil];
 }
@@ -230,13 +249,13 @@ static void layoutHeader(UIViewController *page) {
 
     SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home", NO);
     SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, @"waveform", @"Riconosci una canzone con Shazam", YES);
-    filters.action = ^{ showHomeFilters(header); };
+    UIView *pill = homeProfilePill(header);
+    filters.action = ^{ showHomeFilters(header, pill); };
     shazam.action = ^{ SGMusicRecognitionStart(); };
     CGRect faceFrame = face ? [stack convertRect:face.frame toView:header]
                             : CGRectMake(header.bounds.size.width - SGRSideMargin - 32, CGRectGetMidY(stack.frame) - 17, 32, 34);
     CGRect pillFrame = CGRectMake(CGRectGetMinX(faceFrame) - 58, round(CGRectGetMidY(faceFrame) - 23),
                                   CGRectGetWidth(faceFrame) + 66, 46);
-    UIView *pill = homeProfilePill(header);
     if (!CGRectEqualToRect(pill.frame, pillFrame)) pill.frame = pillFrame;
     SGRGlassCapsuleInside(pill, &kHomePillKey, pillFrame.size, NO);
     filters.frame = CGRectMake(CGRectGetMinX(pillFrame) + 5, CGRectGetMidY(pillFrame) - 22, 44, 44);

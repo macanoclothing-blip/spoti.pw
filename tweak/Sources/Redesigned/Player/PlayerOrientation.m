@@ -8,6 +8,7 @@ static char kControllerAutorotationHookKey;
 static NSString *const kPlayerClass = @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController";
 static UIInterfaceOrientationMask sg_forcedOrientationMask;
 static UIDeviceOrientation sg_lastPhysicalOrientation;
+static __weak UIViewController *sg_activePlayerController;
 
 static BOOL physicalOrientationIsValid(UIDeviceOrientation orientation) {
     return UIDeviceOrientationIsPortrait(orientation) || UIDeviceOrientationIsLandscape(orientation);
@@ -43,6 +44,9 @@ static BOOL visibleControllerTreeContainsPlayer(UIViewController *controller, UI
 
 static BOOL playerVisibleInWindow(UIWindow *window) {
     if (!window) return NO;
+    UIViewController *active = sg_activePlayerController;
+    UIView *activeView = active.viewIfLoaded;
+    if (activeView) return activeView.window == window && !activeView.hidden;
     return visibleControllerTreeContainsPlayer(window.rootViewController, window, 0);
 }
 
@@ -227,10 +231,24 @@ void SGRPlayerInstallOrientationPolicy(void) {
     installOnDelegate(UIApplication.sharedApplication.delegate);
 }
 
+void SGRPlayerOrientationPlayerDidAppear(UIViewController *player) {
+    NSCAssert(NSThread.isMainThread, @"Orientation player registration must run on the main thread");
+    sg_activePlayerController = player;
+    SGRPlayerRefreshOrientationPolicy();
+}
+
+void SGRPlayerOrientationPlayerWillDisappear(UIViewController *player) {
+    NSCAssert(NSThread.isMainThread, @"Orientation player registration must run on the main thread");
+    if (sg_activePlayerController == player) sg_activePlayerController = nil;
+    SGRPlayerClearOrientationOverride();
+}
+
 void SGRPlayerToggleOrientation(void) {
     NSCAssert(NSThread.isMainThread, @"Orientation changes must be requested on the main thread");
-    UIWindow *window = nil;
+    UIViewController *player = sg_activePlayerController;
+    UIWindow *window = player.viewIfLoaded.window;
     for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+        if (window) break;
         if (![scene isKindOfClass:UIWindowScene.class]) continue;
         for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
             if (candidate.isKeyWindow && playerVisibleInWindow(candidate)) {
@@ -240,7 +258,7 @@ void SGRPlayerToggleOrientation(void) {
         }
         if (window) break;
     }
-    if (!window) {
+    if (!window || !playerVisibleInWindow(window)) {
         SGLog(@"redesign player: orientation toggle could not find the visible player window");
         return;
     }
@@ -271,6 +289,20 @@ void SGRPlayerClearOrientationOverride(void) {
 void SGRPlayerRefreshOrientationPolicy(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         SGRPlayerInstallOrientationPolicy();
+        UIViewController *activePlayer = sg_activePlayerController;
+        UIWindow *activeWindow = activePlayer.viewIfLoaded.window;
+        if (activePlayer && activeWindow && activeWindow.isKeyWindow) {
+            for (UIViewController *ancestor = activePlayer; ancestor; ancestor = ancestor.parentViewController) {
+                installOnController(ancestor);
+                if (@available(iOS 16.0, *)) [ancestor setNeedsUpdateOfSupportedInterfaceOrientations];
+            }
+            if (@available(iOS 16.0, *)) {
+                UIViewController *root = activeWindow.rootViewController;
+                if (root && root != activePlayer) [root setNeedsUpdateOfSupportedInterfaceOrientations];
+            }
+            requestWindowOrientationIfNeeded(activeWindow);
+            return;
+        }
         Class playerClass = NSClassFromString(kPlayerClass);
         for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
             if (![scene isKindOfClass:UIWindowScene.class]) continue;
