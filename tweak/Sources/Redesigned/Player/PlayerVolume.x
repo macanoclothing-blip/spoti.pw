@@ -151,6 +151,19 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         objc_setAssociatedObject(stack, &kVolumeRowKey, volume, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (volume.superview != stack) [stack addSubview:volume];
+    UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
+    BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
+        (!UIInterfaceOrientationIsPortrait(orientation) && stack.window.bounds.size.width > stack.window.bounds.size.height);
+    if (landscape) {
+        volume.hidden = YES;
+        volume.alpha = 0;
+        volume.userInteractionEnabled = NO;
+        volume.accessibilityElementsHidden = YES;
+        return NO;
+    }
+    volume.hidden = NO;
+    volume.userInteractionEnabled = YES;
+    volume.accessibilityElementsHidden = NO;
     if (!controls || !footer || !stack.window) {
         volume.alpha = 0;
         SGLog(@"redesign player: volume row has no window, controls or footer");

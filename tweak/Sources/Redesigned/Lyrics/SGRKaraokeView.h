@@ -18,6 +18,8 @@
 @property (nonatomic, readonly) UIEdgeInsets lineInsets;
 // duration 0 moves everything at once.
 - (void)setLineInsets:(UIEdgeInsets)insets duration:(NSTimeInterval)duration;
+// The landscape player has a narrower reading column than the full lyrics page.
+- (void)setFontSize:(CGFloat)size;
 // Asked as a tap lands on the lines, before it seeks or opens what a line means; NO leaves the tap to
 // whoever else watches the touch. Nil takes every tap.
 @property (nonatomic, copy) BOOL (^takesTap)(void);

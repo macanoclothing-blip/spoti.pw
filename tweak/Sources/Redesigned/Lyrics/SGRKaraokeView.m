@@ -1310,6 +1310,14 @@ typedef struct {
     return _band;
 }
 
+- (void)setFontSize:(CGFloat)size {
+    if (!isfinite(size) || size < 12 || fabs(_fontSize - size) < 0.5) return;
+    _fontSize = size;
+    if (!_lines) return;
+    ++_build; // drop any measurement made with the previous size
+    [self rebuild];
+}
+
 // The lines spring to the anchor of the new room the way they move on to a new line, the ones further
 // down a beat later, while the fade's edges and the credit travel over `duration`.
 - (void)setLineInsets:(UIEdgeInsets)insets duration:(NSTimeInterval)duration {

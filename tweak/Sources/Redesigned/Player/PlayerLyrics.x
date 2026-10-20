@@ -27,8 +27,8 @@
 // elements inside them, and it is undone before the player closes: the bar morphs back into a full
 // size cover, which a thumbnail would not match.
 //
-// With the lines up and the song playing, the controls go after a few seconds untouched and the lines
-// have the player to themselves, the way the Music app leaves its lyrics alone: the header row, the
+// In portrait, with the lines up and the song playing, the controls go after a few seconds untouched
+// and the lines have the player to themselves, the way the Music app leaves its lyrics alone: the header row, the
 // thumbnail and the bottom stack (the lifted title row with it) fade out, and the lines' room grows
 // from the band between the title row and the progress bar to the whole height of the player. The
 // lines' view is laid over all of that room from the start and only its band moves
@@ -72,8 +72,8 @@ static const NSTimeInterval kLyricsIn = 0.3, kLyricsInDelay = 0.12, kLyricsOut =
 static const NSTimeInterval kLyricsGrace = 3;
 // Below this the player has not laid out yet and nothing can be measured from it.
 static const CGFloat kLivingHeight = 200;
-// The lines alone: this long untouched while they play, and the controls go. They go slowly, being
-// nothing the eye waits for, and come back quickly, since a touch asked for them.
+// In portrait, the lines alone: this long untouched while they play, and the controls go. They go
+// slowly, being nothing the eye waits for, and come back quickly, since a touch asked for them.
 static const NSTimeInterval kAloneAfter = 4;
 static const NSTimeInterval kAloneOut = 0.6, kAloneBack = 0.3;
 // Lighter than the Kit's glyph buttons: a picture dimmed to half reads as gone, not pressed.
@@ -84,6 +84,10 @@ static const CGFloat kThumbAppearScale = 0.8;
 static char kOverlayKey, kPlateKey, kTitleKey, kWatcherKey, kRotateGlassKey;
 static char kLandscapeDurationFrameKey, kLandscapeControlsFrameKey;
 static char kLandscapeDurationMovedKey, kLandscapeControlsMovedKey;
+static char kLandscapeSliderFrameKey, kLandscapeTakenFrameKey, kLandscapeRemainingFrameKey;
+static char kLandscapePreviousFrameKey, kLandscapePlayFrameKey, kLandscapeNextFrameKey;
+static char kLandscapeSliderKey, kLandscapeTakenKey, kLandscapeRemainingKey;
+static char kLandscapePreviousKey, kLandscapePlayKey, kLandscapeNextKey;
 static BOOL sg_open;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
@@ -93,8 +97,23 @@ static BOOL sg_singHeld;                    // Sing's microphone is open, prepar
 static __weak UIView *sg_sing;              // the microphone, when Sing is on
 static __weak UIView *sg_host;              // SPTNowPlayingView
 static __weak UIViewController *sg_player;  // its controller
-static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_controls, *sg_floating;
+static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_controls, *sg_footer, *sg_floating;
 static __weak UIView *sg_titleElement;      // the arranged element view holding the title and the artist
+
+static BOOL playerIsLandscape(void) {
+    UIView *host = sg_host;
+    return host && host.bounds.size.width > host.bounds.size.height;
+}
+
+static void syncLandscapeFooter(void) {
+    UIView *footer = sg_footer.viewIfLoaded;
+    if (!footer) return;
+    // The landscape lyrics composition uses the lower edge for its translation and meaning controls.
+    CGFloat alpha = sg_open && playerIsLandscape() ? 0 : 1;
+    if (fabs(footer.alpha - alpha) > 0.01) footer.alpha = alpha;
+    footer.userInteractionEnabled = alpha > 0.01;
+    footer.accessibilityElementsHidden = alpha < 0.01;
+}
 
 #pragma mark - the overlay
 
@@ -272,7 +291,6 @@ typedef struct {
     CGFloat shift;    // how far the title slides right to clear the thumbnail, 0 when it sits under it
     CGFloat baseShift; // the title sits to the right of the large cover before lyrics open
     CGFloat titleMaxWidth;
-    CGFloat titleScale;
 } SGRLyricsLayout;
 
 // What a view's frame would be with the translation this file put on it left out.
@@ -302,15 +320,15 @@ static SGRLyricsLayout layoutIn(UIView *host) {
         CGFloat contentTop = MAX(safe.top + 8, headerBottom + 4);
         CGFloat contentBottom = host.bounds.size.height - safe.bottom - kLyricsBottom;
         CGFloat contentHeight = contentBottom - contentTop;
-        CGFloat leftWidth = floor(area.size.width * 0.28);
+        // Keep a real left hand player column. Spotify's full width transport unit is never scaled:
+        // scaling the unit also scales its text, slider and hit targets into the narrow column.
+        CGFloat leftWidth = floor(area.size.width * 0.42);
         UIView *controlsView = sg_controls.viewIfLoaded;
         CGRect controlsOriginal = controlsView ? untransformed(controlsView, host) : CGRectZero;
-        CGFloat controlsHeight = controlsOriginal.size.height > 0 ? MIN(56, controlsOriginal.size.height) : 56;
+        CGFloat controlsHeight = controlsOriginal.size.height > 0 ? MIN(60, controlsOriginal.size.height) : 56;
         CGFloat durationHeight = MIN(40, MAX(24, bar.size.height));
-        CGFloat left = title ? CGRectGetMinX(untransformed(title, host)) : CGRectGetMinX(area) + SGRSideMargin;
-        left = MAX(CGRectGetMinX(area) + SGRSideMargin,
-                   MIN(left, CGRectGetMinX(area) + leftWidth - kThumbSide - SGRSideMargin));
-        CGFloat controlsWidth = CGRectGetMinX(area) + leftWidth - left - SGRSideMargin;
+        CGFloat left = CGRectGetMinX(area) + SGRSideMargin;
+        CGFloat controlsWidth = MAX(0, leftWidth - 2 * SGRSideMargin);
         CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 24;
         CGFloat side = MIN(140, MIN(controlsWidth - 12, leftContentHeight));
         if (side < kThumbSide) {
@@ -324,12 +342,10 @@ static SGRLyricsLayout layoutIn(UIView *host) {
         l.cover = CGRectMake(left, top, sourceSide, sourceSide);
         l.thumb = CGRectMake(left, top, side, side);
         l.lift = CGRectGetMaxY(l.thumb) + 12 - CGRectGetMinY(row);
-        l.shift = 0;
         l.titleMaxWidth = controlsWidth;
-        CGFloat titleWidth = title ? title.bounds.size.width : 0;
-        l.titleScale = titleWidth > 0 ? MIN(1, l.titleMaxWidth / titleWidth) : 1;
         CGRect sourceTitle = title ? untransformed(title, host) : row;
         l.baseShift = MAX(0, CGRectGetMaxX(l.cover) + kThumbGap - CGRectGetMinX(sourceTitle));
+        l.shift = left - CGRectGetMinX(sourceTitle);
         l.duration = CGRectMake(left, CGRectGetMaxY(l.thumb) + 12 + row.size.height + 4,
                                 controlsWidth, durationHeight);
         l.controls = CGRectMake(left, CGRectGetMaxY(l.duration) + 8, controlsWidth, controlsHeight);
@@ -444,26 +460,113 @@ static void restoreUnitFrame(UIView *unit, UIView *host, const void *frameKey, c
     objc_setAssociatedObject(unit, frameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-static void fitUnit(UIView *unit, UIView *host, CGRect target, const void *frameKey, const void *movedKey) {
-    if (!unit || !host || CGRectIsEmpty(target)) return;
+// The stack still owns these arranged units, so keep their original size and move their centre. Their
+// contents are laid out at native size inside the left column below; a scale transform here made the
+// slider, labels, controls and their touch areas all collapse together.
+static void moveUnit(UIView *unit, UIView *host, CGPoint origin, const void *frameKey, const void *movedKey) {
+    if (!unit || !host) return;
     CGRect source = baselineFrameForUnit(unit, host, frameKey);
     if (CGRectIsEmpty(source)) return;
-    unit.transform = CGAffineTransformMakeScale(target.size.width / source.size.width,
-                                                 target.size.height / source.size.height);
-    unit.center = [unit.superview convertPoint:CGPointMake(CGRectGetMidX(target), CGRectGetMidY(target)) fromView:host];
+    unit.transform = CGAffineTransformIdentity;
+    unit.center = [unit.superview convertPoint:CGPointMake(origin.x + source.size.width / 2,
+                                                            origin.y + source.size.height / 2) fromView:host];
     objc_setAssociatedObject(unit, movedKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static CGRect savedChildFrame(UIView *view, const void *key) {
+    NSValue *saved = objc_getAssociatedObject(view, key);
+    if (saved) return saved.CGRectValue;
+    CGRect frame = view.frame;
+    objc_setAssociatedObject(view, key, [NSValue valueWithCGRect:frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return frame;
+}
+
+static void restoreChildFrame(UIView *view, const void *key) {
+    if (!view) return;
+    NSValue *saved = objc_getAssociatedObject(view, key);
+    if (!saved) return;
+    view.transform = CGAffineTransformIdentity;
+    view.frame = saved.CGRectValue;
+    objc_setAssociatedObject(view, key, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void setFrameIn(UIView *view, UIView *coordinateView, CGRect frame) {
+    if (!view || !coordinateView || !view.superview) return;
+    view.transform = CGAffineTransformIdentity;
+    view.frame = [coordinateView convertRect:frame toView:view.superview];
+}
+
+static void layoutLandscapeProgress(UIView *duration, SGRLyricsLayout l) {
+    if (!duration) return;
+    UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
+    UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey);
+    UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey);
+    CGFloat width = l.duration.size.width;
+    if ([slider isKindOfClass:UISlider.class] && [slider isDescendantOfView:duration]) {
+        savedChildFrame(slider, &kLandscapeSliderFrameKey);
+        CGRect frame = [slider convertRect:slider.bounds toView:duration];
+        frame.origin.x = 0;
+        frame.size.width = width;
+        setFrameIn(slider, duration, frame);
+    }
+    if (taken && [taken isDescendantOfView:duration]) {
+        savedChildFrame(taken, &kLandscapeTakenFrameKey);
+        CGRect frame = [taken convertRect:taken.bounds toView:duration];
+        frame.origin.x = 0;
+        setFrameIn(taken, duration, frame);
+    }
+    if (remaining && [remaining isDescendantOfView:duration]) {
+        savedChildFrame(remaining, &kLandscapeRemainingFrameKey);
+        CGRect frame = [remaining convertRect:remaining.bounds toView:duration];
+        frame.origin.x = MAX(0, width - frame.size.width);
+        setFrameIn(remaining, duration, frame);
+    }
+}
+
+static void placeLandscapeButton(UIView *button, UIView *host, CGFloat x, CGFloat y, const void *key) {
+    if (!button || !host || !button.superview) return;
+    CGRect original = savedChildFrame(button, key);
+    button.transform = CGAffineTransformIdentity;
+    button.bounds = (CGRect){CGPointZero, original.size};
+    button.center = [button.superview convertPoint:CGPointMake(x, y) fromView:host];
+}
+
+static void layoutLandscapeControls(UIView *controls, UIView *host, SGRLyricsLayout l) {
+    UIView *previous = SGRFindByIdentifier(controls, @"SPTNowPlayingPreviousTrackButton", &kLandscapePreviousKey);
+    UIView *play = SGRFindByIdentifier(controls, @"SPTNowPlayingPlayButton", &kLandscapePlayKey);
+    UIView *next = SGRFindByIdentifier(controls, @"SPTNowPlayingNextTrackButton", &kLandscapeNextKey);
+    CGFloat y = CGRectGetMidY(l.controls), left = CGRectGetMinX(l.controls), right = CGRectGetMaxX(l.controls);
+    CGFloat side = previous ? CGRectGetWidth(previous.bounds) : 56;
+    CGFloat trailingSide = next ? CGRectGetWidth(next.bounds) : side;
+    placeLandscapeButton(previous, host, left + side / 2, y, &kLandscapePreviousFrameKey);
+    placeLandscapeButton(play, host, CGRectGetMidX(l.controls), y, &kLandscapePlayFrameKey);
+    placeLandscapeButton(next, host, right - trailingSide / 2, y, &kLandscapeNextFrameKey);
+}
+
+static void restoreLandscapeChildren(UIView *duration, UIView *controls) {
+    UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
+    restoreChildFrame(slider, &kLandscapeSliderFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey), &kLandscapeTakenFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey), &kLandscapeRemainingFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(controls, @"SPTNowPlayingPreviousTrackButton", &kLandscapePreviousKey), &kLandscapePreviousFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(controls, @"SPTNowPlayingPlayButton", &kLandscapePlayKey), &kLandscapePlayFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(controls, @"SPTNowPlayingNextTrackButton", &kLandscapeNextKey), &kLandscapeNextFrameKey);
 }
 
 static void placeTitleRow(SGRLyricsLayout l) {
     UIView *info = sg_info.viewIfLoaded;
     if (!info) return;
+    syncLandscapeFooter();
     BOOL landscape = sg_host.bounds.size.width > sg_host.bounds.size.height;
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
     if (landscape && sg_open && duration && controls) {
-        fitUnit(duration, sg_host, l.duration, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
-        fitUnit(controls, sg_host, l.controls, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
+        moveUnit(duration, sg_host, l.duration.origin, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+        moveUnit(controls, sg_host, l.controls.origin, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
+        layoutLandscapeProgress(duration, l);
+        layoutLandscapeControls(controls, sg_host, l);
     } else {
+        restoreLandscapeChildren(duration, controls);
         restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     }
@@ -473,8 +576,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
     UIView *title = sg_titleElement;
     if (!title) return;
-    CGFloat scale = sg_open && landscape ? MAX(0.62, l.titleScale) : 1;
-    CGAffineTransform slide = CGAffineTransformMakeScale(scale, scale);
+    CGAffineTransform slide = CGAffineTransformIdentity;
     slide.tx = round(shift);
     if (!CGAffineTransformEqualToTransform(title.transform, slide)) title.transform = slide;
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
@@ -549,7 +651,7 @@ static void setAlone(BOOL alone, BOOL animated) {
 static BOOL mayGoAlone(void) {
     UIView *host = sg_host;
     SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
-    if (!sg_open || sg_moving || sg_singHeld || !host.window || !overlay.superview || overlay.lyrics.hidden) return NO;
+    if (!sg_open || playerIsLandscape() || sg_moving || sg_singHeld || !host.window || !overlay.superview || overlay.lyrics.hidden) return NO;
     SPTPlayerState *state = SGPlayerState();
     if (!state || state.isPaused) return NO;
     // A sheet the player opens (the queue, the devices, the menu) is presented by its topmost controller.
@@ -566,6 +668,10 @@ static BOOL mayGoAlone(void) {
 // and so does the app coming back (the %ctor).
 static void scheduleAlone(void) {
     stopAloneTimer();
+    if (playerIsLandscape()) {
+        if (sg_alone) setAlone(NO, NO);
+        return;
+    }
     if (!sg_open || sg_alone) return;
     sg_aloneTimer = [NSTimer scheduledTimerWithTimeInterval:kAloneAfter repeats:NO block:^(NSTimer *timer) {
         sg_aloneTimer = nil;
@@ -730,6 +836,7 @@ static void setOpen(BOOL open, BOOL animated) {
     SGRPlayerLyricsOverlay *overlay = overlayIn(host);
     if (!open) SGRSingControlDismiss(overlay);
     place(overlay, host, l);
+    if (open) [overlay.lyrics setFontSize:landscape ? 24 : 30];
     CGAffineTransform vinylClosingTransform = CGAffineTransformIdentity;
     BOOL vinylClosing = !open && SGRVinylLyricsClosingTransform(overlay.thumb, &vinylClosingTransform);
     CGAffineTransform away = thumbTransform(l);
@@ -822,6 +929,10 @@ void SGRPlayerToggleLyrics(void) {
 static void replace(void) {
     UIView *host = sg_host;
     if (!host || sg_moving) return;   // a pass in the middle of the transition would cut it short
+    if (playerIsLandscape()) {
+        stopAloneTimer();
+        if (sg_alone) setAlone(NO, NO);
+    }
     SGRLyricsLayout l = layoutIn(host);
     if (sg_open && !l.ok) {
         SGLog(@"redesign player: lyrics layout no longer fits %.0fx%.0f; restoring the player layout",
@@ -839,6 +950,7 @@ static void replace(void) {
     SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(host, &kOverlayKey);
     if (!overlay.superview) overlay = overlayIn(host);
     place(overlay, host, l);
+    [overlay.lyrics setFontSize:playerIsLandscape() ? 24 : 30];
     overlay.thumb.transform = thumbTransform(l);
     overlay.cover.layer.cornerRadius = thumbRadius(l, YES);
     overlay.lyrics.frame = overlay.stage.bounds;
@@ -870,6 +982,11 @@ static void replace(void) {
 
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     UIView *duration = sg_duration.viewIfLoaded, *controls = sg_controls.viewIfLoaded;
+    if (size.width > size.height) {
+        stopAloneTimer();
+        if (sg_alone) setAlone(NO, NO);
+    }
+    restoreLandscapeChildren(duration, controls);
     restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
     restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     if (duration) objc_setAssociatedObject(duration, &kLandscapeDurationFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -940,6 +1057,11 @@ static void controlsLaidOut(UIViewController *unit) {
     if (sg_open) replace();
 }
 
+static void footerLaidOut(UIViewController *unit) {
+    sg_footer = unit;
+    syncLandscapeFooter();
+}
+
 %hook _TtC20NowPlaying_ModesImpl18HeaderElementsUnit
 - (void)viewDidLayoutSubviews {
     %orig;
@@ -995,6 +1117,20 @@ static void controlsLaidOut(UIViewController *unit) {
 - (void)viewDidLayoutSubviews {
     %orig;
     controlsLaidOut((UIViewController *)self);
+}
+%end
+
+%hook _TtC20NowPlaying_ModesImpl18FooterElementsUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    footerLaidOut((UIViewController *)self);
+}
+%end
+
+%hook _TtC32ReinventFree_ReinventFreeNpvImpl30ReinventFreeFooterElementsUnit
+- (void)viewDidLayoutSubviews {
+    %orig;
+    footerLaidOut((UIViewController *)self);
 }
 %end
 
@@ -1112,10 +1248,12 @@ static SGRPlayerLyricsWatcher *sg_watcher;
         @"_TtC20NowPlaying_ModesImpl23InformationElementsUnit",
         @"_TtC20NowPlaying_ModesImpl19DurationElementUnit",
         @"_TtC20NowPlaying_ModesImpl28PlaybackControlsElementsUnit",
+        @"_TtC20NowPlaying_ModesImpl18FooterElementsUnit",
         @"_TtC20NowPlaying_ModesImpl20FloatingElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl43ReinventFreeNavigationBarUnitViewController",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl35ReinventFreeInformationElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl20DurationElementsUnit",
         @"_TtC32ReinventFree_ReinventFreeNpvImpl40ReinventFreePlaybackControlsElementsUnit",
+        @"_TtC32ReinventFree_ReinventFreeNpvImpl30ReinventFreeFooterElementsUnit",
     ]);
 }
