@@ -142,8 +142,40 @@ static BOOL sameImages(NSArray<UIImage *> *a, NSArray<UIImage *> *b) {
 // pull or a tap through to the page under it.
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
+    if (self.titleTapHandler && (hit == self || hit == _title || hit == _artistLogo)) {
+        UIView *titleHit = [self sgr_titleHit:point];
+        if (titleHit) return titleHit;
+    }
     if (hit == self || hit == _creator || hit == _creatorLogo) return [self sgr_creatorHit:point];
     return hit;
+}
+
+- (void)setTitleTapHandler:(dispatch_block_t)titleTapHandler {
+    _titleTapHandler = [titleTapHandler copy];
+    BOOL enabled = _titleTapHandler != nil;
+    for (UIView *view in @[_title, _artistLogo]) {
+        view.userInteractionEnabled = enabled;
+        if (enabled && !view.gestureRecognizers.count) {
+            UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(sgr_titleTapped)];
+            tap.cancelsTouchesInView = NO;
+            tap.delaysTouchesBegan = NO;
+            [view addGestureRecognizer:tap];
+        }
+        view.accessibilityTraits = enabled ? UIAccessibilityTraitHeader | UIAccessibilityTraitButton : UIAccessibilityTraitHeader;
+        view.accessibilityHint = enabled ? @"Mostra gli altri loghi disponibili per questo artista" : nil;
+    }
+}
+
+- (void)sgr_titleTapped {
+    if (self.titleTapHandler) self.titleTapHandler();
+}
+
+- (UIView *)sgr_titleHit:(CGPoint)point {
+    if (_title.userInteractionEnabled && !_title.hidden && _title.alpha > 0.01 &&
+        CGRectContainsPoint(CGRectInset(_title.frame, -8, -5), point)) return _title;
+    if (_artistLogo.userInteractionEnabled && !_artistLogo.hidden && _artistLogo.alpha > 0.01 &&
+        CGRectContainsPoint(CGRectInset(_artistLogo.frame, -8, -5), point)) return _artistLogo;
+    return nil;
 }
 
 - (BOOL)showTitle:(NSString *)title creator:(NSString *)creator length:(NSString *)length about:(NSString *)about {

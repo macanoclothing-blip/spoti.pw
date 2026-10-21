@@ -351,6 +351,172 @@ static void showArtistInfo(NSString *name) {
     [presenter presentViewController:sheet animated:YES completion:nil];
 }
 
+@interface SGRArtistLogoPickerCell : UITableViewCell
+- (void)configureTitle:(NSString *)title subtitle:(NSString *)subtitle image:(UIImage *)image selected:(BOOL)selected;
+@end
+
+@implementation SGRArtistLogoPickerCell {
+    UIImageView *_logoView;
+    UILabel *_mainLabel, *_detailLabel;
+}
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
+    if (!(self = [super initWithStyle:style reuseIdentifier:reuseIdentifier])) return nil;
+    self.backgroundColor = [UIColor colorWithWhite:1 alpha:0.055];
+    self.contentView.backgroundColor = UIColor.clearColor;
+    self.selectionStyle = UITableViewCellSelectionStyleDefault;
+    _logoView = [UIImageView new];
+    _logoView.translatesAutoresizingMaskIntoConstraints = NO;
+    _logoView.contentMode = UIViewContentModeScaleAspectFit;
+    _logoView.clipsToBounds = YES;
+    _logoView.layer.cornerRadius = 8;
+    _logoView.backgroundColor = [UIColor colorWithWhite:1 alpha:0.08];
+    [self.contentView addSubview:_logoView];
+    _mainLabel = [UILabel new];
+    _mainLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _mainLabel.font = [UIFont systemFontOfSize:17 weight:UIFontWeightSemibold];
+    _mainLabel.textColor = UIColor.whiteColor;
+    _mainLabel.numberOfLines = 1;
+    [self.contentView addSubview:_mainLabel];
+    _detailLabel = [UILabel new];
+    _detailLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    _detailLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _detailLabel.textColor = [UIColor colorWithWhite:1 alpha:0.62];
+    _detailLabel.numberOfLines = 2;
+    [self.contentView addSubview:_detailLabel];
+    [NSLayoutConstraint activateConstraints:@[
+        [_logoView.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:14],
+        [_logoView.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor],
+        [_logoView.widthAnchor constraintEqualToConstant:64], [_logoView.heightAnchor constraintEqualToConstant:48],
+        [_mainLabel.leadingAnchor constraintEqualToAnchor:_logoView.trailingAnchor constant:14],
+        [_mainLabel.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-12],
+        [_mainLabel.topAnchor constraintGreaterThanOrEqualToAnchor:self.contentView.topAnchor constant:10],
+        [_detailLabel.leadingAnchor constraintEqualToAnchor:_mainLabel.leadingAnchor],
+        [_detailLabel.trailingAnchor constraintEqualToAnchor:_mainLabel.trailingAnchor],
+        [_detailLabel.topAnchor constraintEqualToAnchor:_mainLabel.bottomAnchor constant:3],
+        [_detailLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-10],
+        [_mainLabel.centerYAnchor constraintEqualToAnchor:self.contentView.centerYAnchor constant:-9]
+    ]];
+    return self;
+}
+- (void)configureTitle:(NSString *)title subtitle:(NSString *)subtitle image:(UIImage *)image selected:(BOOL)selected {
+    _mainLabel.text = title;
+    _detailLabel.text = subtitle;
+    _logoView.image = image;
+    _logoView.hidden = image == nil;
+    self.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    self.tintColor = [UIColor colorWithRed:0.28 green:0.96 blue:0.12 alpha:1];
+    self.isAccessibilityElement = YES;
+    self.accessibilityLabel = subtitle.length ? [NSString stringWithFormat:@"%@, %@", title, subtitle] : title;
+    self.accessibilityValue = selected ? @"Selezionato" : nil;
+    self.accessibilityHint = @"Applica questo logo alla pagina dell’artista";
+}
+@end
+
+@interface SGRArtistLogoPicker : UITableViewController
+- (instancetype)initWithArtist:(NSString *)artist;
+@end
+
+@implementation SGRArtistLogoPicker {
+    NSString *_artist;
+    NSArray<SGRArtistLogoOption *> *_options;
+    BOOL _loading;
+}
+- (instancetype)initWithArtist:(NSString *)artist {
+    if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
+    _artist = [artist copy];
+    _loading = YES;
+    self.title = @"Logo artista";
+    self.modalInPresentation = NO;
+    return self;
+}
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    self.view.backgroundColor = [UIColor colorWithRed:0.035 green:0.035 blue:0.04 alpha:1];
+    self.tableView.backgroundColor = self.view.backgroundColor;
+    self.tableView.rowHeight = 78;
+    self.tableView.estimatedRowHeight = 78;
+    self.tableView.separatorColor = [UIColor colorWithWhite:1 alpha:0.1];
+    [self.tableView registerClass:SGRArtistLogoPickerCell.class forCellReuseIdentifier:@"artist-logo"];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone
+                                                                                           target:self action:@selector(closePicker)];
+    self.navigationItem.rightBarButtonItem.accessibilityLabel = @"Chiudi selezione logo";
+    __weak SGRArtistLogoPicker *weakSelf = self;
+    SGRArtistLogoOptionsForArtist(_artist, ^(NSArray<SGRArtistLogoOption *> *options) {
+        SGRArtistLogoPicker *picker = weakSelf;
+        if (!picker) return;
+        picker->_options = options ?: @[];
+        picker->_loading = NO;
+        [picker.tableView reloadData];
+    });
+}
+- (void)closePicker { [self.navigationController dismissViewControllerAnimated:YES completion:nil]; }
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section;
+    return _options.count ? (NSInteger)_options.count + 1 : 2;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    SGRArtistLogoPickerCell *cell = [tableView dequeueReusableCellWithIdentifier:@"artist-logo" forIndexPath:indexPath];
+    if (indexPath.row == 0) {
+        UIImage *reset = [UIImage systemImageNamed:@"arrow.counterclockwise"];
+        [cell configureTitle:@"Automatico" subtitle:@"Ripristina il logo scelto automaticamente" image:reset
+                    selected:SGRArtistLogoSelectedKeyForArtist(_artist) == nil];
+        return cell;
+    }
+    if (_loading || !_options.count) {
+        NSString *message = _loading ? @"Ricerca dei loghi disponibili…" : @"Nessun altro logo trovato";
+        NSString *detail = _loading ? @"Controllo Fanart.tv e Apple Music" : @"Configura la chiave Fanart.tv nelle Impostazioni per ampliare i risultati.";
+        [cell configureTitle:message subtitle:detail image:nil selected:NO];
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        if (_loading) {
+            UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+            spinner.color = UIColor.whiteColor;
+            [spinner startAnimating];
+            cell.accessoryView = spinner;
+        } else {
+            cell.accessoryView = nil;
+        }
+        cell.isAccessibilityElement = YES;
+        cell.accessibilityHint = nil;
+        return cell;
+    }
+    SGRArtistLogoOption *option = _options[(NSUInteger)indexPath.row - 1];
+    BOOL selected = [option.selectionKey isEqualToString:SGRArtistLogoSelectedKeyForArtist(_artist)];
+    [cell configureTitle:option.source subtitle:@"Tocca per usare questo logo" image:option.image selected:selected];
+    cell.accessoryView = nil;
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row == 0) {
+        SGRArtistLogoUseAutomatic(_artist);
+        [self closePicker];
+        return;
+    }
+    if (!_options.count || _loading) return;
+    NSUInteger optionIndex = (NSUInteger)indexPath.row - 1;
+    if (optionIndex >= _options.count) return;
+    SGRArtistLogoSelectOption(_artist, _options[optionIndex]);
+    [self closePicker];
+}
+@end
+
+static void showArtistLogoPicker(NSString *name) {
+    if (!name.length) return;
+    UIViewController *presenter = SGTopController();
+    if (!presenter || presenter.presentedViewController) return;
+    SGRArtistLogoPicker *picker = [[SGRArtistLogoPicker alloc] initWithArtist:name];
+    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:picker];
+    navigation.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
+    if (@available(iOS 15.0, *)) {
+        navigation.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent, UISheetPresentationControllerDetent.largeDetent];
+        navigation.sheetPresentationController.prefersGrabberVisible = YES;
+        navigation.sheetPresentationController.preferredCornerRadius = 28;
+    }
+    [presenter presentViewController:navigation animated:YES completion:nil];
+}
+
 #pragma mark - Spotify's views
 
 // Drawn by nothing and out of the way of touches, whatever Spotify does to it: an empty mask. Not hidden --
@@ -693,6 +859,13 @@ static void applyHeader(UIView *header) {
     UIView *listeners = SGRFindByIdentifier(header, @"Components.Header.UI.Metadata", &kMetaKey);
     NSString *name = firstText(title) ?: firstText(bar), *listening = firstText(listeners);
     [info showTitle:name creator:nil length:listening about:nil];
+    __weak UIView *weakTitleHeader = header;
+    NSString *pickerArtistName = [name copy];
+    info.titleTapHandler = name.length ? ^{
+        UIView *active = weakTitleHeader;
+        NSString *currentName = firstText(SGRFindByIdentifier(active, @"Encore.AdaptiveTitle", &kTitleKey)) ?: firstText(keepBar(active));
+        showArtistLogoPicker(currentName ?: pickerArtistName);
+    } : nil;
     SGRGlyphButton *artistInfo = objc_getAssociatedObject(container, &kArtistInfoButtonKey);
     if (!artistInfo) {
         artistInfo = [SGRGlyphButton buttonWithSymbol:@"info" pointSize:22 title:@"Informazioni artista"];

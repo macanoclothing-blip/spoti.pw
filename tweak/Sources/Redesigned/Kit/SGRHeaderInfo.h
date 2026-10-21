@@ -20,6 +20,9 @@ extern const CGFloat SGRHeaderInfoBottom;     // 14, under the content
 extern const CGFloat SGRHeaderInfoTitleRise;  // 56, of the content over the picture
 
 @interface SGRHeaderInfo : UIView
+// Optional action for an artist's displayed name/logo. Other pages leave this nil, so their title remains
+// transparent to page gestures as before.
+@property (nonatomic, copy) dispatch_block_t titleTapHandler;
 // YES when anything shown changed. nil or empty hides that line.
 - (BOOL)showTitle:(NSString *)title creator:(NSString *)creator length:(NSString *)length about:(NSString *)about;
 - (void)showLogo:(UIImage *)logo forTitle:(NSString *)title;

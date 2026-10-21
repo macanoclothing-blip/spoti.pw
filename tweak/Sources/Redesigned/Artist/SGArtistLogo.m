@@ -4,6 +4,7 @@
 #import <math.h>
 
 static NSString *const kKey = @"spotipw.fanart.artistLogo.key";
+static NSString *const kSelectionsKey = @"spotifyglass.redesign.artistLogo.selections";
 static NSString *const kMusicBrainz = @"https://musicbrainz.org/ws/2/artist";
 static NSString *const kFanart = @"https://webservice.fanart.tv/v3/music";
 static NSString *const kAppleSearch = @"https://amp-api.music.apple.com/v1/catalog/us/search";
@@ -21,6 +22,20 @@ static NSMutableDictionary<NSString *, NSMutableArray *> *sg_pending;
 static NSDate *sg_nextMusicBrainzRequest;
 static NSDate *sg_appleQuietUntil;
 static NSUInteger sg_generation;
+
+@interface SGRArtistLogoOption ()
+- (instancetype)initWithSource:(NSString *)source selectionKey:(NSString *)selectionKey image:(UIImage *)image;
+@end
+
+@implementation SGRArtistLogoOption
+- (instancetype)initWithSource:(NSString *)source selectionKey:(NSString *)selectionKey image:(UIImage *)image {
+    if (!(self = [super init])) return nil;
+    _source = [source copy];
+    _selectionKey = [selectionKey copy];
+    _image = image;
+    return self;
+}
+@end
 
 static void invalidateArtistLogos(void) {
     sg_generation++;
@@ -67,6 +82,46 @@ void SGRArtistLogoSetAppleEnabled(BOOL enabled) {
 static NSString *cacheKey(NSString *artist) {
     NSString *trimmed = [artist stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     return [trimmed stringByFoldingWithOptions:NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch locale:NSLocale.currentLocale];
+}
+
+NSString *SGRArtistLogoSelectedKeyForArtist(NSString *artist) {
+    NSString *lookupKey = cacheKey(artist ?: @"");
+    NSDictionary *selections = [NSUserDefaults.standardUserDefaults dictionaryForKey:kSelectionsKey];
+    NSString *url = [selections[lookupKey] isKindOfClass:NSString.class] ? selections[lookupKey] : nil;
+    return url.length ? url : nil;
+}
+
+static void updateSelection(NSString *artist, NSString *url) {
+    NSString *lookupKey = cacheKey(artist ?: @"");
+    if (!lookupKey.length) return;
+    NSMutableDictionary *selections = [[NSUserDefaults.standardUserDefaults dictionaryForKey:kSelectionsKey] mutableCopy];
+    if (!selections) selections = [NSMutableDictionary dictionary];
+    if (url.length) selections[lookupKey] = url;
+    else [selections removeObjectForKey:lookupKey];
+    if (selections.count) [NSUserDefaults.standardUserDefaults setObject:selections forKey:kSelectionsKey];
+    else [NSUserDefaults.standardUserDefaults removeObjectForKey:kSelectionsKey];
+}
+
+static BOOL validLogoSelectionKey(NSString *selectionKey) {
+    NSURL *url = [NSURL URLWithString:selectionKey];
+    NSString *host = url.host.lowercaseString;
+    return [url.scheme.lowercaseString isEqualToString:@"https"] && host.length > 0;
+}
+
+void SGRArtistLogoSelectOption(NSString *artist, SGRArtistLogoOption *option) {
+    if (!artist.length || !option.image || !validLogoSelectionKey(option.selectionKey)) return;
+    updateSelection(artist, option.selectionKey);
+    invalidateArtistLogos();
+    SGLog(@"artist logos: manually selected %@ logo for %@", option.source, cacheKey(artist));
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRArtistLogoKeyDidChangeNotification object:nil];
+}
+
+void SGRArtistLogoUseAutomatic(NSString *artist) {
+    if (!artist.length) return;
+    updateSelection(artist, nil);
+    invalidateArtistLogos();
+    SGLog(@"artist logos: automatic choice restored for %@", cacheKey(artist));
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRArtistLogoKeyDidChangeNotification object:nil];
 }
 
 static NSString *matchKey(NSString *artist) {
@@ -479,12 +534,218 @@ static void fetchLogoURLs(NSString *artist, NSArray<NSURL *> *urls, NSUInteger u
         }] resume];
 }
 
+static const NSUInteger kManualLogoOptionLimit = 10;
+
+static void downloadFanartOptions(NSArray<NSURL *> *urls, void (^done)(NSArray<SGRArtistLogoOption *> *)) {
+    NSUInteger count = MIN(kManualLogoOptionLimit, urls.count);
+    if (!count) { dispatch_async(dispatch_get_main_queue(), ^{ done(@[]); }); return; }
+    dispatch_group_t group = dispatch_group_create();
+    NSMutableArray *slots = [NSMutableArray arrayWithCapacity:count];
+    for (NSUInteger i = 0; i < count; i++) [slots addObject:NSNull.null];
+    for (NSUInteger i = 0; i < count; i++) {
+        NSURL *url = urls[i];
+        dispatch_group_enter(group);
+        NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:kTimeout];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+            UIImage *image = !error && http.statusCode >= 200 && http.statusCode < 300 && data.length && data.length <= 16 * 1024 * 1024
+                ? trimmedLogo([UIImage imageWithData:data]) : nil;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (image.CGImage) {
+                    slots[i] = [[SGRArtistLogoOption alloc] initWithSource:[NSString stringWithFormat:@"Fanart.tv · %lu", (unsigned long)i + 1]
+                                                                  selectionKey:url.absoluteString image:image];
+                }
+                dispatch_group_leave(group);
+            });
+        }] resume];
+    }
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSMutableArray<SGRArtistLogoOption *> *options = [NSMutableArray array];
+        for (id value in slots) if ([value isKindOfClass:SGRArtistLogoOption.class]) [options addObject:value];
+        done([options copy]);
+    });
+}
+
+static void fetchManualFanartURLs(NSArray<NSString *> *identifiers, NSUInteger index, NSString *key,
+                                  NSMutableArray<NSURL *> *urls, NSMutableSet<NSString *> *seen,
+                                  void (^done)(NSArray<NSURL *> *)) {
+    if (index >= identifiers.count || urls.count >= kManualLogoOptionLimit) {
+        done([urls copy]);
+        return;
+    }
+    NSURL *url = fanartURL(identifiers[index], key);
+    if (!url) {
+        fetchManualFanartURLs(identifiers, index + 1, key, urls, seen, done);
+        return;
+    }
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kTimeout];
+    sendJSON(request, ^(NSDictionary *body, NSError *error) {
+        if (!error) {
+            for (NSURL *candidate in logoURLs(body)) {
+                if ([seen containsObject:candidate.absoluteString]) continue;
+                [seen addObject:candidate.absoluteString];
+                [urls addObject:candidate];
+                if (urls.count >= kManualLogoOptionLimit) break;
+            }
+        } else if (error.code != 404) {
+            SGLog(@"artist logos: manual Fanart.tv options lookup failed: %@", error.localizedDescription);
+        }
+        fetchManualFanartURLs(identifiers, index + 1, key, urls, seen, done);
+    });
+}
+
+static void fetchManualFanartOptions(NSString *artist, void (^done)(NSArray<SGRArtistLogoOption *> *)) {
+    NSString *key = storedKey();
+    NSURL *url = musicBrainzURL(artist);
+    if (!key.length || !url) { dispatch_async(dispatch_get_main_queue(), ^{ done(@[]); }); return; }
+    NSTimeInterval delay = MAX(0, [sg_nextMusicBrainzRequest timeIntervalSinceNow]);
+    sg_nextMusicBrainzRequest = [NSDate dateWithTimeIntervalSinceNow:delay + 1.1];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kTimeout];
+        [request setValue:@"spoti.pw artist logos (https://github.com/macanoclothing-blip/spoti.pw)" forHTTPHeaderField:@"User-Agent"];
+        sendJSON(request, ^(NSDictionary *body, NSError *error) {
+            NSArray<NSString *> *identifiers = error ? @[] : musicBrainzIDs(body, artist);
+            if (!identifiers.count) { dispatch_async(dispatch_get_main_queue(), ^{ done(@[]); }); return; }
+            NSArray<NSString *> *limitedIDs = [identifiers subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)5, identifiers.count))];
+            fetchManualFanartURLs(limitedIDs, 0, key, [NSMutableArray array], [NSMutableSet set], ^(NSArray<NSURL *> *urls) {
+                downloadFanartOptions(urls, done);
+            });
+        });
+    });
+}
+
+static void fetchAppleLogoOption(NSString *artist, BOOL refreshToken, void (^done)(SGRArtistLogoOption *)) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([sg_appleQuietUntil timeIntervalSinceNow] > 0) { done(nil); return; }
+        SGAppleCatalogToken(refreshToken, ^(NSString *token) {
+            if (!token.length) { done(nil); return; }
+            NSURLComponents *components = [NSURLComponents componentsWithString:kAppleSearch];
+            components.queryItems = @[
+                [NSURLQueryItem queryItemWithName:@"term" value:artist],
+                [NSURLQueryItem queryItemWithName:@"types" value:@"artists"],
+                [NSURLQueryItem queryItemWithName:@"limit" value:@"10"],
+                [NSURLQueryItem queryItemWithName:@"extend" value:@"editorialArtwork"],
+            ];
+            if (!components.URL) { done(nil); return; }
+            NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:components.URL
+                cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:kTimeout];
+            request.allowsConstrainedNetworkAccess = NO;
+            [request setValue:kAppleUserAgent forHTTPHeaderField:@"User-Agent"];
+            [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+            [request setValue:kAppleOrigin forHTTPHeaderField:@"Origin"];
+            sendJSON(request, ^(NSDictionary *body, NSError *error) {
+                if (error.code == 401 && !refreshToken) {
+                    fetchAppleLogoOption(artist, YES, done);
+                    return;
+                }
+                if (error) {
+                    SGLog(@"artist logos: manual Apple Music lookup failed: %@", error.localizedDescription);
+                    if (error.code == 403 || error.code == 429) {
+                        dispatch_async(dispatch_get_main_queue(), ^{ sg_appleQuietUntil = [NSDate dateWithTimeIntervalSinceNow:10 * 60]; });
+                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{ done(nil); });
+                    return;
+                }
+                NSDictionary *results = [body[@"results"] isKindOfClass:NSDictionary.class] ? body[@"results"] : nil;
+                NSDictionary *artistResults = [results[@"artists"] isKindOfClass:NSDictionary.class] ? results[@"artists"] : nil;
+                NSArray *artists = [artistResults[@"data"] isKindOfClass:NSArray.class] ? artistResults[@"data"] : nil;
+                NSString *wanted = matchKey(artist);
+                NSURL *logoURL = nil;
+                for (id entry in artists) {
+                    NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] &&
+                        [entry[@"attributes"] isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
+                    NSString *name = [attributes[@"name"] isKindOfClass:NSString.class] ? attributes[@"name"] : nil;
+                    if (!name.length || ![matchKey(name) isEqualToString:wanted]) continue;
+                    NSDictionary *artwork = [attributes[@"editorialArtwork"] isKindOfClass:NSDictionary.class]
+                        ? attributes[@"editorialArtwork"] : nil;
+                    NSDictionary *logo = [artwork[@"musicContentColorLogoTrimmed"] isKindOfClass:NSDictionary.class]
+                        ? artwork[@"musicContentColorLogoTrimmed"] : nil;
+                    logoURL = appleLogoURL(logo);
+                    break;
+                }
+                if (!logoURL) { done(nil); return; }
+                NSURLRequest *imageRequest = [NSURLRequest requestWithURL:logoURL cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:kTimeout];
+                [[NSURLSession.sharedSession dataTaskWithRequest:imageRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *imageError) {
+                    NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+                    UIImage *image = !imageError && http.statusCode >= 200 && http.statusCode < 300 && data.length && data.length <= 16 * 1024 * 1024
+                        ? trimmedLogo([UIImage imageWithData:data]) : nil;
+                    SGRArtistLogoOption *option = image.CGImage
+                        ? [[SGRArtistLogoOption alloc] initWithSource:@"Apple Music" selectionKey:logoURL.absoluteString image:image] : nil;
+                    dispatch_async(dispatch_get_main_queue(), ^{ done(option); });
+                }] resume];
+            });
+        });
+    });
+}
+
+void SGRArtistLogoOptionsForArtist(NSString *artist, void (^done)(NSArray<SGRArtistLogoOption *> *)) {
+    if (!done) return;
+    NSString *cleanArtist = [artist stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!cleanArtist.length) { dispatch_async(dispatch_get_main_queue(), ^{ done(@[]); }); return; }
+    __block NSArray<SGRArtistLogoOption *> *fanartOptions = @[];
+    __block SGRArtistLogoOption *appleOption = nil;
+    dispatch_group_t group = dispatch_group_create();
+    dispatch_group_enter(group);
+    fetchManualFanartOptions(cleanArtist, ^(NSArray<SGRArtistLogoOption *> *options) {
+        fanartOptions = options ?: @[];
+        dispatch_group_leave(group);
+    });
+    dispatch_group_enter(group);
+    fetchAppleLogoOption(cleanArtist, NO, ^(SGRArtistLogoOption *option) {
+        appleOption = option;
+        dispatch_group_leave(group);
+    });
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSMutableArray<SGRArtistLogoOption *> *options = [fanartOptions mutableCopy] ?: [NSMutableArray array];
+        if (appleOption) [options addObject:appleOption];
+        done([options copy]);
+    });
+}
+
+static void loadAutomaticLogo(NSString *artist, NSString *lookupKey, NSUInteger generation) {
+    NSString *key = storedKey();
+    if (!key.length) {
+        finishWithoutFanart(artist, lookupKey, generation, kMissCacheTime);
+        return;
+    }
+    NSTimeInterval delay = MAX(0, [sg_nextMusicBrainzRequest timeIntervalSinceNow]);
+    sg_nextMusicBrainzRequest = [NSDate dateWithTimeIntervalSinceNow:delay + 1.1];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        loadLogo(artist, key, lookupKey, generation);
+    });
+}
+
+static void loadSelectedLogo(NSString *artist, NSString *lookupKey, NSString *selectionKey, NSUInteger generation) {
+    NSURL *url = [NSURL URLWithString:selectionKey];
+    if (!validLogoSelectionKey(selectionKey) || !url) {
+        updateSelection(artist, nil);
+        loadAutomaticLogo(artist, lookupKey, generation);
+        return;
+    }
+    NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReturnCacheDataElseLoad timeoutInterval:kTimeout];
+    [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+        UIImage *image = !error && http.statusCode >= 200 && http.statusCode < 300 && data.length && data.length <= 16 * 1024 * 1024
+            ? trimmedLogo([UIImage imageWithData:data]) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != sg_generation) return;
+            if (image.CGImage) {
+                finishArtist(lookupKey, image, generation, kMissCacheTime);
+                return;
+            }
+            SGLog(@"artist logos: selected logo unavailable for %@, returning to automatic lookup", lookupKey);
+            updateSelection(artist, nil);
+            loadAutomaticLogo(artist, lookupKey, generation);
+        });
+    }] resume];
+}
+
 void SGRArtistLogoForArtist(NSString *artist, void (^done)(UIImage *)) {
     NSString *cleanArtist = [artist stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     NSString *lookupKey = cacheKey(cleanArtist ?: @"");
     if (!lookupKey.length || !done) return;
     NSString *key = storedKey();
-    if (!key && !SGRArtistLogoAppleEnabled()) {
+    if (!key && !SGRArtistLogoAppleEnabled() && !SGRArtistLogoSelectedKeyForArtist(cleanArtist).length) {
         done(nil);
         return;
     }
@@ -506,13 +767,10 @@ void SGRArtistLogoForArtist(NSString *artist, void (^done)(UIImage *)) {
     }
     sg_pending[lookupKey] = [NSMutableArray arrayWithObject:[done copy]];
     NSUInteger generation = sg_generation;
-    if (!key) {
-        fetchAppleArtistLogo(cleanArtist, lookupKey, generation, NO, kMissCacheTime);
+    NSString *selection = SGRArtistLogoSelectedKeyForArtist(cleanArtist);
+    if (selection.length) {
+        loadSelectedLogo(cleanArtist, lookupKey, selection, generation);
         return;
     }
-    NSTimeInterval delay = MAX(0, [sg_nextMusicBrainzRequest timeIntervalSinceNow]);
-    sg_nextMusicBrainzRequest = [NSDate dateWithTimeIntervalSinceNow:delay + 1.1];
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-        loadLogo(cleanArtist, key, lookupKey, generation);
-    });
+    loadAutomaticLogo(cleanArtist, lookupKey, generation);
 }
