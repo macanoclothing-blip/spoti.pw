@@ -32,10 +32,13 @@ static char kLikedRowKey, kLikedOriginalAlphaKey;
 }
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
-    self.userInteractionEnabled = NO;
+    self.userInteractionEnabled = YES;
     self.isAccessibilityElement = YES;
     self.accessibilityTraits = UIAccessibilityTraitButton;
     self.accessibilityHint = @"Apri i brani che hai salvato per questo artista";
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(sgr_tap)];
+    tap.cancelsTouchesInView = YES;
+    [self addGestureRecognizer:tap];
 
     _capsule = [UIView new];
     _capsule.userInteractionEnabled = NO;
@@ -82,6 +85,9 @@ static char kLikedRowKey, kLikedOriginalAlphaKey;
     _chevron.userInteractionEnabled = NO;
     [_chevronDisc addSubview:_chevron];
     return self;
+}
+- (void)sgr_tap {
+    SGRActivate(self.sourceCell);
 }
 - (void)updateTitle:(NSString *)title subtitle:(NSString *)subtitle {
     if (title.length && ![_title.text isEqualToString:title]) _title.text = title;
