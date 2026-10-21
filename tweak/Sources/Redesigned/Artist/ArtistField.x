@@ -20,6 +20,7 @@ static NSString *const kPageIdentifier = @"creator-page";
 static const UIEdgeInsets kBleed = {600, 0, 600, 0};
 
 static char kFieldKey;
+static char kArtistTabGroupKey, kArtistTabSelectionKey;
 
 #pragma mark - the page
 
@@ -112,13 +113,125 @@ static void showStrip(UIView *strip) {
     }
 }
 
+static UILabel *tabTitleLabel(UIView *button) {
+    __block UILabel *label = nil;
+    SGForEachView(button, ^(UIView *view) {
+        if (!label && [view isKindOfClass:UILabel.class] && ((UILabel *)view).text.length) label = (UILabel *)view;
+    });
+    return label;
+}
+
+static BOOL tabIsSelected(UIView *button) {
+    if ([button respondsToSelector:@selector(isSelected)] && ((BOOL (*)(id, SEL))objc_msgSend)(button, @selector(isSelected))) return YES;
+    return (button.accessibilityTraits & UIAccessibilityTraitSelected) != 0;
+}
+
+static CGFloat tabBrightness(UIView *button) {
+    UILabel *label = tabTitleLabel(button);
+    if (!label) return 0;
+    CGFloat red = 0, green = 0, blue = 0, alpha = 0;
+    if (![label.textColor getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        CGFloat white = 0;
+        if (![label.textColor getWhite:&white alpha:&alpha]) return 0;
+        red = green = blue = white;
+    }
+    return (0.2126 * red + 0.7152 * green + 0.0722 * blue) * alpha;
+}
+
+static void styleArtistTabs(UIView *strip) {
+    Class tabClass = NSClassFromString(@"_TtCOOOE16PodcastUI_ECMKitO19LegacyUI_ECMCoreKit10Components18TabsSectionHeading2UI7Private9TabButton");
+    NSMutableArray<UIView *> *buttons = [NSMutableArray array];
+    for (UIView *view in strip.subviews) {
+        if (tabClass && [view isKindOfClass:tabClass]) [buttons addObject:view];
+    }
+    if (!buttons.count || strip.bounds.size.width <= 0) return;
+    [buttons sortUsingComparator:^NSComparisonResult(UIView *a, UIView *b) {
+        if (a.frame.origin.x < b.frame.origin.x) return NSOrderedAscending;
+        if (a.frame.origin.x > b.frame.origin.x) return NSOrderedDescending;
+        return NSOrderedSame;
+    }];
+
+    // A compact, centered segmented control, like Apple Music's artist navigation. Keep Spotify's tab
+    // controls and their recognizers; only change their frames and visual state.
+    CGFloat gap = 3, width = 92, height = CGRectGetHeight(strip.bounds);
+    CGFloat groupWidth = width * buttons.count + gap * (buttons.count - 1);
+    if (groupWidth > CGRectGetWidth(strip.bounds) - 24) {
+        gap = 2;
+        width = floor((CGRectGetWidth(strip.bounds) - 24 - gap * (buttons.count - 1)) / buttons.count);
+        groupWidth = width * buttons.count + gap * (buttons.count - 1);
+    }
+    CGFloat x = round((CGRectGetWidth(strip.bounds) - groupWidth) / 2);
+    CAShapeLayer *group = objc_getAssociatedObject(strip, &kArtistTabGroupKey);
+    if (!group) {
+        group = [CAShapeLayer layer];
+        group.name = @"spoti.pw.artist-tabs-background";
+        objc_setAssociatedObject(strip, &kArtistTabGroupKey, group, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [strip.layer insertSublayer:group atIndex:0];
+    }
+    CGRect groupFrame = CGRectMake(x - 3, 3, groupWidth + 6, MAX(0, height - 6));
+    group.frame = groupFrame;
+    group.path = [UIBezierPath bezierPathWithRoundedRect:(CGRect){CGPointZero, groupFrame.size}
+                                            cornerRadius:groupFrame.size.height / 2].CGPath;
+    group.fillColor = [UIColor colorWithWhite:1 alpha:0.09].CGColor;
+    group.strokeColor = [UIColor colorWithWhite:1 alpha:0.08].CGColor;
+    group.lineWidth = 0.75;
+    NSUInteger explicitSelection = NSNotFound, brightestIndex = 0;
+    CGFloat brightest = -1;
+    for (NSUInteger index = 0; index < buttons.count; index++) {
+        UIView *button = buttons[index];
+        CGRect frame = CGRectMake(x + index * (width + gap), 0, width, height);
+        if (!CGRectEqualToRect(button.frame, frame)) button.frame = frame;
+        UILabel *label = tabTitleLabel(button);
+        if (label) {
+            UIFont *font = SGRFont(UIFontTextStyleHeadline, UIFontWeightSemibold, UIContentSizeCategoryExtraLarge);
+            if (![label.font isEqual:font]) label.font = font;
+            label.textAlignment = NSTextAlignmentCenter;
+            if (label.superview == button) {
+                label.autoresizingMask |= UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                if (!CGRectEqualToRect(label.frame, button.bounds)) label.frame = button.bounds;
+            }
+        }
+        CGFloat brightness = tabBrightness(button);
+        if (tabIsSelected(button)) explicitSelection = index;
+        if (brightness > brightest) {
+            brightest = brightness;
+            brightestIndex = index;
+        }
+    }
+    NSUInteger selectedIndex = explicitSelection == NSNotFound ? brightestIndex : explicitSelection;
+
+    for (NSUInteger index = 0; index < buttons.count; index++) {
+        UIView *button = buttons[index];
+        BOOL selected = index == selectedIndex;
+        UILabel *label = tabTitleLabel(button);
+        UIColor *color = selected ? SGRPrimary() : SGRSecondary();
+        if (label && ![label.textColor isEqual:color]) label.textColor = color;
+        CAShapeLayer *selection = objc_getAssociatedObject(button, &kArtistTabSelectionKey);
+        if (!selection) {
+            selection = [CAShapeLayer layer];
+            selection.name = @"spoti.pw.artist-tab-selection";
+            objc_setAssociatedObject(button, &kArtistTabSelectionKey, selection, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [button.layer insertSublayer:selection atIndex:0];
+        }
+        CGRect frame = CGRectInset(button.bounds, 2, 2);
+        selection.frame = frame;
+        selection.path = [UIBezierPath bezierPathWithRoundedRect:(CGRect){CGPointZero, frame.size}
+                                                   cornerRadius:frame.size.height / 2].CGPath;
+        selection.fillColor = [UIColor colorWithWhite:1 alpha:0.15].CGColor;
+        selection.hidden = !selected;
+    }
+}
+
 // The strip's buttons are the one class of it Spotify names, and they lay out whenever the strip does.
 %hook _TtCOOOE16PodcastUI_ECMKitO19LegacyUI_ECMCoreKit10Components18TabsSectionHeading2UI7Private9TabButton
 - (void)layoutSubviews {
     %orig;
     for (UIView *v = ((UIView *)self).superview; v; v = v.superview) {
         if (![v.accessibilityIdentifier isEqualToString:@"Components.UI.TabsSectionHeading"]) continue;
-        if (SGRArtistPageOf(v)) showStrip(v);
+        if (SGRArtistPageOf(v)) {
+            showStrip(v);
+            styleArtistTabs(v);
+        }
         return;
     }
 }

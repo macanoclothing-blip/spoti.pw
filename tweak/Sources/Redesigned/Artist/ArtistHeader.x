@@ -82,6 +82,31 @@ static NSURL *artistVideoPreview(NSDictionary *result) {
     return url;
 }
 
+// The iTunes music-video catalog also contains ordinary studio clips and interviews. Only use a
+// preview when its catalog title identifies a live performance or a named concert/event.
+static NSInteger artistVideoEventScore(NSDictionary *result) {
+    NSString *track = [result[@"trackName"] isKindOfClass:NSString.class] ? result[@"trackName"] : @"";
+    NSString *collection = [result[@"collectionName"] isKindOfClass:NSString.class] ? result[@"collectionName"] : @"";
+    NSString *title = [[[NSString stringWithFormat:@"%@ %@", track, collection]
+                        stringByFoldingWithOptions:NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch locale:nil]
+                       lowercaseString];
+
+    NSArray<NSString *> *excluded = @[@"interview", @"behind the scenes", @"making of", @"lyric video", @"visualizer"];
+    for (NSString *term in excluded) if ([title containsString:term]) return 0;
+
+    NSArray<NSString *> *strongEvents = @[
+        @"live aid", @"live at ", @"live from ", @"live in concert", @"live concert", @"live performance",
+        @"live session", @"live lounge", @"live on ", @"concert", @"festival", @"super bowl", @"halftime",
+        @"glastonbury", @"coachella", @"lollapalooza", @"tiny desk", @"unplugged", @"grammy", @"brit award",
+        @"mtv award", @"eurovision", @"award show", @"award ceremony", @"on stage"
+    ];
+    for (NSString *term in strongEvents) if ([title containsString:term]) return 5;
+
+    NSArray<NSString *> *liveSuffixes = @[@"(live)", @"(live ", @" live)", @" - live", @" – live", @" — live", @"[live"];
+    for (NSString *term in liveSuffixes) if ([title containsString:term]) return 3;
+    return 0;
+}
+
 static void artistVideoFinish(NSString *key, NSURL *url) {
     if (!sg_artistVideoCache) sg_artistVideoCache = [NSMutableDictionary dictionary];
     if (url) sg_artistVideoCache[key] = url;
@@ -94,24 +119,45 @@ static void artistVideoFinish(NSString *key, NSURL *url) {
 }
 
 static void searchArtistVideo(NSString *name, NSString *key, NSString *country, BOOL canFallback) {
-    NSURLComponents *search = [NSURLComponents componentsWithString:@"https://itunes.apple.com/search"];
-    search.queryItems = @[[NSURLQueryItem queryItemWithName:@"term" value:name],
-                          [NSURLQueryItem queryItemWithName:@"entity" value:@"musicVideo"],
-                          [NSURLQueryItem queryItemWithName:@"media" value:@"music"],
-                          [NSURLQueryItem queryItemWithName:@"limit" value:@"50"],
-                          [NSURLQueryItem queryItemWithName:@"country" value:country]];
-    artistVideoGET(search.URL, ^(NSDictionary *json, NSInteger status) {
-        NSArray *results = [json[@"results"] isKindOfClass:NSArray.class] ? json[@"results"] : nil;
-        NSURL *preview = nil;
-        // Search relevance can put a song or a different act named the same ahead of the artist.
-        // Only accept a licensed music-video preview whose catalog artist matches the profile exactly.
-        for (id item in results) {
-            NSDictionary *result = [item isKindOfClass:NSDictionary.class] ? item : nil;
-            if (![artistSearchKey(result[@"artistName"]) isEqualToString:key]) continue;
-            preview = artistVideoPreview(result);
-            if (preview) break;
+    NSArray<NSString *> *terms = @[[NSString stringWithFormat:@"%@ live concert", name],
+                                   [NSString stringWithFormat:@"%@ concert performance", name],
+                                   [NSString stringWithFormat:@"%@ live festival", name]];
+    dispatch_group_t group = dispatch_group_create();
+    NSMutableArray<NSDictionary *> *candidates = [NSMutableArray array];
+    for (NSString *term in terms) {
+        NSURLComponents *search = [NSURLComponents componentsWithString:@"https://itunes.apple.com/search"];
+        search.queryItems = @[[NSURLQueryItem queryItemWithName:@"term" value:term],
+                              [NSURLQueryItem queryItemWithName:@"entity" value:@"musicVideo"],
+                              [NSURLQueryItem queryItemWithName:@"media" value:@"music"],
+                              [NSURLQueryItem queryItemWithName:@"limit" value:@"50"],
+                              [NSURLQueryItem queryItemWithName:@"country" value:country]];
+        dispatch_group_enter(group);
+        artistVideoGET(search.URL, ^(NSDictionary *json, NSInteger status) {
+            NSArray *results = status == 200 && [json[@"results"] isKindOfClass:NSArray.class] ? json[@"results"] : nil;
+            for (id item in results) {
+                NSDictionary *result = [item isKindOfClass:NSDictionary.class] ? item : nil;
+                if (![artistSearchKey(result[@"artistName"]) isEqualToString:key] ||
+                    artistVideoEventScore(result) == 0 || !artistVideoPreview(result)) continue;
+                [candidates addObject:result];
+            }
+            dispatch_group_leave(group);
+        });
+    }
+
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSDictionary *best = nil;
+        NSInteger bestScore = 0;
+        for (NSDictionary *candidate in candidates) {
+            NSInteger score = artistVideoEventScore(candidate);
+            if (score > bestScore) { best = candidate; bestScore = score; }
         }
-        if (status == 200 && preview) { artistVideoFinish(key, preview); return; }
+        NSURL *preview = best ? artistVideoPreview(best) : nil;
+        if (preview) {
+            NSString *title = [best[@"trackName"] isKindOfClass:NSString.class] ? best[@"trackName"] : @"live event";
+            SGLog(@"redesign artist: selected live event preview '%@' for %@", title, key);
+            artistVideoFinish(key, preview);
+            return;
+        }
         if (canFallback && ![country isEqualToString:@"us"]) {
             searchArtistVideo(name, key, @"us", NO);
             return;
