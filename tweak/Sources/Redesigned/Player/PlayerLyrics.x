@@ -504,6 +504,17 @@ static void setFrameIn(UIView *view, UIView *coordinateView, CGRect frame) {
     view.frame = [coordinateView convertRect:frame toView:view.superview];
 }
 
+// Encore owns these arranged views and rewrites their frames during layout. Translate the view itself
+// after measuring its untransformed position; unlike assigning a frame, this survives the stack pass.
+static void translateViewInHost(UIView *view, UIView *host, CGPoint origin, const void *frameKey) {
+    if (!view || !host || !view.superview) return;
+    savedChildFrame(view, frameKey);
+    view.transform = CGAffineTransformIdentity;
+    CGRect source = [view convertRect:view.bounds toView:host];
+    view.transform = CGAffineTransformMakeTranslation(origin.x - CGRectGetMinX(source),
+                                                       origin.y - CGRectGetMinY(source));
+}
+
 static void landscapeTransportItems(UIView *controls, UIView **shuffleOut, UIView **previousOut,
                                     UIView **playOut, UIView **nextOut, UIView **repeatOut);
 static BOOL transportItemContains(UIView *item, UIView *target);
@@ -524,8 +535,10 @@ static CGRect landscapeControlGlyphFrame(UIView *control, UIView *host) {
 static void layoutLandscapeProgress(UIView *duration, UIView *controls, UIView *host, SGRLyricsLayout l) {
     if (!duration || !host) return;
     UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
-    UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label-internal", &kLandscapeTakenKey);
-    UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label-internal", &kLandscapeRemainingKey);
+    // Move the SPTEncoreLabels wrappers, not their nested UILabels: Encore clips and lays out the
+    // internal labels at its original position on every duration-unit pass.
+    UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey);
+    UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey);
     CGFloat progressX = CGRectGetMinX(l.cover);
     CGFloat availableWidth = MAX(0, CGRectGetMinX(l.stage) - progressX - SGRGrid);
     UIView *shuffle = nil, *previous = nil, *play = nil, *next = nil, *repeat = nil;
@@ -549,22 +562,17 @@ static void layoutLandscapeProgress(UIView *duration, UIView *controls, UIView *
         slider.transform = CGAffineTransformMakeScale(1, kLandscapeProgressHeightScale);
     }
     if (taken && [taken isDescendantOfView:duration]) {
-        CGRect original = savedChildFrame(taken, &kLandscapeTakenFrameKey);
-        taken.transform = CGAffineTransformIdentity;
-        taken.frame = original;
-        CGRect frame = [taken convertRect:taken.bounds toView:host];
-        frame.origin.x = progressX;
-        if (!CGRectIsEmpty(progressFrame)) frame.origin.y = CGRectGetMaxY(progressFrame) + 4;
-        setFrameIn(taken, host, frame);
+        CGRect source = [taken convertRect:taken.bounds toView:host];
+        CGPoint origin = CGPointMake(progressX, CGRectIsEmpty(progressFrame)
+                                     ? CGRectGetMinY(source) : CGRectGetMaxY(progressFrame) + 4);
+        translateViewInHost(taken, host, origin, &kLandscapeTakenFrameKey);
     }
     if (remaining && [remaining isDescendantOfView:duration]) {
-        CGRect original = savedChildFrame(remaining, &kLandscapeRemainingFrameKey);
-        remaining.transform = CGAffineTransformIdentity;
-        remaining.frame = original;
-        CGRect frame = [remaining convertRect:remaining.bounds toView:host];
-        frame.origin.x = MAX(progressX, progressX + width - frame.size.width);
-        if (!CGRectIsEmpty(progressFrame)) frame.origin.y = CGRectGetMaxY(progressFrame) + 4;
-        setFrameIn(remaining, host, frame);
+        CGRect source = [remaining convertRect:remaining.bounds toView:host];
+        CGPoint origin = CGPointMake(MAX(progressX, progressX + width - source.size.width),
+                                     CGRectIsEmpty(progressFrame)
+                                         ? CGRectGetMinY(source) : CGRectGetMaxY(progressFrame) + 4);
+        translateViewInHost(remaining, host, origin, &kLandscapeRemainingFrameKey);
     }
 }
 
@@ -662,9 +670,8 @@ static void layoutLandscapeTitleActions(UIView *info, UIView *host, SGRLyricsLay
     CGFloat middleY = CGRectGetMidY(labelFrame);
     for (UIView *action in actions) {
         CGRect frame = [action convertRect:action.bounds toView:host];
-        frame.origin.x = x;
-        frame.origin.y = middleY - frame.size.height / 2;
-        setFrameIn(action, host, frame);
+        CGPoint origin = CGPointMake(x, middleY - frame.size.height / 2);
+        translateViewInHost(action, host, origin, &kLandscapeTitleActionFrameKey);
         [action.superview bringSubviewToFront:action];
         x += frame.size.width + gap;
     }
@@ -820,8 +827,8 @@ static void layoutLandscapeControls(UIView *controls, UIView *host, SGRLyricsLay
 static void restoreLandscapeChildren(UIView *duration, UIView *controls) {
     UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
     restoreChildFrame(slider, &kLandscapeSliderFrameKey);
-    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-take-label-internal", &kLandscapeTakenKey), &kLandscapeTakenFrameKey);
-    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-remaning-label-internal", &kLandscapeRemainingKey), &kLandscapeRemainingFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey), &kLandscapeTakenFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey), &kLandscapeRemainingFrameKey);
     UIView *shuffle = nil, *previous = nil, *play = nil, *next = nil, *repeat = nil;
     landscapeTransportItems(controls, &shuffle, &previous, &play, &next, &repeat);
     restoreChildFrame(shuffle, &kLandscapeShuffleFrameKey);
