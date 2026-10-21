@@ -31,7 +31,6 @@
 #import "Settings/SGPageStyle.h"
 #import "SGArtistLogo.h"
 #import "Artist.h"
-#import "Shared/LockScreenArtwork/SGAppleArtwork.h"
 #import <AVFoundation/AVFoundation.h>
 
 // How much of the photo's height the dissolve into the field covers, and the scrim over the top of it that
@@ -61,46 +60,71 @@ static NSString *artistSearchKey(NSString *name) {
     return [words componentsJoinedByString:@" "];
 }
 
-static void artistVideoGET(NSURL *url, NSString *token, void (^done)(NSDictionary *json, NSInteger status)) {
-    if (!url || !token.length) { done(nil, 0); return; }
+static void artistVideoGET(NSURL *url, void (^done)(NSDictionary *json, NSInteger status)) {
+    if (!url) { done(nil, 0); return; }
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    [request setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+    request.timeoutInterval = 18;
     [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
-    [request setValue:@"spoti.pw/1.0 (artist video preview)" forHTTPHeaderField:@"User-Agent"];
     [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
         NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
         NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        (void)error;
+        if (error) SGLog(@"redesign artist: external video lookup failed: %@", error.localizedDescription);
         dispatch_async(dispatch_get_main_queue(), ^{ done([json isKindOfClass:NSDictionary.class] ? json : nil, status); });
     }] resume];
 }
 
-static NSURL *artistVideoPreview(NSDictionary *attributes) {
-    NSArray *previews = [attributes[@"previews"] isKindOfClass:NSArray.class] ? attributes[@"previews"] : nil;
-    for (id preview in previews) {
-        NSString *address = [preview isKindOfClass:NSDictionary.class] && [preview[@"url"] isKindOfClass:NSString.class]
-            ? preview[@"url"] : nil;
-        NSURL *url = address ? [NSURL URLWithString:address] : nil;
-        if ([url.scheme.lowercaseString isEqualToString:@"https"]) return url;
-    }
-    return nil;
+static NSURL *artistVideoPreview(NSDictionary *result) {
+    NSString *address = [result[@"previewUrl"] isKindOfClass:NSString.class] ? result[@"previewUrl"] : nil;
+    NSURL *url = address ? [NSURL URLWithString:address] : nil;
+    NSString *host = url.host.lowercaseString;
+    if (![url.scheme.lowercaseString isEqualToString:@"https"] ||
+        !([host isEqualToString:@"itunes.apple.com"] || [host hasSuffix:@".itunes.apple.com"])) return nil;
+    return url;
 }
 
 static void artistVideoFinish(NSString *key, NSURL *url) {
     if (!sg_artistVideoCache) sg_artistVideoCache = [NSMutableDictionary dictionary];
-    sg_artistVideoCache[key] = url ?: NSNull.null;
+    if (url) sg_artistVideoCache[key] = url;
+    else [sg_artistVideoCache removeObjectForKey:key];
     [sg_artistVideoRequests removeObject:key];
     NSArray *waiters = [sg_artistVideoWaiters[key] copy];
     [sg_artistVideoWaiters removeObjectForKey:key];
-    SGLog(@"redesign artist: %@ Apple Music preview for %@", url ? @"found" : @"no", key);
+    SGLog(@"redesign artist: %@ external music-video preview for %@", url ? @"found" : @"no", key);
     for (void (^waiter)(NSURL *) in waiters) waiter(url);
+}
+
+static void searchArtistVideo(NSString *name, NSString *key, NSString *country, BOOL canFallback) {
+    NSURLComponents *search = [NSURLComponents componentsWithString:@"https://itunes.apple.com/search"];
+    search.queryItems = @[[NSURLQueryItem queryItemWithName:@"term" value:name],
+                          [NSURLQueryItem queryItemWithName:@"entity" value:@"musicVideo"],
+                          [NSURLQueryItem queryItemWithName:@"media" value:@"music"],
+                          [NSURLQueryItem queryItemWithName:@"limit" value:@"50"],
+                          [NSURLQueryItem queryItemWithName:@"country" value:country]];
+    artistVideoGET(search.URL, ^(NSDictionary *json, NSInteger status) {
+        NSArray *results = [json[@"results"] isKindOfClass:NSArray.class] ? json[@"results"] : nil;
+        NSURL *preview = nil;
+        // Search relevance can put a song or a different act named the same ahead of the artist.
+        // Only accept a licensed music-video preview whose catalog artist matches the profile exactly.
+        for (id item in results) {
+            NSDictionary *result = [item isKindOfClass:NSDictionary.class] ? item : nil;
+            if (![artistSearchKey(result[@"artistName"]) isEqualToString:key]) continue;
+            preview = artistVideoPreview(result);
+            if (preview) break;
+        }
+        if (status == 200 && preview) { artistVideoFinish(key, preview); return; }
+        if (canFallback && ![country isEqualToString:@"us"]) {
+            searchArtistVideo(name, key, @"us", NO);
+            return;
+        }
+        artistVideoFinish(key, nil);
+    });
 }
 
 static void findArtistVideo(NSString *name, void (^done)(NSURL *url)) {
     NSString *key = artistSearchKey(name);
     if (!key.length) { done(nil); return; }
-    id cached = sg_artistVideoCache[key];
-    if (cached) { done(cached == NSNull.null ? nil : cached); return; }
+    NSURL *cached = sg_artistVideoCache[key];
+    if (cached) { done(cached); return; }
     if (!sg_artistVideoRequests) sg_artistVideoRequests = [NSMutableSet set];
     if (!sg_artistVideoWaiters) sg_artistVideoWaiters = [NSMutableDictionary dictionary];
     if ([sg_artistVideoRequests containsObject:key]) {
@@ -109,57 +133,9 @@ static void findArtistVideo(NSString *name, void (^done)(NSURL *url)) {
     }
     [sg_artistVideoRequests addObject:key];
     sg_artistVideoWaiters[key] = [NSMutableArray arrayWithObject:[done copy]];
-    SGAppleCatalogToken(NO, ^(NSString *token) {
-        NSURLComponents *search = [NSURLComponents componentsWithString:@"https://amp-api.music.apple.com/v1/catalog/us/search"];
-        search.queryItems = @[[NSURLQueryItem queryItemWithName:@"term" value:name],
-                              [NSURLQueryItem queryItemWithName:@"types" value:@"artists"],
-                              [NSURLQueryItem queryItemWithName:@"limit" value:@"12"]];
-        artistVideoGET(search.URL, token, ^(NSDictionary *json, NSInteger status) {
-            if (status == 401) {
-                SGAppleCatalogToken(YES, ^(NSString *fresh) {
-                    NSURLComponents *retry = [NSURLComponents componentsWithString:@"https://amp-api.music.apple.com/v1/catalog/us/search"];
-                    retry.queryItems = search.queryItems;
-                    artistVideoGET(retry.URL, fresh, ^(NSDictionary *retryJSON, NSInteger retryStatus) {
-                        NSArray *artists = retryJSON[@"results"][@"artists"][@"data"];
-                        NSString *artistID = nil;
-                        for (id entry in artists) {
-                            NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
-                            if ([artistSearchKey(attributes[@"name"]) isEqualToString:key]) { artistID = entry[@"id"]; break; }
-                        }
-                        if (!artistID.length || retryStatus != 200) { artistVideoFinish(key, nil); return; }
-                        NSURL *relation = [NSURL URLWithString:[NSString stringWithFormat:@"https://amp-api.music.apple.com/v1/catalog/us/artists/%@/music-videos?limit=25", artistID]];
-                        artistVideoGET(relation, fresh, ^(NSDictionary *videosJSON, NSInteger videosStatus) {
-                            NSURL *preview = nil;
-                            for (id entry in videosJSON[@"data"]) {
-                                NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
-                                if ([artistSearchKey(attributes[@"artistName"]) isEqualToString:key] && (preview = artistVideoPreview(attributes))) break;
-                            }
-                            if (videosStatus != 200) preview = nil;
-                            artistVideoFinish(key, preview);
-                        });
-                    });
-                });
-                return;
-            }
-            NSArray *artists = json[@"results"][@"artists"][@"data"];
-            NSString *artistID = nil;
-            for (id entry in artists) {
-                NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
-                if ([artistSearchKey(attributes[@"name"]) isEqualToString:key]) { artistID = entry[@"id"]; break; }
-            }
-            if (status != 200 || !artistID.length) { artistVideoFinish(key, nil); return; }
-            NSURL *relation = [NSURL URLWithString:[NSString stringWithFormat:@"https://amp-api.music.apple.com/v1/catalog/us/artists/%@/music-videos?limit=25", artistID]];
-            artistVideoGET(relation, token, ^(NSDictionary *videosJSON, NSInteger videosStatus) {
-                NSURL *preview = nil;
-                for (id entry in videosJSON[@"data"]) {
-                    NSDictionary *attributes = [entry isKindOfClass:NSDictionary.class] ? entry[@"attributes"] : nil;
-                    if ([artistSearchKey(attributes[@"artistName"]) isEqualToString:key] && (preview = artistVideoPreview(attributes))) break;
-                }
-                if (videosStatus != 200) preview = nil;
-                artistVideoFinish(key, preview);
-            });
-        });
-    });
+    NSString *country = [[NSLocale.currentLocale objectForKey:NSLocaleCountryCode] lowercaseString];
+    if (country.length != 2) country = @"us";
+    searchArtistVideo(name, key, country, YES);
 }
 
 @interface SGRArtistInfoSheet : UIViewController
