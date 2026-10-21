@@ -64,6 +64,9 @@ static const CGFloat kThumbTop = 8;            // below the top of the artwork b
 static const CGFloat kLyricsTop = 20;          // between the title row and the first line
 static const CGFloat kLyricsBottom = 8;        // above the progress bar
 static const CGFloat kRotateButtonSide = 44, kRotateButtonGap = 8;
+static const CGFloat kLandscapeTransportScale = 0.78;
+static const CGFloat kLandscapeProgressWidthScale = 0.82;
+static const CGFloat kLandscapeProgressHeightScale = 0.76;
 // The lines are a surface arriving, not something moving: they come up from just under full size as the
 // room for them opens, and go at once when it closes. An exit the eye waits through reads as a stall.
 static const CGFloat kLyricsEnterScale = 0.96;
@@ -501,13 +504,18 @@ static void layoutLandscapeProgress(UIView *duration, SGRLyricsLayout l) {
     UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
     UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey);
     UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey);
-    CGFloat width = l.duration.size.width;
+    CGFloat width = floor(l.duration.size.width * kLandscapeProgressWidthScale);
     if ([slider isKindOfClass:UISlider.class] && [slider isDescendantOfView:duration]) {
-        savedChildFrame(slider, &kLandscapeSliderFrameKey);
+        CGRect original = savedChildFrame(slider, &kLandscapeSliderFrameKey);
+        // Restore the source frame before measuring it, or repeated layout passes would compound
+        // the vertical scale and progressively flatten the slider.
+        slider.transform = CGAffineTransformIdentity;
+        slider.frame = original;
         CGRect frame = [slider convertRect:slider.bounds toView:duration];
         frame.origin.x = 0;
         frame.size.width = width;
         setFrameIn(slider, duration, frame);
+        slider.transform = CGAffineTransformMakeScale(1, kLandscapeProgressHeightScale);
     }
     if (taken && [taken isDescendantOfView:duration]) {
         savedChildFrame(taken, &kLandscapeTakenFrameKey);
@@ -523,12 +531,13 @@ static void layoutLandscapeProgress(UIView *duration, SGRLyricsLayout l) {
     }
 }
 
-static void placeLandscapeButton(UIView *button, UIView *host, CGFloat x, CGFloat y, const void *key) {
+static void placeLandscapeButton(UIView *button, UIView *host, CGFloat x, CGFloat y, CGFloat scale, const void *key) {
     if (!button || !host || !button.superview) return;
     CGRect original = savedChildFrame(button, key);
     button.transform = CGAffineTransformIdentity;
     button.bounds = (CGRect){CGPointZero, original.size};
     button.center = [button.superview convertPoint:CGPointMake(x, y) fromView:host];
+    button.transform = CGAffineTransformMakeScale(scale, scale);
 }
 
 static void layoutLandscapeControls(UIView *controls, UIView *host, SGRLyricsLayout l) {
@@ -536,11 +545,11 @@ static void layoutLandscapeControls(UIView *controls, UIView *host, SGRLyricsLay
     UIView *play = SGRFindByIdentifier(controls, @"SPTNowPlayingPlayButton", &kLandscapePlayKey);
     UIView *next = SGRFindByIdentifier(controls, @"SPTNowPlayingNextTrackButton", &kLandscapeNextKey);
     CGFloat y = CGRectGetMidY(l.controls), left = CGRectGetMinX(l.controls), right = CGRectGetMaxX(l.controls);
-    CGFloat side = previous ? CGRectGetWidth(previous.bounds) : 56;
-    CGFloat trailingSide = next ? CGRectGetWidth(next.bounds) : side;
-    placeLandscapeButton(previous, host, left + side / 2, y, &kLandscapePreviousFrameKey);
-    placeLandscapeButton(play, host, CGRectGetMidX(l.controls), y, &kLandscapePlayFrameKey);
-    placeLandscapeButton(next, host, right - trailingSide / 2, y, &kLandscapeNextFrameKey);
+    CGFloat side = (previous ? CGRectGetWidth(previous.bounds) : 56) * kLandscapeTransportScale;
+    CGFloat trailingSide = (next ? CGRectGetWidth(next.bounds) : 56) * kLandscapeTransportScale;
+    placeLandscapeButton(previous, host, left + side / 2, y, kLandscapeTransportScale, &kLandscapePreviousFrameKey);
+    placeLandscapeButton(play, host, CGRectGetMidX(l.controls), y, kLandscapeTransportScale, &kLandscapePlayFrameKey);
+    placeLandscapeButton(next, host, right - trailingSide / 2, y, kLandscapeTransportScale, &kLandscapeNextFrameKey);
 }
 
 static void restoreLandscapeChildren(UIView *duration, UIView *controls) {
