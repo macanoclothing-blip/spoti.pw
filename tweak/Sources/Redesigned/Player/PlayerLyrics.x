@@ -90,6 +90,7 @@ static char kLandscapeDurationMovedKey, kLandscapeControlsMovedKey;
 static char kLandscapeSliderFrameKey, kLandscapeTakenFrameKey, kLandscapeRemainingFrameKey;
 static char kLandscapeShuffleFrameKey, kLandscapePreviousFrameKey, kLandscapePlayFrameKey;
 static char kLandscapeNextFrameKey, kLandscapeRepeatFrameKey;
+static char kLandscapeTitleActionFrameKey, kLandscapeTitleActionsKey;
 static char kLandscapeSliderKey, kLandscapeTakenKey, kLandscapeRemainingKey;
 static char kLandscapeShuffleKey, kLandscapePreviousKey, kLandscapePlayKey;
 static char kLandscapeNextKey, kLandscapeRepeatKey, kLandscapeReachKey;
@@ -104,6 +105,8 @@ static __weak UIView *sg_host;              // SPTNowPlayingView
 static __weak UIViewController *sg_player;  // its controller
 static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_controls, *sg_footer, *sg_floating;
 static __weak UIView *sg_titleElement;      // the arranged element view holding the title and the artist
+
+static void replace(void);
 
 static BOOL playerIsLandscape(void) {
     UIView *host = sg_host;
@@ -501,14 +504,37 @@ static void setFrameIn(UIView *view, UIView *coordinateView, CGRect frame) {
     view.frame = [coordinateView convertRect:frame toView:view.superview];
 }
 
-static void layoutLandscapeProgress(UIView *duration, UIView *host, SGRLyricsLayout l) {
+static void landscapeTransportItems(UIView *controls, UIView **shuffleOut, UIView **previousOut,
+                                    UIView **playOut, UIView **nextOut, UIView **repeatOut);
+static BOOL transportItemContains(UIView *item, UIView *target);
+
+static CGRect landscapeControlGlyphFrame(UIView *control, UIView *host) {
+    if (!control || !host) return CGRectNull;
+    __block CGRect glyphs = CGRectNull;
+    SGForEachView(control, ^(UIView *view) {
+        if (![view isKindOfClass:UIImageView.class] || view.hidden || view.alpha < 0.01 ||
+            view.bounds.size.width < 4 || view.bounds.size.height < 4 ||
+            view.bounds.size.width > 40 || view.bounds.size.height > 40) return;
+        CGRect frame = [view convertRect:view.bounds toView:host];
+        glyphs = CGRectIsNull(glyphs) ? frame : CGRectUnion(glyphs, frame);
+    });
+    return CGRectIsNull(glyphs) ? [control convertRect:control.bounds toView:host] : glyphs;
+}
+
+static void layoutLandscapeProgress(UIView *duration, UIView *controls, UIView *host, SGRLyricsLayout l) {
     if (!duration || !host) return;
     UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
-    UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey);
-    UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey);
+    UIView *taken = SGRFindByIdentifier(duration, @"now-playing-time-take-label-internal", &kLandscapeTakenKey);
+    UIView *remaining = SGRFindByIdentifier(duration, @"now-playing-time-remaning-label-internal", &kLandscapeRemainingKey);
     CGFloat progressX = CGRectGetMinX(l.cover);
     CGFloat availableWidth = MAX(0, CGRectGetMinX(l.stage) - progressX - SGRGrid);
-    CGFloat width = floor(MIN(l.duration.size.width * kLandscapeProgressWidthScale, availableWidth));
+    UIView *shuffle = nil, *previous = nil, *play = nil, *next = nil, *repeat = nil;
+    landscapeTransportItems(controls, &shuffle, &previous, &play, &next, &repeat);
+    CGRect repeatGlyph = landscapeControlGlyphFrame(repeat, host);
+    CGFloat fallbackWidth = l.duration.size.width * kLandscapeProgressWidthScale;
+    CGFloat targetWidth = CGRectIsNull(repeatGlyph) || CGRectGetMaxX(repeatGlyph) <= progressX
+        ? fallbackWidth : CGRectGetMaxX(repeatGlyph) - progressX;
+    CGFloat width = floor(MIN(MAX(0, targetWidth), availableWidth));
     CGRect progressFrame = CGRectZero;
     if ([slider isKindOfClass:UISlider.class] && [slider isDescendantOfView:duration]) {
         CGRect original = savedChildFrame(slider, &kLandscapeSliderFrameKey);
@@ -539,6 +565,108 @@ static void layoutLandscapeProgress(UIView *duration, UIView *host, SGRLyricsLay
         frame.origin.x = MAX(progressX, progressX + width - frame.size.width);
         if (!CGRectIsEmpty(progressFrame)) frame.origin.y = CGRectGetMaxY(progressFrame) + 4;
         setFrameIn(remaining, host, frame);
+    }
+}
+
+static BOOL viewHasButtonSemantics(UIView *view) {
+    if (!view || view.hidden || view.alpha < 0.01) return NO;
+    if ([view isKindOfClass:UIControl.class] || (view.accessibilityTraits & UIAccessibilityTraitButton)) return YES;
+    NSString *className = NSStringFromClass(view.class).lowercaseString;
+    NSString *identifier = view.accessibilityIdentifier.lowercaseString;
+    NSString *label = view.accessibilityLabel.lowercaseString;
+    for (NSString *name in @[className ?: @"", identifier ?: @"", label ?: @""]) {
+        for (NSString *term in @[@"button", @"dislike", @"dismiss", @"remove", @"addto", @"add-to", @"like"]) {
+            if ([name containsString:term]) return YES;
+        }
+    }
+    for (UIView *subview in view.subviews) if (viewHasButtonSemantics(subview)) return YES;
+    return NO;
+}
+
+static UIView *arrangedRowItemContaining(UIView *row, UIView *target) {
+    if (!row || !target) return nil;
+    for (UIView *item in row.subviews) {
+        if (transportItemContains(item, target)) return item;
+    }
+    return nil;
+}
+
+static NSArray<UIView *> *landscapeTitleActionItems(UIView *info) {
+    UIView *title = sg_titleElement;
+    UIView *row = title.superview;
+    if (![row isKindOfClass:UIStackView.class]) return @[];
+    NSArray<UIView *> *arranged = ((UIStackView *)row).arrangedSubviews;
+    NSUInteger titleIndex = [arranged indexOfObject:title];
+    if (titleIndex == NSNotFound) return @[];
+    NSMutableArray<UIView *> *actions = [NSMutableArray array];
+    for (NSUInteger index = titleIndex + 1; index < arranged.count; index++) {
+        UIView *item = arranged[index];
+        if (viewHasButtonSemantics(item)) [actions addObject:item];
+    }
+    CGFloat titleOrigin = CGRectGetMinX(untransformed(title, info));
+    for (UIView *item in row.subviews) {
+        if (item == title || [item isDescendantOfView:title] || [title isDescendantOfView:item] ||
+            [actions containsObject:item] || !viewHasButtonSemantics(item)) continue;
+        if (CGRectGetMinX(SGFrameIn(item, info)) > titleOrigin) [actions addObject:item];
+    }
+    // Spotify has used different ids for the two inline actions across player modes. If their row
+    // wrappers are not directly accessible, resolve the familiar identifiers and lift them to the
+    // arranged item so its native gesture recognizers and target actions remain intact.
+    for (NSString *identifier in @[@"SPTNowPlayingDislikeButton", @"SPTNowPlayingAddToButton",
+                                    @"SPTNowPlayingAddToQueueButton", @"Components.UI.AddToButton",
+                                    @"DislikeButtonNowPlayingView", @"RemoveRecommendationButton"]) {
+        UIView *match = SGRFindByIdentifier(info, identifier, NULL);
+        UIView *item = arrangedRowItemContaining(row, match);
+        if (item && item != title && ![actions containsObject:item]) [actions addObject:item];
+    }
+    return actions;
+}
+
+static CGFloat landscapeTitleTextWidth(UIView *info) {
+    UILabel *label = (UILabel *)SGRFindByIdentifier(info, @"now-playing-title-label", &kTitleKey);
+    if (![label isKindOfClass:UILabel.class]) return CGRectGetWidth(sg_titleElement.bounds);
+    if (label.attributedText.length) {
+        CGRect measured = [label.attributedText boundingRectWithSize:CGSizeMake(CGFLOAT_MAX, CGRectGetHeight(label.bounds))
+                                                             options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingUsesFontLeading
+                                                             context:nil];
+        if (measured.size.width > 0) return ceil(measured.size.width);
+    }
+    if (label.text.length && label.font) return ceil([label.text sizeWithAttributes:@{NSFontAttributeName: label.font}].width);
+    return CGRectGetWidth(label.bounds);
+}
+
+static void restoreLandscapeTitleActions(UIView *info) {
+    NSArray<UIView *> *actions = objc_getAssociatedObject(info, &kLandscapeTitleActionsKey);
+    for (UIView *action in actions) restoreChildFrame(action, &kLandscapeTitleActionFrameKey);
+    objc_setAssociatedObject(info, &kLandscapeTitleActionsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void layoutLandscapeTitleActions(UIView *info, UIView *host, SGRLyricsLayout l) {
+    NSArray<UIView *> *actions = landscapeTitleActionItems(info);
+    if (!actions.count || !info || !host || !sg_titleElement) return;
+    objc_setAssociatedObject(info, &kLandscapeTitleActionsKey, actions, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    CGFloat actionWidth = 0;
+    for (UIView *action in actions) {
+        CGRect original = savedChildFrame(action, &kLandscapeTitleActionFrameKey);
+        action.transform = CGAffineTransformIdentity;
+        action.frame = original;
+        actionWidth += CGRectGetWidth(action.bounds);
+    }
+    CGFloat gap = 8;
+    CGFloat titleLimit = MAX(0, l.titleMaxWidth - actionWidth - gap * actions.count);
+    CGFloat titleWidth = MIN(landscapeTitleTextWidth(info), titleLimit);
+    CGRect titleFrame = [sg_titleElement convertRect:sg_titleElement.bounds toView:host];
+    UILabel *label = (UILabel *)SGRFindByIdentifier(info, @"now-playing-title-label", &kTitleKey);
+    CGRect labelFrame = [label isKindOfClass:UILabel.class] ? [label convertRect:label.bounds toView:host] : titleFrame;
+    CGFloat x = CGRectGetMinX(titleFrame) + titleWidth + gap;
+    CGFloat middleY = CGRectGetMidY(labelFrame);
+    for (UIView *action in actions) {
+        CGRect frame = [action convertRect:action.bounds toView:host];
+        frame.origin.x = x;
+        frame.origin.y = middleY - frame.size.height / 2;
+        setFrameIn(action, host, frame);
+        [action.superview bringSubviewToFront:action];
+        x += frame.size.width + gap;
     }
 }
 
@@ -600,7 +728,7 @@ static void landscapeTransportItems(UIView *controls, UIView **shuffleOut, UIVie
     if (repeatOut) *repeatOut = repeat;
 }
 
-static NSArray<UIView *> *landscapeTransportTargets(UIView *controls, UIView *duration) {
+static NSArray<UIView *> *landscapeCoreControlTargets(UIView *controls, UIView *duration) {
     UIView *shuffle = nil, *previous = nil, *play = nil, *next = nil, *repeat = nil;
     landscapeTransportItems(controls, &shuffle, &previous, &play, &next, &repeat);
     NSMutableArray<UIView *> *targets = [NSMutableArray array];
@@ -623,13 +751,27 @@ static NSArray<UIView *> *landscapeTransportTargets(UIView *controls, UIView *du
         CGPoint local = [target convertPoint:point fromView:self];
         if (![target pointInside:local withEvent:event]) continue;
         UIView *hit = [target hitTest:local withEvent:event];
-        if (hit) return hit;
+        if (hit && hit != target) return hit;
+        if (hit == target && ([target isKindOfClass:UIControl.class] || target.gestureRecognizers.count ||
+                              (target.accessibilityTraits & UIAccessibilityTraitButton))) return hit;
     }
     return nil;
 }
 @end
 
-static void layoutLandscapeReach(UIView *host, UIView *controls, UIView *duration, BOOL enabled) {
+static NSArray<UIView *> *landscapeTransportTargets(UIView *controls, UIView *duration, UIView *info) {
+    NSMutableArray<UIView *> *targets = [NSMutableArray arrayWithArray:landscapeTitleActionItems(info)];
+    for (UIView *view in landscapeCoreControlTargets(controls, duration)) {
+        if (![targets containsObject:view]) [targets addObject:view];
+    }
+    // The unit bounds still cover the native action views. Asking it directly bypasses the bottom
+    // stack's old hit area, which otherwise rejects the moved shuffle and repeat buttons.
+    if (controls && ![targets containsObject:controls]) [targets addObject:controls];
+    if (info && ![targets containsObject:info]) [targets addObject:info];
+    return targets;
+}
+
+static void layoutLandscapeReach(UIView *host, UIView *controls, UIView *duration, UIView *info, BOOL enabled) {
     if (!host) return;
     SGRLandscapeControlsReach *reach = objc_getAssociatedObject(host, &kLandscapeReachKey);
     if (!enabled) {
@@ -643,7 +785,7 @@ static void layoutLandscapeReach(UIView *host, UIView *controls, UIView *duratio
         reach.userInteractionEnabled = YES;
         objc_setAssociatedObject(host, &kLandscapeReachKey, reach, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    reach.targets = landscapeTransportTargets(controls, duration);
+    reach.targets = landscapeTransportTargets(controls, duration, info);
     if (reach.superview != host) [host addSubview:reach];
     reach.frame = host.bounds;
     [host bringSubviewToFront:reach];
@@ -678,8 +820,8 @@ static void layoutLandscapeControls(UIView *controls, UIView *host, SGRLyricsLay
 static void restoreLandscapeChildren(UIView *duration, UIView *controls) {
     UISlider *slider = (UISlider *)SGRFindByIdentifier(duration, @"SPTNowPlayingSliderV2", &kLandscapeSliderKey);
     restoreChildFrame(slider, &kLandscapeSliderFrameKey);
-    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-take-label", &kLandscapeTakenKey), &kLandscapeTakenFrameKey);
-    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-remaning-label", &kLandscapeRemainingKey), &kLandscapeRemainingFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-take-label-internal", &kLandscapeTakenKey), &kLandscapeTakenFrameKey);
+    restoreChildFrame(SGRFindByIdentifier(duration, @"now-playing-time-remaning-label-internal", &kLandscapeRemainingKey), &kLandscapeRemainingFrameKey);
     UIView *shuffle = nil, *previous = nil, *play = nil, *next = nil, *repeat = nil;
     landscapeTransportItems(controls, &shuffle, &previous, &play, &next, &repeat);
     restoreChildFrame(shuffle, &kLandscapeShuffleFrameKey);
@@ -699,11 +841,12 @@ static void placeTitleRow(SGRLyricsLayout l) {
     if (landscape && sg_open && duration && controls) {
         moveUnit(duration, sg_host, l.duration.origin, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         moveUnit(controls, sg_host, l.controls.origin, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
-        layoutLandscapeProgress(duration, sg_host, l);
         layoutLandscapeControls(controls, sg_host, l);
-        layoutLandscapeReach(sg_host, controls, duration, YES);
+        layoutLandscapeProgress(duration, controls, sg_host, l);
+        layoutLandscapeReach(sg_host, controls, duration, info, YES);
     } else {
-        layoutLandscapeReach(sg_host, controls, duration, NO);
+        layoutLandscapeReach(sg_host, controls, duration, info, NO);
+        restoreLandscapeTitleActions(info);
         restoreLandscapeChildren(duration, controls);
         restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
@@ -717,6 +860,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     CGAffineTransform slide = CGAffineTransformIdentity;
     slide.tx = round(shift);
     if (!CGAffineTransformEqualToTransform(title.transform, slide)) title.transform = slide;
+    if (landscape && sg_open) layoutLandscapeTitleActions(info, sg_host, l);
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
     CGFloat room = CGFLOAT_MAX;
     if (sg_open || landscape) room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift);
@@ -1023,7 +1167,10 @@ static void setOpen(BOOL open, BOOL animated) {
     };
     void (^settled)(BOOL) = ^(BOOL finished) {
         sg_moving = NO;
-        if (sg_open) return;   // opened again while it was going away
+        if (sg_open) {
+            replace();         // a rotation during the opening flight changes the layout's geometry
+            return;
+        }
         SGRVinylLyricsDidSettleClosed();
         // Vinyl mode: restore the cover thumbnail.
         SGRVinylRemoveMiniDisc();
@@ -1120,6 +1267,7 @@ static void replace(void) {
 
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
     UIView *duration = sg_duration.viewIfLoaded, *controls = sg_controls.viewIfLoaded;
+    restoreLandscapeTitleActions(sg_info.viewIfLoaded);
     if (size.width > size.height) {
         stopAloneTimer();
         if (sg_alone) setAlone(NO, NO);
@@ -1130,6 +1278,24 @@ static void replace(void) {
     if (duration) objc_setAssociatedObject(duration, &kLandscapeDurationFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (controls) objc_setAssociatedObject(controls, &kLandscapeControlsFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     %orig;
+    __weak UIViewController *weakPlayer = (UIViewController *)self;
+    void (^reapply)(void) = ^{
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIView *host = weakPlayer.viewIfLoaded;
+            if (!host || host != sg_host) return;
+            [host setNeedsLayout];
+            [host layoutIfNeeded];
+            replace();
+        });
+    };
+    if (coordinator) {
+        [coordinator animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            (void)context;
+            reapply();
+        }];
+    } else {
+        reapply();
+    }
 }
 
 - (void)viewDidLayoutSubviews {
