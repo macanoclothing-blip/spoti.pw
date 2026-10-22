@@ -33,6 +33,7 @@ static char kRowKey, kArtKey, kTitleKey, kSubtitleKey, kLineKey, kToolbarKey;
 static char kLocalURIKey, kLocalRequestURIKey, kLocalImageViewKey, kLocalOriginalImageKey, kLocalAppliedImageKey, kLocalHiddenViewsKey;
 static NSHashTable<UIView *> *sg_localArtworkRows;
 static UIView *identified(UIView *root, NSString *identifier, const void *cacheKey);
+static void applyLocalArtworkForElement(UIView *artwork);
 
 static UIImageView *artworkImageView(UIView *artwork) {
     if ([artwork isKindOfClass:UIImageView.class]) return (UIImageView *)artwork;
@@ -106,7 +107,7 @@ static NSString *textIn(UIView *root) {
 static void applyLocalArtwork(UIView *row, UIView *artwork) {
     if (!artwork) return;
     if (!sg_localArtworkRows) sg_localArtworkRows = [NSHashTable weakObjectsHashTable];
-    [sg_localArtworkRows addObject:row];
+    [sg_localArtworkRows addObject:artwork];
     NSString *title = textIn(identified(row, @"Track.Row.Content.Title", &kTitleKey));
     NSString *artist = textIn(identified(row, @"Track.Row.Content.Subtitle", &kSubtitleKey));
     NSString *localURI = SGLocalArtworkURIForTitleAndArtist(title, artist);
@@ -211,6 +212,44 @@ static void applyRow(UIView *cell) {
     applyHairline(row, leading);
 }
 
+// The Local Files collection is not a FreeTierPlaylist cell. Spotify still renders its track cover
+// through Encore.ImageView, so resolve the nearest row from that stable element rather than assuming
+// every track belongs to the playlist controller above.
+static void applyLocalArtworkForElement(UIView *artwork) {
+    if (![artwork.accessibilityIdentifier isEqualToString:@"Encore.ImageView"]) return;
+    for (UIView *row = artwork.superview; row; row = row.superview) {
+        UIView *title = identified(row, @"Track.Row.Content.Title", &kTitleKey);
+        if (!textIn(title)) continue;
+        if (artworkImageView(artwork)) applyLocalArtwork(row, artwork);
+        // The closest ancestor with a track title owns this image. Do not walk up into a playlist
+        // header or another row if Spotify omits the artist label for a local file.
+        return;
+    }
+}
+
+%hook UIView
+- (void)layoutSubviews {
+    %orig;
+    applyLocalArtworkForElement((UIView *)self);
+}
+%end
+
+%hook UIImageView
+- (void)setImage:(UIImage *)image {
+    %orig;
+    UIView *artwork = nil;
+    for (UIView *view = self; view; view = view.superview) {
+        if ([view.accessibilityIdentifier isEqualToString:@"Encore.ImageView"]) { artwork = view; break; }
+    }
+    if (!artwork) return;
+    __weak UIView *weakArtwork = artwork;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *current = weakArtwork;
+        if (current.window) applyLocalArtworkForElement(current);
+    });
+}
+%end
+
 %hook _TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell
 - (void)layoutSubviews {
     %orig;
@@ -239,7 +278,7 @@ static void applyRow(UIView *cell) {
     [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification object:nil
                                                       queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
         (void)note;
-        for (UIView *row in sg_localArtworkRows.allObjects) if (row.window) applyRow((UICollectionViewCell *)row);
+        for (UIView *artwork in sg_localArtworkRows.allObjects) if (artwork.window) applyLocalArtworkForElement(artwork);
     }];
     SGRequireClasses(@[@"_TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell"]);
 }

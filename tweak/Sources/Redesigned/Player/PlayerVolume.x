@@ -55,14 +55,16 @@ static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
     NSArray<NSString *> *identifiers = @[
         @"SPTNowPlayingPreviousTrackButton", @"SPTNowPlayingPlayButton", @"SPTNowPlayingNextTrackButton"
     ];
-    CGRect frame = CGRectNull;
+    // Use the whole controls unit as the safe envelope. Spotify's button identifiers can sit on small
+    // inner views while their rendered glyphs and hit targets extend past those bounds.
+    CGRect frame = [controls convertRect:controls.bounds toView:stack];
     for (NSUInteger index = 0; index < identifiers.count; index++) {
         UIView *button = SGRFindByIdentifier(controls, identifiers[index], keys[index]);
         if (!button || button.hidden || button.alpha < 0.01) continue;
         CGRect buttonFrame = [button convertRect:button.bounds toView:stack];
-        frame = CGRectIsNull(frame) ? buttonFrame : CGRectUnion(frame, buttonFrame);
+        frame = CGRectUnion(frame, buttonFrame);
     }
-    return CGRectIsNull(frame) ? [controls convertRect:controls.bounds toView:stack] : frame;
+    return CGRectInset(frame, -2, -4);
 }
 
 @interface SGRVolumeRow : UIView

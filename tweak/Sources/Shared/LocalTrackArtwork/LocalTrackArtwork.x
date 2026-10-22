@@ -366,10 +366,28 @@ static NSString *normalizedName(NSString *name) {
                                       locale:NSLocale.currentLocale];
 }
 
+static NSString *normalizedDisplayedName(NSString *name) {
+    NSString *value = [name stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSCharacterSet *edgeMarks = [NSCharacterSet characterSetWithCharactersInString:@". …⋯"];
+    while (value.length && [edgeMarks characterIsMember:[value characterAtIndex:0]]) value = [value substringFromIndex:1];
+    while (value.length && [edgeMarks characterIsMember:[value characterAtIndex:value.length - 1]]) value = [value substringToIndex:value.length - 1];
+    return normalizedName(value);
+}
+
+static BOOL displayedNameMatches(NSString *displayed, NSString *stored) {
+    NSString *left = normalizedDisplayedName(displayed);
+    NSString *right = normalizedDisplayedName(stored);
+    if (!left.length || !right.length) return NO;
+    if ([left isEqualToString:right]) return YES;
+    // Some Spotify local-file rows truncate the actual UILabel text itself (rather than only clipping
+    // it visually). Accept only a useful, unambiguous prefix; the caller rejects multiple matches.
+    return (left.length >= 8 && [right hasPrefix:left]) || (right.length >= 8 && [left hasPrefix:right]);
+}
+
 NSString *SGLocalArtworkURIForTitleAndArtist(NSString *title, NSString *artist) {
-    NSString *wantedTitle = normalizedName(title ?: @"");
-    NSString *wantedArtist = normalizedName(artist ?: @"");
-    if (!wantedTitle.length) return nil;
+    NSString *wantedTitle = normalizedDisplayedName(title ?: @"");
+    NSString *wantedArtist = normalizedDisplayedName(artist ?: @"");
+    if (wantedTitle.length < 3) return nil;
 
     NSDictionary *entries = [NSUserDefaults.standardUserDefaults dictionaryForKey:kMatchesKey];
     NSString *foundURI = nil;
@@ -381,16 +399,16 @@ NSString *SGLocalArtworkURIForTitleAndArtist(NSString *title, NSString *artist) 
             ? entry[@"titleOverride"] : entry[@"title"];
         NSString *candidateArtist = [entry[@"artistOverride"] isKindOfClass:NSString.class] && [entry[@"artistOverride"] length]
             ? entry[@"artistOverride"] : entry[@"artist"];
-        if (![normalizedName(candidateTitle ?: @"") isEqualToString:wantedTitle]) continue;
+        if (!displayedNameMatches(title, candidateTitle ?: @"")) continue;
 
-        BOOL artistMatches = !wantedArtist.length || [normalizedName(candidateArtist ?: @"") isEqualToString:wantedArtist];
+        BOOL artistMatches = !wantedArtist.length || displayedNameMatches(artist, candidateArtist ?: @"");
         if (!artistMatches && wantedArtist.length) {
             for (NSString *part in [candidateArtist componentsSeparatedByString:@","]) {
-                if ([normalizedName(part) isEqualToString:wantedArtist]) { artistMatches = YES; break; }
+                if (displayedNameMatches(artist, part)) { artistMatches = YES; break; }
             }
             if (!artistMatches) {
                 for (NSString *part in [artist componentsSeparatedByString:@"·"]) {
-                    if ([normalizedName(part) isEqualToString:normalizedName(candidateArtist ?: @"")]) { artistMatches = YES; break; }
+                    if (displayedNameMatches(part, candidateArtist ?: @"")) { artistMatches = YES; break; }
                 }
             }
         }

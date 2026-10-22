@@ -39,7 +39,7 @@ static char kPlaybackButtonKey;
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
 static const CGFloat kControlsLift = 12;
 
-static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey;
+static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kFooterSettleKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
 
 // The view the footer's stack view arranges around `view`.
@@ -188,6 +188,23 @@ static void lowerRow(UIView *row) {
     });
 }
 
+// Spotify and the redesign lay out the controls and footer in separate units. The footer can finish
+// first, so settle the measured volume gap once the current layout transaction has placed both units.
+static void scheduleFooterSettle(UIView *row) {
+    if (!row || [objc_getAssociatedObject(row, &kFooterSettleKey) boolValue]) return;
+    objc_setAssociatedObject(row, &kFooterSettleKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakRow = row;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIView *current = weakRow;
+        if (!current) return;
+        objc_setAssociatedObject(current, &kFooterSettleKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!current.window) return;
+        UIStackView *stack = SGRowIn(current);
+        [stack layoutIfNeeded];
+        lowerRow(current);
+    });
+}
+
 static void layOutFooter(UIViewController *unit) {
     UIView *host = unit.viewIfLoaded;
     if (!host) return;
@@ -224,6 +241,7 @@ static void layOutFooter(UIViewController *unit) {
     CGFloat queueFrom = moveTo(arrangedAround(queue, host), queue, CGPointMake(CGRectGetMidX(queue.bounds), CGRectGetMidY(queue.bounds)), host, round(width * (rtl ? kLeading : kTrailing)));
 
     lowerRow(host);
+    scheduleFooterSettle(host);
 
     static dispatch_once_t once;
     dispatch_once(&once, ^{
