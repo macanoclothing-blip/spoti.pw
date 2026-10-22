@@ -24,11 +24,129 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Playlist.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 
 // Under the text rather than the whole row, as the Music app draws it; the trailing end clears the page margin.
 static const CGFloat kHairline = 0.5, kHairlineGap = 12;
 
-static char kRowKey, kArtKey, kSubtitleKey, kLineKey, kToolbarKey;
+static char kRowKey, kArtKey, kTitleKey, kSubtitleKey, kLineKey, kToolbarKey;
+static char kLocalURIKey, kLocalRequestURIKey, kLocalImageViewKey, kLocalOriginalImageKey, kLocalAppliedImageKey, kLocalHiddenViewsKey;
+static NSHashTable<UIView *> *sg_localArtworkRows;
+static UIView *identified(UIView *root, NSString *identifier, const void *cacheKey);
+
+static UIImageView *artworkImageView(UIView *artwork) {
+    if ([artwork isKindOfClass:UIImageView.class]) return (UIImageView *)artwork;
+    __block UIImageView *best = nil;
+    __block CGFloat largest = 0;
+    SGForEachView(artwork, ^(UIView *view) {
+        if (![view isKindOfClass:UIImageView.class] || view.hidden) return;
+        CGFloat area = CGRectGetWidth(view.bounds) * CGRectGetHeight(view.bounds);
+        if (area > largest) { largest = area; best = (UIImageView *)view; }
+    });
+    return best;
+}
+
+static void restorePlaceholderViews(UIView *artwork) {
+    NSMapTable<UIView *, NSNumber *> *hidden = objc_getAssociatedObject(artwork, &kLocalHiddenViewsKey);
+    for (UIView *view in hidden.keyEnumerator.allObjects) {
+        NSNumber *alpha = [hidden objectForKey:view];
+        if (alpha) view.alpha = alpha.doubleValue;
+    }
+    [hidden removeAllObjects];
+}
+
+static void restoreLocalArtwork(UIView *artwork) {
+    if (!artwork) return;
+    restorePlaceholderViews(artwork);
+    UIImageView *imageView = objc_getAssociatedObject(artwork, &kLocalImageViewKey);
+    UIImage *original = objc_getAssociatedObject(artwork, &kLocalOriginalImageKey);
+    UIImage *applied = objc_getAssociatedObject(artwork, &kLocalAppliedImageKey);
+    if (imageView && imageView.image == applied) imageView.image = original == (id)NSNull.null ? nil : original;
+    objc_setAssociatedObject(artwork, &kLocalURIKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(artwork, &kLocalRequestURIKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(artwork, &kLocalImageViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(artwork, &kLocalOriginalImageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(artwork, &kLocalAppliedImageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(artwork, &kLocalHiddenViewsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void hidePlaceholderGlyphs(UIView *artwork, UIImageView *cover) {
+    if (!artwork || !cover) return;
+    NSMapTable<UIView *, NSNumber *> *hidden = objc_getAssociatedObject(artwork, &kLocalHiddenViewsKey);
+    if (!hidden) {
+        hidden = [NSMapTable strongToStrongObjectsMapTable];
+        objc_setAssociatedObject(artwork, &kLocalHiddenViewsKey, hidden, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGRect bounds = artwork.bounds;
+    CGFloat width = CGRectGetWidth(bounds), height = CGRectGetHeight(bounds);
+    SGForEachView(artwork, ^(UIView *view) {
+        if (view == cover || ![view isKindOfClass:UIImageView.class] || view.hidden || view.alpha < 0.01) return;
+        CGRect frame = [view convertRect:view.bounds toView:artwork];
+        BOOL centeredGlyph = CGRectGetWidth(frame) >= 8 && CGRectGetHeight(frame) >= 8 &&
+            CGRectGetWidth(frame) <= width * 0.55 && CGRectGetHeight(frame) <= height * 0.55 &&
+            fabs(CGRectGetMidX(frame) - CGRectGetMidX(bounds)) <= width * 0.12 &&
+            fabs(CGRectGetMidY(frame) - CGRectGetMidY(bounds)) <= height * 0.12;
+        if (!centeredGlyph || [hidden objectForKey:view]) return;
+        [hidden setObject:@(view.alpha) forKey:view];
+        view.alpha = 0;
+    });
+}
+
+static NSString *textIn(UIView *root) {
+    __block NSString *text = nil;
+    SGForEachView(root, ^(UIView *view) {
+        if (!text && [view isKindOfClass:UILabel.class]) {
+            NSString *candidate = [((UILabel *)view).text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+            if (candidate.length) text = candidate;
+        }
+    });
+    return text;
+}
+
+static void applyLocalArtwork(UIView *row, UIView *artwork) {
+    if (!artwork) return;
+    if (!sg_localArtworkRows) sg_localArtworkRows = [NSHashTable weakObjectsHashTable];
+    [sg_localArtworkRows addObject:row];
+    NSString *title = textIn(identified(row, @"Track.Row.Content.Title", &kTitleKey));
+    NSString *artist = textIn(identified(row, @"Track.Row.Content.Subtitle", &kSubtitleKey));
+    NSString *localURI = SGLocalArtworkURIForTitleAndArtist(title, artist);
+    NSString *oldURI = objc_getAssociatedObject(artwork, &kLocalURIKey);
+    if (![oldURI isEqualToString:localURI]) restoreLocalArtwork(artwork);
+    if (!localURI.length) return;
+    objc_setAssociatedObject(artwork, &kLocalURIKey, localURI, OBJC_ASSOCIATION_COPY_NONATOMIC);
+
+    UIImageView *imageView = artworkImageView(artwork);
+    if (!imageView) return;
+    UIImage *image = SGLocalArtworkCachedCover(localURI);
+    if (!image) {
+        NSString *requestedURI = objc_getAssociatedObject(artwork, &kLocalRequestURIKey);
+        if ([requestedURI isEqualToString:localURI]) return;
+        objc_setAssociatedObject(artwork, &kLocalRequestURIKey, localURI, OBJC_ASSOCIATION_COPY_NONATOMIC);
+        SGLocalArtworkLoadCover(localURI, ^(UIImage *loaded) {
+            UIView *liveArtwork = identified(row, @"Encore.ImageView", &kArtKey);
+            if (![objc_getAssociatedObject(artwork, &kLocalRequestURIKey) isEqualToString:localURI]) return;
+            objc_setAssociatedObject(artwork, &kLocalRequestURIKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (!loaded || !row.window || liveArtwork != artwork ||
+                ![objc_getAssociatedObject(artwork, &kLocalURIKey) isEqualToString:localURI]) return;
+            applyLocalArtwork(row, artwork);
+        });
+        return;
+    }
+    UIImageView *previous = objc_getAssociatedObject(artwork, &kLocalImageViewKey);
+    if (previous != imageView) {
+        restorePlaceholderViews(artwork);
+        if (previous) {
+            UIImage *original = objc_getAssociatedObject(artwork, &kLocalOriginalImageKey);
+            UIImage *applied = objc_getAssociatedObject(artwork, &kLocalAppliedImageKey);
+            if (previous.image == applied) previous.image = original == (id)NSNull.null ? nil : original;
+        }
+        objc_setAssociatedObject(artwork, &kLocalImageViewKey, imageView, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(artwork, &kLocalOriginalImageKey, imageView.image ?: (id)NSNull.null, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (imageView.image != image) imageView.image = image;
+    objc_setAssociatedObject(artwork, &kLocalAppliedImageKey, image, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    hidePlaceholderGlyphs(artwork, imageView);
+}
 
 static UIView *identified(UIView *root, NSString *identifier, const void *cacheKey) {
     return SGRFindByIdentifier(root, identifier, cacheKey);
@@ -80,6 +198,7 @@ static void applyRow(UIView *cell) {
         }
         CGRect frame = [row convertRect:art.bounds fromView:art];
         if (frame.size.width > 0) leading = CGRectGetMaxX(frame) + kHairlineGap;
+        applyLocalArtwork(row, art);
     }
 
     UIView *subtitle = identified(row, @"Track.Row.Content.Subtitle", &kSubtitleKey);
@@ -116,5 +235,11 @@ static void applyRow(UIView *cell) {
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
+    if (!sg_localArtworkRows) sg_localArtworkRows = [NSHashTable weakObjectsHashTable];
+    [NSNotificationCenter.defaultCenter addObserverForName:SGLocalArtworkDidChangeNotification object:nil
+                                                      queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        (void)note;
+        for (UIView *row in sg_localArtworkRows.allObjects) if (row.window) applyRow((UICollectionViewCell *)row);
+    }];
     SGRequireClasses(@[@"_TtC35ListUXPlatform_FreeTierPlaylistImpl25ElementCollectionViewCell"]);
 }

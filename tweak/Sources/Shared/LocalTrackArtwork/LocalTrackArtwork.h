@@ -9,6 +9,8 @@ NSString *SGLocalArtworkSpotifyURI(NSString *localURI);
 NSString *SGLocalArtworkCoverURL(NSString *localURI);
 NSString *SGLocalArtworkTitle(NSString *localURI);
 NSString *SGLocalArtworkArtist(NSString *localURI);
+// Finds a uniquely matched local URI from the title and artist shown in a playlist row.
+NSString *SGLocalArtworkURIForTitleAndArtist(NSString *title, NSString *artist);
 UIImage *SGLocalArtworkCachedCover(NSString *localURI);
 void SGLocalArtworkLoadCover(NSString *localURI, void (^completion)(UIImage *image));
 BOOL SGLocalArtworkHasCustomCover(NSString *localURI);

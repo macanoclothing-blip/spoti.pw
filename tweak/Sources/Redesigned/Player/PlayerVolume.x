@@ -8,7 +8,7 @@ static const CGFloat kVolumeRowHeight = 34;
 static const CGFloat kVolumeGlyphSize = 16;
 static const CGFloat kVolumeGlyphGap = 8;
 static const CGFloat kVolumeSideInset = 24;
-static const CGFloat kVolumeControlClearance = 6;
+static const CGFloat kVolumeControlClearance = 12;
 static char kVolumeRowKey;
 static char kPreviousButtonKey, kPlayButtonKey, kNextButtonKey;
 
@@ -176,37 +176,36 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     CGFloat bottom = CGRectGetMinY(footerFrame) - kVolumeControlClearance;
     CGFloat room = bottom - top;
     if (room < kVolumeRowHeight) {
-        CGFloat shortage = kVolumeRowHeight - room;
+        // Footer layout resets the transport to its base translation before calling here. Reclaim only
+        // the space needed for the volume row, preserving any scale/rotation Spotify put on that unit.
+        CGFloat minimumTop = MAX(stack.safeAreaInsets.top + 48, 56);
+        CGFloat availableLift = MAX(0, CGRectGetMinY(controlsFrame) - minimumTop);
+        CGFloat shortage = MIN(kVolumeRowHeight - room, availableLift);
         CGAffineTransform transform = controls.transform;
-        controls.transform = CGAffineTransformMakeTranslation(transform.tx, transform.ty - shortage);
-        controlsFrame = volumeControlsFrame(controls, stack);
-        top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
-        room = bottom - top;
-    }
-    if (room < 18) {
-        CGFloat extra = 18 - room;
-        CGAffineTransform transform = controls.transform;
-        controls.transform = CGAffineTransformMakeTranslation(transform.tx, transform.ty - extra);
+        transform.ty -= shortage;
+        controls.transform = transform;
         controlsFrame = volumeControlsFrame(controls, stack);
         top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
         room = bottom - top;
     }
 
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
-    CGFloat rowHeight = MIN(kVolumeRowHeight, MAX(18, room));
-    CGFloat rowY;
-    if (room >= 18) {
-        rowY = round((top + bottom - rowHeight) / 2);
-    } else {
-        // Some player modes leave almost no gap. Preserve a compact, touchable volume track
-        // just above the footer instead of making the system volume control disappear.
-        rowY = CGRectGetMinY(footerFrame) - rowHeight - 2;
-        rowY = MIN(MAX(0, rowY), MAX(0, CGRectGetHeight(stack.bounds) - rowHeight));
-        SGLog(@"redesign player: volume row uses compact fallback in a %.0fpt gap", room);
-    }
-    CGRect frame = CGRectMake(kVolumeSideInset, rowY, width, rowHeight);
-    if (width < 1) {
+    CGFloat rowHeight = MIN(kVolumeRowHeight, room);
+    if (width < 1 || rowHeight < 12) {
         volume.alpha = 0;
+        volume.userInteractionEnabled = NO;
+        static NSUInteger noGapLogs;
+        if (noGapLogs++ < 3) SGLog(@"redesign player: volume row hidden because no non-overlapping gap is available (%.0fpt)", room);
+        return NO;
+    }
+    // Keep the system slider wholly between the transport's hit targets and the footer. A small gap
+    // becomes a compact row; it never falls back across either set of controls.
+    CGFloat rowY = round(top + (room - rowHeight) / 2);
+    CGRect frame = CGRectMake(kVolumeSideInset, rowY, width, rowHeight);
+    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame)) {
+        volume.alpha = 0;
+        volume.userInteractionEnabled = NO;
+        SGLog(@"redesign player: volume row suppressed after collision guard");
         return NO;
     }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;

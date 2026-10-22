@@ -366,6 +366,43 @@ static NSString *normalizedName(NSString *name) {
                                       locale:NSLocale.currentLocale];
 }
 
+NSString *SGLocalArtworkURIForTitleAndArtist(NSString *title, NSString *artist) {
+    NSString *wantedTitle = normalizedName(title ?: @"");
+    NSString *wantedArtist = normalizedName(artist ?: @"");
+    if (!wantedTitle.length) return nil;
+
+    NSDictionary *entries = [NSUserDefaults.standardUserDefaults dictionaryForKey:kMatchesKey];
+    NSString *foundURI = nil;
+    for (id candidateURI in entries) {
+        if (![candidateURI isKindOfClass:NSString.class] || !SGLocalArtworkIsLocalTrack(candidateURI)) continue;
+        NSDictionary *entry = [entries[candidateURI] isKindOfClass:NSDictionary.class] ? entries[candidateURI] : nil;
+        if (!entry[@"spotifyURI"] || !entry[@"coverURL"]) continue;
+        NSString *candidateTitle = [entry[@"titleOverride"] isKindOfClass:NSString.class] && [entry[@"titleOverride"] length]
+            ? entry[@"titleOverride"] : entry[@"title"];
+        NSString *candidateArtist = [entry[@"artistOverride"] isKindOfClass:NSString.class] && [entry[@"artistOverride"] length]
+            ? entry[@"artistOverride"] : entry[@"artist"];
+        if (![normalizedName(candidateTitle ?: @"") isEqualToString:wantedTitle]) continue;
+
+        BOOL artistMatches = !wantedArtist.length || [normalizedName(candidateArtist ?: @"") isEqualToString:wantedArtist];
+        if (!artistMatches && wantedArtist.length) {
+            for (NSString *part in [candidateArtist componentsSeparatedByString:@","]) {
+                if ([normalizedName(part) isEqualToString:wantedArtist]) { artistMatches = YES; break; }
+            }
+            if (!artistMatches) {
+                for (NSString *part in [artist componentsSeparatedByString:@"·"]) {
+                    if ([normalizedName(part) isEqualToString:normalizedName(candidateArtist ?: @"")]) { artistMatches = YES; break; }
+                }
+            }
+        }
+        if (!artistMatches) continue;
+        // A title-only match is safe only when it identifies one mapped file; never put one song's
+        // artwork on another file that happens to share its title.
+        if (foundURI) return nil;
+        foundURI = candidateURI;
+    }
+    return foundURI;
+}
+
 static void searchArtist(NSString *query, void (^completion)(NSDictionary<NSString *, NSString *> *artist, NSError *error)) {
     NSString *authorization = SGKaraokeSpotifyAuthorization();
     if (!authorization.length) {
