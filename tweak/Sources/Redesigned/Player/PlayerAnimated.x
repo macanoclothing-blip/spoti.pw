@@ -7,6 +7,7 @@
 #import "Shared/LockScreenArtwork/LockScreenArtwork.h"
 #import "Shared/LockScreenArtwork/SGArtworkFile.h"
 #import "Shared/LockScreenArtwork/SGCanvas.h"
+#import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 #import "Player.h"
 
 static const NSTimeInterval kFadeIn = 0.6, kFadeOut = 0.45, kDimChange = 0.3;
@@ -364,12 +365,29 @@ static NSString *sg_wanted;   // the playing track, once its clip is asked for
 static NSString *sg_next;     // the track up next, once its clip is fetched ahead
 static NSMutableDictionary<NSString *, SGRPlayerFound *> *sg_found;
 static NSMutableSet<NSString *> *sg_looking;
+static NSMutableDictionary<NSString *, NSNumber *> *sg_lookupVersions;
 static NSHashTable *sg_videos;   // Spotify's own video views with a video on them
 static BOOL sg_lyricsUp;
 // Read at launch and when the choice changes, not on each of the plane's layout passes.
 static BOOL sg_picked;
 
 static void update(void);
+
+static NSUInteger advanceLookupVersion(NSString *uri) {
+    if (!uri.length || !sg_lookupVersions) return 0;
+    @synchronized (sg_lookupVersions) {
+        NSUInteger next = [sg_lookupVersions[uri] unsignedIntegerValue] + 1;
+        sg_lookupVersions[uri] = @(next);
+        return next;
+    }
+}
+
+static BOOL lookupVersionIsCurrent(NSString *uri, NSUInteger version) {
+    if (!uri.length || !version || !sg_lookupVersions) return NO;
+    @synchronized (sg_lookupVersions) {
+        return [sg_lookupVersions[uri] unsignedIntegerValue] == version;
+    }
+}
 
 
 static NSString *nameOf(NSString *source) {
@@ -414,30 +432,43 @@ static void fetch(SGCanvas *clip, BOOL again, void (^done)(NSURL *file, NSString
 }
 
 // The sources in order until one has a clip on disk. A clip already at hand answers before this returns.
-static void walk(NSString *uri, SPTPlayerTrack *track, SGCanvas *canvas, NSArray<NSString *> *order, NSUInteger at,
+static void walk(NSString *uri, SPTPlayerTrack *track, SGCanvas *canvas, NSArray<NSString *> *order,
+                 NSUInteger at, NSUInteger version,
                  void (^done)(NSURL *file, NSString *source, NSString *note)) {
+    if (!lookupVersionIsCurrent(uri, version)) {
+        done(nil, nil, @"superseded lookup");
+        return;
+    }
     if (at >= order.count) {
         done(nil, nil, order.count ? [NSString stringWithFormat:@"none from %@", [order componentsJoinedByString:@", "]] : @"no source is on");
         return;
     }
     NSString *source = order[at];
     SGArtworkAsk(source, track, canvas, YES, ^(SGCanvas *clip, NSString *note) {
+        if (!lookupVersionIsCurrent(uri, version)) {
+            done(nil, nil, @"superseded lookup");
+            return;
+        }
         if (!stillWanted(uri)) {
             done(nil, nil, @"moved on");
             return;
         }
         if (!clip.video) {
             say(@"%@ has no clip for %@ (%@)", nameOf(source), uri, clip ? @"a still canvas" : note);
-            walk(uri, track, canvas, order, at + 1, done);
+            walk(uri, track, canvas, order, at + 1, version, done);
             return;
         }
         fetch(clip, NO, ^(NSURL *file, NSString *fetched) {
+            if (!lookupVersionIsCurrent(uri, version)) {
+                done(nil, nil, @"superseded lookup");
+                return;
+            }
             if (file) {
                 done(file, source, [NSString stringWithFormat:@"%@, %@", note, fetched]);
                 return;
             }
             say(@"%@'s clip for %@ not fetched: %@", nameOf(source), uri, fetched);
-            if (stillWanted(uri)) walk(uri, track, canvas, order, at + 1, done);
+            if (stillWanted(uri)) walk(uri, track, canvas, order, at + 1, version, done);
             else done(nil, nil, @"moved on");
         });
     });
@@ -448,8 +479,11 @@ static void prefetchNext(void);
 
 static void find(NSString *uri, SPTPlayerTrack *track, SGCanvas *canvas) {
     if (!uri || sg_found[uri] || [sg_looking containsObject:uri]) return;
+    NSUInteger version = advanceLookupVersion(uri);
     [sg_looking addObject:uri];
-    walk(uri, track, canvas, SGArtworkOrderFor(SGRKeyPlayerArtworkSources), 0, ^(NSURL *file, NSString *source, NSString *note) {
+    walk(uri, track, canvas, SGArtworkOrderFor(SGRKeyPlayerArtworkSources), 0, version,
+         ^(NSURL *file, NSString *source, NSString *note) {
+        if (!lookupVersionIsCurrent(uri, version)) return;
         [sg_looking removeObject:uri];
         if (!stillWanted(uri)) return;
         SGRPlayerFound *found = [SGRPlayerFound new];
@@ -567,6 +601,27 @@ static void update(void) {
         resolve(SGPlayerState());
     }
     playOrHold();
+}
+
+static void localArtworkMatchChanged(NSNotification *notification) {
+    NSString *uri = [notification.object isKindOfClass:NSString.class] ? notification.object : nil;
+    if (!SGLocalArtworkIsLocalTrack(uri)) return;
+    NSString *playingURI = SGURIString(SGPlayerState().track.URI);
+    BOOL playing = [uri isEqualToString:playingURI];
+    BOOL next = [uri isEqualToString:sg_next];
+    if (!playing && !next) return;
+
+    // A track lookup can finish after the user changes its Spotify match. Invalidate its generation so
+    // the stale result cannot replace a Canvas fetched for the newly selected catalog track.
+    advanceLookupVersion(uri);
+    [sg_looking removeObject:uri];
+    [sg_found removeObjectForKey:uri];
+    if (next) sg_next = nil;
+    if (playing) {
+        sg_wanted = nil;
+        [sg_view clear:YES];
+    }
+    update();
 }
 
 static void covered(BOOL covers) {
@@ -709,6 +764,7 @@ static void spotifyVideo(id owner, BOOL attached) {
     %init;
     sg_found = [NSMutableDictionary dictionary];
     sg_looking = [NSMutableSet set];
+    sg_lookupVersions = [NSMutableDictionary dictionary];
     sg_watcher = [SGRPlayerAnimatedWatcher new];
     SGAddPlayerStateObserver(sg_watcher);
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
@@ -717,6 +773,10 @@ static void spotifyVideo(id owner, BOOL attached) {
         sg_picked = SGRPlayerBackgroundStyle() == SGRPlayerBackgroundAnimated;
         say(@"%@ picked", sg_picked ? @"Animated artwork" : @"Fluid artwork");
         update();
+    }];
+    [center addObserverForName:SGLocalArtworkMatchDidChangeNotification object:nil
+                         queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        localArtworkMatchChanged(note);
     }];
     // The main queue, since the power state is reported off it.
     for (NSNotificationName name in @[UIApplicationDidBecomeActiveNotification, UIApplicationWillResignActiveNotification,

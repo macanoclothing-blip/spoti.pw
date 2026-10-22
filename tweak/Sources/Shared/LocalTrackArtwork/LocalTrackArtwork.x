@@ -127,12 +127,14 @@ NSDictionary<NSString *, id> *SGLocalArtworkMatch(NSString *localURI) {
     id match = [NSUserDefaults.standardUserDefaults dictionaryForKey:kMatchesKey][localURI];
     if (![match isKindOfClass:NSDictionary.class] ||
         ![match[@"spotifyURI"] isKindOfClass:NSString.class] ||
-        ![match[@"spotifyURI"] hasPrefix:@"spotify:track:"] ||
-        ![match[@"coverURL"] isKindOfClass:NSString.class]) return nil;
-    NSURLComponents *components = [NSURLComponents componentsWithString:match[@"coverURL"]];
-    if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
-        ![components.host.lowercaseString isEqualToString:@"i.scdn.co"] ||
-        !components.path.length || !components.URL) return nil;
+        ![match[@"spotifyURI"] hasPrefix:@"spotify:track:"]) return nil;
+    NSString *coverURL = [match[@"coverURL"] isKindOfClass:NSString.class] ? match[@"coverURL"] : nil;
+    if (coverURL.length) {
+        NSURLComponents *components = [NSURLComponents componentsWithString:coverURL];
+        if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
+            ![components.host.lowercaseString isEqualToString:@"i.scdn.co"] ||
+            !components.path.length || !components.URL) return nil;
+    }
     return match;
 }
 
@@ -258,17 +260,18 @@ static void saveMatch(NSString *localURI, NSDictionary<NSString *, id> *match,
     NSString *spotifyURI = match[@"spotifyURI"];
     NSString *coverURL = match[@"coverURL"];
     if (!SGLocalArtworkIsLocalTrack(localURI) ||
-        ![spotifyURI isKindOfClass:NSString.class] || ![spotifyURI hasPrefix:@"spotify:track:"] ||
-        ![coverURL isKindOfClass:NSString.class]) {
+        ![spotifyURI isKindOfClass:NSString.class] || ![spotifyURI hasPrefix:@"spotify:track:"]) {
         SGLog(@"local artwork: refusing an invalid track match");
         return;
     }
-    NSURLComponents *components = [NSURLComponents componentsWithString:coverURL];
-    if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
-        ![components.host.lowercaseString isEqualToString:@"i.scdn.co"] ||
-        !components.path.length || !components.URL) {
-        SGLog(@"local artwork: refusing a cover URL outside Spotify's image host");
-        return;
+    if (coverURL.length) {
+        NSURLComponents *components = [NSURLComponents componentsWithString:coverURL];
+        if (![components.scheme.lowercaseString isEqualToString:@"https"] ||
+            ![components.host.lowercaseString isEqualToString:@"i.scdn.co"] ||
+            !components.path.length || !components.URL) {
+            SGLog(@"local artwork: refusing a cover URL outside Spotify's image host");
+            return;
+        }
     }
 
     NSMutableDictionary *matches = [[NSUserDefaults.standardUserDefaults dictionaryForKey:kMatchesKey] mutableCopy]
@@ -394,7 +397,7 @@ NSString *SGLocalArtworkURIForTitleAndArtist(NSString *title, NSString *artist) 
     for (id candidateURI in entries) {
         if (![candidateURI isKindOfClass:NSString.class] || !SGLocalArtworkIsLocalTrack(candidateURI)) continue;
         NSDictionary *entry = [entries[candidateURI] isKindOfClass:NSDictionary.class] ? entries[candidateURI] : nil;
-        if (!entry[@"spotifyURI"] || !entry[@"coverURL"]) continue;
+        if (!entry[@"spotifyURI"]) continue;
         NSString *candidateTitle = [entry[@"titleOverride"] isKindOfClass:NSString.class] && [entry[@"titleOverride"] length]
             ? entry[@"titleOverride"] : entry[@"title"];
         NSString *candidateArtist = [entry[@"artistOverride"] isKindOfClass:NSString.class] && [entry[@"artistOverride"] length]
@@ -497,21 +500,23 @@ static NSArray<NSDictionary<NSString *, id> *> *tracksFromSearchData(NSData *dat
             }
         }
         NSString *coverURL = coverURLs.firstObject;
-        if (![uri hasPrefix:@"spotify:track:"] || !title.length || !coverURL.length) continue;
+        if (![uri hasPrefix:@"spotify:track:"] || !title.length) continue;
         NSMutableArray<NSString *> *artistNames = [NSMutableArray array];
         for (id artist in artists) {
             NSString *name = [artist isKindOfClass:NSDictionary.class] && [artist[@"name"] isKindOfClass:NSString.class]
                 ? artist[@"name"] : nil;
             if (name.length) [artistNames addObject:name];
         }
-        [results addObject:@{
+        NSMutableDictionary<NSString *, id> *result = [@{
             @"spotifyURI": uri,
             @"title": title,
             @"artist": [artistNames componentsJoinedByString:@", "],
             @"album": [album[@"name"] isKindOfClass:NSString.class] ? album[@"name"] : @"",
-            @"coverURL": coverURL,
-            @"thumbnailURL": coverURLs.lastObject ?: coverURL,
-        }];
+        } mutableCopy];
+        if (coverURL.length) result[@"coverURL"] = coverURL;
+        NSString *thumbnailURL = coverURLs.lastObject ?: coverURL;
+        if (thumbnailURL.length) result[@"thumbnailURL"] = thumbnailURL;
+        [results addObject:result];
     }
     return results;
 }
@@ -623,6 +628,7 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
 @property (nonatomic, strong) UILabel *coverTitleLabel;
 @property (nonatomic, strong) UILabel *coverSubtitleLabel;
 @property (nonatomic, strong) UILabel *photoStatusLabel;
+@property (nonatomic, strong) UILabel *catalogHintLabel;
 @property (nonatomic, strong) UIButton *choosePhotoButton;
 @property (nonatomic, strong) UIButton *removeCustomCoverButton;
 @property (nonatomic, strong) UITableView *tableView;
@@ -644,7 +650,7 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    self.title = @"Match artwork";
+    self.title = @"Choose Spotify song";
     SPTPlayerTrack *playing = SGPlayerState().track;
     if ([SGURIString(playing.URI) isEqualToString:self.localURI]) {
         NSString *artist = [playing.artistName isKindOfClass:NSString.class] ? playing.artistName : nil;
@@ -666,6 +672,13 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
     _searchBar.autocapitalizationType = UITextAutocapitalizationTypeNone;
     _searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
     _searchBar.returnKeyType = UIReturnKeySearch;
+
+    _catalogHintLabel = [UILabel new];
+    _catalogHintLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _catalogHintLabel.adjustsFontForContentSizeCategory = YES;
+    _catalogHintLabel.textColor = UIColor.secondaryLabelColor;
+    _catalogHintLabel.numberOfLines = 0;
+    _catalogHintLabel.text = @"Choose the Spotify track whose cover and Canvas should appear for this local file. Its audio keeps playing.";
 
     _titleField = [UITextField new];
     _titleField.borderStyle = UITextBorderStyleRoundedRect;
@@ -702,7 +715,7 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
     _artistStatusLabel.hidden = YES;
 
     _removeMatchButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    [_removeMatchButton setTitle:@"Remove Spotify artwork match" forState:UIControlStateNormal];
+    [_removeMatchButton setTitle:@"Remove Spotify song source" forState:UIControlStateNormal];
     [_removeMatchButton setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
     _removeMatchButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
     _removeMatchButton.hidden = !SGLocalArtworkSpotifyURI(self.localURI);
@@ -778,7 +791,8 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
     _detailsStack.spacing = 8;
     _detailsStack.hidden = YES;
     _searchHeader = [[UIStackView alloc] initWithArrangedSubviews:@[
-        coverCard, _photoStatusLabel, _removeCustomCoverButton, _searchBar, _detailsToggleButton, _detailsStack
+        coverCard, _photoStatusLabel, _removeCustomCoverButton, _catalogHintLabel, _searchBar,
+        _detailsToggleButton, _detailsStack
     ]];
     _searchHeader.axis = UILayoutConstraintAxisVertical;
     _searchHeader.spacing = 6;
@@ -860,8 +874,8 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
     _coverSubtitleLabel.text = custom
         ? @"Used for this file; the Spotify match can still supply its Canvas."
         : (SGLocalArtworkSpotifyURI(self.localURI)
-            ? @"The matched Spotify song supplies its cover and Canvas."
-            : @"Choose a photo or match a Spotify song.");
+        ? @"The matched Spotify song supplies its cover and Canvas when available."
+        : @"Choose a photo, or select a Spotify song below for its cover and Canvas.");
     _removeCustomCoverButton.hidden = !custom;
     _choosePhotoButton.accessibilityLabel = custom ? @"Change custom cover photo" : @"Choose a custom cover photo";
     UIImage *cover = SGLocalArtworkCachedCover(self.localURI);
@@ -1133,7 +1147,7 @@ static NSURLSessionDataTask *searchTracks(NSString *query, void (^completion)(NS
         return;
     }
     if (_errorMessage.length) _messageLabel.text = _errorMessage;
-    else if (_searchBar.text.length < 2) _messageLabel.text = @"Search by song or artist. The original local audio keeps playing.";
+    else if (_searchBar.text.length < 2) _messageLabel.text = @"Search Spotify by song or artist. The selected cover and Canvas are used while the local audio keeps playing.";
     else _messageLabel.text = @"No matching Spotify songs found.";
     _messageLabel.hidden = NO;
 }

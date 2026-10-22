@@ -830,12 +830,14 @@ static UIAction *localArtworkAction(SGRPlayerMenuTakeover *t) {
     NSString *localURI = SGURIString(SGPlayerState().track.URI);
     if (!SGLocalArtworkIsLocalTrack(localURI)) return nil;
     __weak SGRPlayerMenuTakeover *weak = t;
-    UIAction *action = [UIAction actionWithTitle:@"Match artwork" image:symbol(@"pencil") identifier:nil
+    UIAction *action = [UIAction actionWithTitle:@"Choose Spotify song" image:symbol(@"magnifyingglass") identifier:nil
         handler:^(UIAction *sender) {
         pick(weak, ^(SGRPlayerMenuTakeover *strong) { openLocalArtworkEditor(strong, localURI); });
     }];
     NSDictionary *match = SGLocalArtworkMatch(localURI);
-    action.subtitle = [match[@"title"] isKindOfClass:NSString.class] ? match[@"title"] : @"Search Spotify for this local file";
+    action.subtitle = [match[@"title"] isKindOfClass:NSString.class]
+        ? [NSString stringWithFormat:@"%@ · supplies cover and Canvas", match[@"title"]]
+        : @"Search Spotify for a cover and Canvas source";
     return action;
 }
 

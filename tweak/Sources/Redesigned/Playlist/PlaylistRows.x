@@ -29,7 +29,7 @@
 // Under the text rather than the whole row, as the Music app draws it; the trailing end clears the page margin.
 static const CGFloat kHairline = 0.5, kHairlineGap = 12;
 
-static char kRowKey, kArtKey, kTitleKey, kSubtitleKey, kLineKey, kToolbarKey;
+static char kRowKey, kArtKey, kTitleKey, kSubtitleKey, kLocalTitleKey, kLocalSubtitleKey, kLineKey, kToolbarKey;
 static char kLocalURIKey, kLocalRequestURIKey, kLocalImageViewKey, kLocalOriginalImageKey, kLocalAppliedImageKey, kLocalHiddenViewsKey;
 static NSHashTable<UIView *> *sg_localArtworkRows;
 static UIView *identified(UIView *root, NSString *identifier, const void *cacheKey);
@@ -108,8 +108,12 @@ static void applyLocalArtwork(UIView *row, UIView *artwork) {
     if (!artwork) return;
     if (!sg_localArtworkRows) sg_localArtworkRows = [NSHashTable weakObjectsHashTable];
     [sg_localArtworkRows addObject:artwork];
-    NSString *title = textIn(identified(row, @"Track.Row.Content.Title", &kTitleKey));
-    NSString *artist = textIn(identified(row, @"Track.Row.Content.Subtitle", &kSubtitleKey));
+    UIView *titleElement = identified(row, @"LocalFiles.Row.Library.Title", &kLocalTitleKey);
+    UIView *artistElement = identified(row, @"LocalFiles.Row.Library.Subtitle", &kLocalSubtitleKey);
+    if (!titleElement) titleElement = identified(row, @"Track.Row.Content.Title", &kTitleKey);
+    if (!artistElement) artistElement = identified(row, @"Track.Row.Content.Subtitle", &kSubtitleKey);
+    NSString *title = textIn(titleElement);
+    NSString *artist = textIn(artistElement);
     NSString *localURI = SGLocalArtworkURIForTitleAndArtist(title, artist);
     NSString *oldURI = objc_getAssociatedObject(artwork, &kLocalURIKey);
     if (![oldURI isEqualToString:localURI]) restoreLocalArtwork(artwork);
@@ -218,7 +222,8 @@ static void applyRow(UIView *cell) {
 static void applyLocalArtworkForElement(UIView *artwork) {
     if (![artwork.accessibilityIdentifier isEqualToString:@"Encore.ImageView"]) return;
     for (UIView *row = artwork.superview; row; row = row.superview) {
-        UIView *title = identified(row, @"Track.Row.Content.Title", &kTitleKey);
+        UIView *title = identified(row, @"LocalFiles.Row.Library.Title", &kLocalTitleKey);
+        if (!textIn(title)) title = identified(row, @"Track.Row.Content.Title", &kTitleKey);
         if (!textIn(title)) continue;
         if (artworkImageView(artwork)) applyLocalArtwork(row, artwork);
         // The closest ancestor with a track title owns this image. Do not walk up into a playlist

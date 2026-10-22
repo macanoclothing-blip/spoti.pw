@@ -37,7 +37,8 @@ static char kPlaybackButtonKey;
 // The Music app keeps that row just over the home indicator: its middle this far above the safe area's
 // bottom, and never less than kRowMinBottom above the screen's on a phone without a home indicator.
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
-static const CGFloat kControlsLift = 12;
+// The volume row measures the gap and lifts the controls only when space is genuinely short.
+static const CGFloat kControlsLift = 0;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kFooterSettleKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;

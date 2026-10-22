@@ -257,10 +257,14 @@ static void askCanvaz(NSString *uri, void (^done)(SGCanvas *canvas, NSString *no
 void SGArtworkAsk(NSString *source, SPTPlayerTrack *track, SGCanvas *fromMetadata, BOOL tall, void (^done)(SGCanvas *canvas, NSString *note)) {
     if ([source isEqualToString:SGArtworkSourceSpotify]) {
         NSString *uri = SGURIString(track.URI);
-        if (fromMetadata) done(fromMetadata, @"track metadata");
+        NSString *canvasURI = SGLocalArtworkIsLocalTrack(uri) ? SGLocalArtworkSpotifyURI(uri) : nil;
+        if (canvasURI) {
+            // A selected catalog track is the local file's explicit Canvas source, even if the
+            // local file itself happens to carry stale Canvas metadata.
+            askCanvaz(canvasURI, done);
+        } else if (fromMetadata) done(fromMetadata, @"track metadata");
         else if (uri) {
-            NSString *canvasURI = SGLocalArtworkIsLocalTrack(uri) ? SGLocalArtworkSpotifyURI(uri) : nil;
-            askCanvaz(canvasURI ?: uri, done);
+            askCanvaz(uri, done);
         }
         else done(nil, @"no track");
         return;
