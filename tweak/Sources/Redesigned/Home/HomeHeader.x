@@ -21,14 +21,13 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Settings/SGPageStyle.h"
-#import "Shared/MusicRecognition/SGMusicRecognition.h"
 #import "Home.h"
 
 // Tries at finding the tab's name before settling for the English one: a miss walks the window.
 static const NSUInteger kTitleTries = 8;
 
 static char kTitleKey, kTabKey;
-static char kHomeFilterKey, kHomeShazamKey, kHomePillKey;
+static char kHomeFilterKey, kHomePillKey;
 static char kHomeFilterPopoverDelegateKey;
 static NSString *sg_tabName;
 
@@ -248,10 +247,8 @@ static void layoutHeader(UIViewController *page) {
     if (![title.font isEqual:font]) title.font = font;
 
     SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home", NO);
-    SGRHomeHeaderButton *shazam = headerButton(header, &kHomeShazamKey, @"waveform", @"Riconosci una canzone con Shazam", YES);
     UIView *pill = homeProfilePill(header);
     filters.action = ^{ showHomeFilters(header, pill); };
-    shazam.action = ^{ SGMusicRecognitionStart(); };
     CGRect faceFrame = face ? [stack convertRect:face.frame toView:header]
                             : CGRectMake(header.bounds.size.width - SGRSideMargin - 32, CGRectGetMidY(stack.frame) - 17, 32, 34);
     CGRect pillFrame = CGRectMake(CGRectGetMinX(faceFrame) - 58, round(CGRectGetMidY(faceFrame) - 23),
@@ -259,8 +256,7 @@ static void layoutHeader(UIViewController *page) {
     if (!CGRectEqualToRect(pill.frame, pillFrame)) pill.frame = pillFrame;
     SGRGlassCapsuleInside(pill, &kHomePillKey, pillFrame.size, NO);
     filters.frame = CGRectMake(CGRectGetMinX(pillFrame) + 5, CGRectGetMidY(pillFrame) - 22, 44, 44);
-    shazam.frame = CGRectMake(CGRectGetMinX(pillFrame) - 52, filters.frame.origin.y, 44, 44);
-    CGFloat trailing = CGRectGetMinX(shazam.frame) - SGRGrid;
+    CGFloat trailing = CGRectGetMinX(filters.frame) - SGRGrid;
     CGFloat height = ceil(font.lineHeight);
     CGFloat titleStart = SGRSideMargin;
     CGRect frame = CGRectMake(titleStart, round(CGRectGetMidY(stack.frame) - height / 2), MAX(0, trailing - titleStart), height);

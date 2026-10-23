@@ -64,6 +64,7 @@ static const CGFloat kThumbTop = 8;            // below the top of the artwork b
 static const CGFloat kLyricsTop = 20;          // between the title row and the first line
 static const CGFloat kLyricsBottom = 8;        // above the progress bar
 static const CGFloat kRotateButtonSide = 44, kRotateButtonGap = 8;
+static const CGFloat kLandscapeControlsGap = 22;
 static const CGFloat kLandscapeTransportScale = 0.78;
 static const CGFloat kLandscapeProgressWidthScale = 0.58;
 static const CGFloat kLandscapeProgressHeightScale = 0.76;
@@ -97,8 +98,10 @@ static char kLandscapeNextKey, kLandscapeRepeatKey, kLandscapeReachKey;
 static BOOL sg_open;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
+static BOOL sg_landscapeChromeHidden;
 static BOOL sg_tapBroughtBack;              // the touch going on began with them away, so its tap seeks nowhere
 static NSTimer *sg_aloneTimer;
+static NSTimer *sg_landscapeChromeTimer;
 static BOOL sg_singHeld;                    // Sing's microphone is open, preparing or explaining itself
 static __weak UIView *sg_sing;              // the microphone, when Sing is on
 static __weak UIView *sg_host;              // SPTNowPlayingView
@@ -337,11 +340,11 @@ static SGRLyricsLayout layoutIn(UIView *host) {
         CGFloat durationHeight = MIN(40, MAX(24, bar.size.height));
         CGFloat left = CGRectGetMinX(area) + SGRSideMargin;
         CGFloat controlsWidth = MAX(0, leftWidth - 2 * SGRSideMargin);
-        CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 24;
+        CGFloat leftContentHeight = contentHeight - row.size.height - durationHeight - controlsHeight - 16 - kLandscapeControlsGap;
         CGFloat side = MIN(140, MIN(controlsWidth - 12, leftContentHeight));
         if (side < kThumbSide) {
             // Keep a workable lyric column on compact landscape heights rather than rejecting the tap.
-            side = MIN(kThumbSide, MIN(controlsWidth, MAX(64, contentHeight - row.size.height - durationHeight - controlsHeight - 16)));
+            side = MIN(kThumbSide, MIN(controlsWidth, MAX(64, contentHeight - row.size.height - durationHeight - controlsHeight - 8 - kLandscapeControlsGap)));
         }
         if (side < 64 || controlsWidth < 64 || contentHeight < 120) return l;
         CGFloat top = contentTop;
@@ -356,7 +359,7 @@ static SGRLyricsLayout layoutIn(UIView *host) {
         l.shift = left - CGRectGetMinX(sourceTitle);
         l.duration = CGRectMake(left, CGRectGetMaxY(l.thumb) + 12 + row.size.height + 4,
                                 controlsWidth, durationHeight);
-        l.controls = CGRectMake(left, CGRectGetMaxY(l.duration) + 8, controlsWidth, controlsHeight);
+        l.controls = CGRectMake(left, CGRectGetMaxY(l.duration) + kLandscapeControlsGap, controlsWidth, controlsHeight);
         CGFloat column = CGRectGetMinX(area) + leftWidth + SGRGrid;
         l.stage = CGRectMake(column, contentTop, CGRectGetMaxX(area) - column, contentHeight);
         l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
@@ -893,6 +896,53 @@ static void stopAloneTimer(void) {
     sg_aloneTimer = nil;
 }
 
+static void stopLandscapeChromeTimer(void) {
+    [sg_landscapeChromeTimer invalidate];
+    sg_landscapeChromeTimer = nil;
+}
+
+static void setLandscapeChromeHidden(BOOL hidden, BOOL animated) {
+    if (sg_landscapeChromeHidden == hidden) return;
+    sg_landscapeChromeHidden = hidden;
+    UIView *header = sg_header.viewIfLoaded;
+    SGRPlayerLyricsOverlay *overlay = sg_host ? objc_getAssociatedObject(sg_host, &kOverlayKey) : nil;
+    void (^updates)(void) = ^{
+        header.alpha = hidden ? 0 : 1;
+        overlay.rotate.alpha = hidden ? 0 : 1;
+    };
+    if (animated && !SGRReduceMotion()) {
+        [UIView animateWithDuration:hidden ? kAloneOut : kAloneBack delay:0
+                            options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                         animations:updates completion:nil];
+    } else {
+        updates();
+    }
+}
+
+static BOOL mayHideLandscapeChrome(void) {
+    UIView *host = sg_host;
+    SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
+    if (!sg_open || !playerIsLandscape() || sg_moving || sg_singHeld || !host.window || !overlay.superview || overlay.lyrics.hidden) return NO;
+    SPTPlayerState *state = SGPlayerState();
+    if (!state || state.isPaused) return NO;
+    UIViewController *top = sg_player;
+    while (top.parentViewController) top = top.parentViewController;
+    if (top.presentedViewController) return NO;
+    return !SGRPlayerIsTransitioning() && !UIAccessibilityIsVoiceOverRunning()
+        && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
+}
+
+static void scheduleLandscapeChrome(void) {
+    stopLandscapeChromeTimer();
+    if (!mayHideLandscapeChrome() || sg_landscapeChromeHidden) return;
+    sg_landscapeChromeTimer = [NSTimer scheduledTimerWithTimeInterval:kAloneAfter repeats:NO block:^(NSTimer *timer) {
+        sg_landscapeChromeTimer = nil;
+        if (mayHideLandscapeChrome()) setLandscapeChromeHidden(YES, YES);
+        else if (sg_open && playerIsLandscape() && !SGPlayerState().isPaused &&
+                 UIApplication.sharedApplication.applicationState == UIApplicationStateActive) scheduleLandscapeChrome();
+    }];
+}
+
 static void scheduleAlone(void);
 
 // Sing's microphone in the corner of the band the lines have now. Held, it keeps the controls from going
@@ -959,8 +1009,11 @@ static void scheduleAlone(void) {
     stopAloneTimer();
     if (playerIsLandscape()) {
         if (sg_alone) setAlone(NO, NO);
+        scheduleLandscapeChrome();
         return;
     }
+    stopLandscapeChromeTimer();
+    if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, NO);
     if (!sg_open || sg_alone) return;
     sg_aloneTimer = [NSTimer scheduledTimerWithTimeInterval:kAloneAfter repeats:NO block:^(NSTimer *timer) {
         sg_aloneTimer = nil;
@@ -977,6 +1030,7 @@ static void touched(UIView *view) {
     }
     sg_tapBroughtBack = sg_alone;
     if (sg_alone) setAlone(NO, YES);
+    if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, YES);
     scheduleAlone();
 }
 
@@ -1076,6 +1130,7 @@ static void keepLandscapeCover(UIView *host, SGRLyricsLayout l) {
     if (!host || host.bounds.size.width <= host.bounds.size.height || !l.ok) return;
     UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
     if (!picture) {
+        SGRPlayerCoverList().alpha = 1;
         SGRPlayerSetCoverHidden(NO);
         return;
     }
@@ -1087,6 +1142,7 @@ static void keepLandscapeCover(UIView *host, SGRLyricsLayout l) {
     overlay.thumb.alpha = 1;
     overlay.stage.alpha = 0;
     overlay.rotate.alpha = 0;
+    SGRPlayerCoverList().alpha = 0;
     SGRPlayerSetCoverHidden(YES);
 }
 
@@ -1117,6 +1173,8 @@ static void setOpen(BOOL open, BOOL animated) {
     if (!open) {
         setAlone(NO, animated);
         stopAloneTimer();
+        stopLandscapeChromeTimer();
+        if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, NO);
     }
     sg_open = open;
     SGRPlayerLyricsChanged();
@@ -1149,11 +1207,11 @@ static void setOpen(BOOL open, BOOL animated) {
         // Spotify's cover goes the moment the redesign's own takes its place: the same picture at the
         // same size with the same corners, so there is nothing to see in the swap. Coming back it waits
         // for the thumbnail to land on it, or the two would be on screen at once, one of them half size.
+        SGRPlayerCoverList().alpha = 0;
         if (landscape) {
             SGRPlayerSetCoverHidden(YES);
         } else {
             SGRPlayerSetCoverHidden(NO);
-            if (picture) SGRPlayerCoverList().alpha = 0;
         }
     }
 
@@ -1170,6 +1228,7 @@ static void setOpen(BOOL open, BOOL animated) {
         overlay.stage.transform = open ? CGAffineTransformIdentity
                                        : CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
         overlay.rotate.alpha = open ? 1 : 0;
+        if (open && landscape && sg_landscapeChromeHidden) overlay.rotate.alpha = 0;
         sg_sing.alpha = open ? 1 : 0;
     };
     void (^settled)(BOOL) = ^(BOOL finished) {
@@ -1224,6 +1283,9 @@ static void replace(void) {
     if (playerIsLandscape()) {
         stopAloneTimer();
         if (sg_alone) setAlone(NO, NO);
+    } else {
+        stopLandscapeChromeTimer();
+        if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, NO);
     }
     SGRLyricsLayout l = layoutIn(host);
     if (sg_open && !l.ok) {
@@ -1249,7 +1311,12 @@ static void replace(void) {
     [overlay.lyrics setLineInsets:bandOf(l, sg_alone) duration:0];
     if (sg_alone) showControls(0, overlay);
     placeSing(overlay, l);
-    if (host.bounds.size.width > host.bounds.size.height) SGRPlayerSetCoverHidden(YES);
+    if (host.bounds.size.width > host.bounds.size.height) {
+        SGRPlayerCoverList().alpha = 0;
+        SGRPlayerSetCoverHidden(YES);
+        if (sg_landscapeChromeHidden) overlay.rotate.alpha = 0;
+        else if (!sg_landscapeChromeTimer) scheduleLandscapeChrome();
+    }
     else {
         SGRPlayerSetCoverHidden(NO);
         SGRPlayerCoverList().alpha = 0;
@@ -1336,7 +1403,7 @@ static void replace(void) {
 // The header row goes with the rest of the controls while the lines are alone.
 static void headerLaidOut(UIViewController *unit) {
     sg_header = unit;
-    if (sg_alone) sg_header.viewIfLoaded.alpha = 0;
+    sg_header.viewIfLoaded.alpha = (sg_alone || sg_landscapeChromeHidden) ? 0 : 1;
 }
 
 static void infoLaidOut(UIViewController *unit) {
@@ -1497,6 +1564,8 @@ static void singAvailabilityChanged(void) {
         if (_paused) {
             setAlone(NO, YES);
             stopAloneTimer();
+            stopLandscapeChromeTimer();
+            if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, YES);
         } else {
             scheduleAlone();
         }
@@ -1546,7 +1615,10 @@ static SGRPlayerLyricsWatcher *sg_watcher;
         overlay.cover.image = artwork;
         SGRAnimate(SGRMotionFade, ^{
             overlay.thumb.alpha = 1;
-            if (sg_host.bounds.size.width > sg_host.bounds.size.height) SGRPlayerSetCoverHidden(YES);
+            if (sg_host.bounds.size.width > sg_host.bounds.size.height) {
+                SGRPlayerCoverList().alpha = 0;
+                SGRPlayerSetCoverHidden(YES);
+            }
             else {
                 SGRPlayerSetCoverHidden(NO);
                 SGRPlayerCoverList().alpha = 0;

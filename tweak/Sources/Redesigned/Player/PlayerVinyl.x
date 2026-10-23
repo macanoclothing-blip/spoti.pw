@@ -47,7 +47,7 @@ static const NSTimeInterval kScratchInterval = 0.5;
 
 // Layout fractions (relative to overlay width).
 static const CGFloat kDiscFraction   = 0.91;  // disc diameter
-static const CGFloat kHoleFraction   = 0.17;  // album-art label (of disc radius)
+static const CGFloat kHoleFraction   = 0.32;  // album-art label fills the printed centre label
 static const CGFloat kMountX         = 0.85;  // pivot X fraction of overlay width
 static const CGFloat kMountY         = 0.135; // pivot Y fraction of overlay height
 static const CGFloat kTonearmAssetAngle = 36.0 * M_PI / 180.0;
@@ -847,8 +847,10 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _disc.position = CGPointMake(discCX, discCY);
 
     // ── Tonearm ──
-    CGFloat armSize = landscape ? MIN(W, H * 1.55) : W;
-    CGPoint pivot = CGPointMake(W * kMountX, H * kMountY);
+    CGFloat armSize = landscape ? discDiam * 0.90 : W;
+    CGPoint pivot = landscape
+        ? CGPointMake(discCX + discR * 0.60, discCY - discR * 0.72)
+        : CGPointMake(W * kMountX, H * kMountY);
     _arm.bounds = CGRectMake(0, 0, armSize, armSize);
     _arm.anchorPoint = CGPointMake(0.80, 0.14);
     _arm.position = pivot;
@@ -866,7 +868,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
 
     // ── Four pill buttons at the bottom ──
     CGFloat safeBottom  = self.safeAreaInsets.bottom;
-    CGFloat buttonHeight = landscape ? 56 : kButtonHeight;
+    CGFloat buttonHeight = landscape ? 44 : kButtonHeight;
     CGFloat btnY        = H - safeBottom - kButtonBottom - buttonHeight;
     CGFloat gap         = landscape ? 12 : 8;
     CGFloat sideW       = buttonHeight * 1.4;

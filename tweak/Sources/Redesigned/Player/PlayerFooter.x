@@ -22,6 +22,7 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
+#import "PlayerVinyl.h"
 #import <MediaPlayer/MediaPlayer.h>
 
 static const CGFloat kLyricsGlyphSize = 20;
@@ -239,6 +240,14 @@ static void layOutFooter(UIViewController *unit) {
     CGFloat connectFrom = moveTo(arrangedAround(connect, host), pinned, CGPointMake(CGRectGetMidX(pinned.bounds), CGRectGetMidY(pinned.bounds)), host, round(width * kMiddle));
 
     UIView *queue = SGRFindByIdentifier(host, @"QueueButtonNowPlaying", &kQueueKey);
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
+        SGRPlayerVanish(lyrics);
+        SGRPlayerVanish(arrangedAround(connect, host));
+        SGRPlayerVanish(arrangedAround(queue, host));
+        lowerRow(host);
+        scheduleFooterSettle(host);
+        return;
+    }
     CGFloat queueFrom = moveTo(arrangedAround(queue, host), queue, CGPointMake(CGRectGetMidX(queue.bounds), CGRectGetMidY(queue.bounds)), host, round(width * (rtl ? kLeading : kTrailing)));
 
     lowerRow(host);

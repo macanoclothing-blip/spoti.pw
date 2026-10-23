@@ -36,7 +36,7 @@ static NSString *appleIDKey(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         // Verified in MediaPlayer's exported symbols and on-device Now Playing. ISRC-only
-        // lookup fails in the tested iOS Shazam service despite the catalog having haptics.
+        // lookup fails in the tested iOS catalog service despite the catalog having haptics.
         NSString *const *address = (NSString *const *)dlsym(RTLD_DEFAULT, "_MPNowPlayingInfoPropertyiTunesStoreIdentifier");
         if (address) key = *address;
     });

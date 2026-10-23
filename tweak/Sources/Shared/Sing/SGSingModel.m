@@ -7,14 +7,17 @@
 
 NSNotificationName const SGSingModelDidChangeNotification = @"spotifyglass.singModelChanged";
 
-// The model host: a Hugging Face repository holding the compiled model's files at the paths below. A test
-// build serves them itself and keeps them somewhere of its own (harness/sing/model_test.m).
+// Public mirror of the compiled model. The original Darkkos repository now answers 401; this mirror keeps
+// the same files at the same paths and hashes (see its model card). A test build serves them itself and
+// keeps them somewhere of its own (harness/sing/model_test.m).
 #ifndef SGSingModelBase
-#define SGSingModelBase @"https://huggingface.co/Darkkos/spoti-sing/resolve/main/"
+#define SGSingModelBase @"https://huggingface.co/My-Name-Is-Jeff/vitrine-sing/resolve/main/"
 #endif
 #ifndef SGSingModelRoot
 #define SGSingModelRoot nil
 #endif
+
+static NSString *const kModelSource = @"My-Name-Is-Jeff/vitrine-sing";
 
 // The compiled model, file by file, as harness/sing/stage_model.py prints it for an export. Only these
 // files, at these sizes and with these hashes, ever become the model; the largest comes first.
@@ -149,7 +152,8 @@ static NSURLSession *session(void) {
 
 static void keepResume(int i, NSData *data) {
     if (!data) { sg_bytes[i] = 0; return; }
-    [@{@"data": data, @"bytes": @(sg_bytes[i]), @"metered": @(sg_metered)} writeToURL:resumeFile(i) error:nil];
+    [@{@"data": data, @"bytes": @(sg_bytes[i]), @"metered": @(sg_metered), @"source": kModelSource}
+        writeToURL:resumeFile(i) error:nil];
 }
 
 // Stops every task: kept for a resume when `keep`, dropped otherwise.
@@ -184,7 +188,10 @@ static void startFile(int i) {
     NSURLSessionDownloadTask *task = nil;
     // A resume carries its request, and with it the networks it may use: one made for others than the
     // ones allowed now starts over, and so does one that has already failed once.
-    if ([resume[@"data"] isKindOfClass:NSData.class] && [resume[@"metered"] boolValue] == sg_metered && !sg_restarted[i]) {
+    // Resume data holds its original URL. Ignore data from the retired host, otherwise a user who already
+    // saw "Download failed" would keep retrying the same 401 after installing this update.
+    if ([resume[@"data"] isKindOfClass:NSData.class] && [resume[@"source"] isEqualToString:kModelSource] &&
+        [resume[@"metered"] boolValue] == sg_metered && !sg_restarted[i]) {
         task = [session() downloadTaskWithResumeData:resume[@"data"]];
         sg_bytes[i] = [resume[@"bytes"] longLongValue];
     }
@@ -492,6 +499,13 @@ void SGSingModelReconnect(void) {
                 int i = indexOf(task);
                 if (i < 0 || sg_done[i] || sg_checking[i] || sg_tasks[@(i)] || ![task isKindOfClass:NSURLSessionDownloadTask.class]) {
                     [task cancel];
+                    continue;
+                }
+                NSURL *url = task.originalRequest.URL ?: task.currentRequest.URL;
+                NSString *sourcePath = [NSString stringWithFormat:@"/%@/resolve/main/", kModelSource];
+                if (![url.host isEqualToString:@"huggingface.co"] || ![url.path hasPrefix:sourcePath]) {
+                    [task cancel];
+                    SGLog(@"Sing voice model: discarded a background download from the retired host");
                     continue;
                 }
                 sg_tasks[@(i)] = (NSURLSessionDownloadTask *)task;

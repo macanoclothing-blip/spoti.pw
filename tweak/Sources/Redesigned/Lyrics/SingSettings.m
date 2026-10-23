@@ -38,7 +38,16 @@ static NSString *modelStatus(void) {
             return [NSString stringWithFormat:@"Downloading %lld %% · %lld of %@", received * 100 / size,
                     (received + (1ll << 19)) >> 20, SGSingModelBytesText(size)];
         case SGSingModelMissing:
-            if (SGSingModelFailure()) return @"Download failed";
+            if (SGSingModelFailure()) {
+                NSString *failure = SGSingModelFailure();
+                NSRange marker = [failure rangeOfString:@"host answered "];
+                if (marker.location != NSNotFound) {
+                    NSString *status = [[failure substringFromIndex:NSMaxRange(marker)] componentsSeparatedByCharactersInSet:
+                        [NSCharacterSet characterSetWithCharactersInString:@". \n"]].firstObject;
+                    if (status.length) return [NSString stringWithFormat:@"Server returned %@", status];
+                }
+                return @"Download failed";
+            }
             if (received > 0) return [NSString stringWithFormat:@"Paused · %lld of %@", (received + (1ll << 19)) >> 20, SGSingModelBytesText(size)];
             return @"Not downloaded";
     }

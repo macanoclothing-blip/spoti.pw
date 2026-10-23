@@ -63,7 +63,7 @@ static UIImage *preview(NSString *file) {
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
     self.title = @"App icon";
     _files = availableFiles();
-    _footer = SGNote(@"iOS confirms each change in an alert of its own. The name under the icon is set when the app is signed: rename it in Feather, Sideloadly or whatever signs it.");
+    _footer = SGNote(@"iOS confirms each change in an alert of its own. Alternate icons must be included in the signed app, so this list shows the icons bundled with this build. The name under the icon is set when the app is signed: rename it in Feather, Sideloadly or whatever signs it.");
     return self;
 }
 

@@ -306,12 +306,6 @@ Redesigned:
                   documented public artist-logo endpoint).
                   A missing logo is retried on a later visit. The Fanart.tv key stays in local preferences and is shown
                   partially in Mod Settings; Apple Music lookup is an opt-in Redesigned setting and sends only the artist name.
-    MusicRecognition/ ShazamKit identification is opt-in in Player settings and listens through the microphone only after an
-                  explicit tap, for at most 20 seconds. It restores Spotify's audio-session category after stopping, reports
-                  matches, and opens a Spotify search for the recognized title and artist. Audio signatures are checked against
-                  Shazam's catalog; spoti.pw does not save microphone audio. Listening to another device requires
-                  the iPhone microphone to hear it; pause Spotify on this iPhone to avoid matching its own speaker output.
-                  The injected app's signing App ID must have ShazamKit access enabled (MusicRecognition/SGMusicRecognition.m).
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
                   edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred

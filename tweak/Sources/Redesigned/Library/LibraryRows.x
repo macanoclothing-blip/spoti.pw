@@ -14,6 +14,7 @@
 // actions off so a reused row does not slide its line into place.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/Player/PlayerVinyl.h"
 #import "Library.h"
 
 // What a row leaves between its artwork and its text (03.txt:36 and :39: the artwork ends at 64, the text
@@ -21,6 +22,40 @@
 static const CGFloat kTextGap = 12;
 
 static char kThumbKey, kCoverKey, kLineKey;
+static char kVinylAlbumRowKey, kVinylCardKey;
+
+// In Vinyl mode the album list reads as a vertical cover flow: the album nearest the centre faces the
+// listener, while the neighbouring covers recede. The underlying collection view and its selection
+// delegate stay intact, so scrolling and opening an album still use Spotify's native page transition.
+static void applyVinylFlow(UIView *cell, UICollectionView *collection) {
+    if (!cell) return;
+    BOOL album = SGRFindByIdentifier(cell, @"Album.Row.Library", &kVinylAlbumRowKey) != nil ||
+        SGRFindByIdentifier(cell, @"Components.UI.CardLibrary.Artwork", &kVinylCardKey) != nil;
+    if (!SGFlag(SGRKeyPlayerVinyl, NO) || !album || !collection || CGRectGetHeight(collection.bounds) < 160) {
+        if (!CATransform3DIsIdentity(cell.layer.transform)) cell.layer.transform = CATransform3DIdentity;
+        if (cell.layer.zPosition != 0) cell.layer.zPosition = 0;
+        if (cell.alpha != 1) cell.alpha = 1;
+        return;
+    }
+    CGRect frame = [cell convertRect:cell.bounds toView:collection];
+    CGFloat centre = CGRectGetHeight(collection.bounds) * 0.53;
+    CGFloat step = MAX(72, CGRectGetHeight(frame) + 18);
+    CGFloat distance = (CGRectGetMidY(frame) - centre) / step;
+    CGFloat depth = MIN(3.2, fabs(distance));
+    CGFloat direction = distance < 0 ? -1 : 1;
+    CGFloat angle = direction * MIN(0.92, depth * 0.27);
+    CGFloat scale = MAX(0.70, 1.08 - depth * 0.105);
+    CATransform3D transform = CATransform3DIdentity;
+    transform.m34 = -1.0 / 760.0;
+    transform = CATransform3DRotate(transform, angle, 1, 0, 0);
+    transform = CATransform3DScale(transform, scale, scale, 1);
+    transform = CATransform3DTranslate(transform, 0, 0, -depth * 34);
+    if (!CATransform3DEqualToTransform(cell.layer.transform, transform)) cell.layer.transform = transform;
+    CGFloat z = 100 - depth * 18;
+    if (fabs(cell.layer.zPosition - z) > 0.5) cell.layer.zPosition = z;
+    CGFloat alpha = MAX(0.42, 1 - depth * 0.16);
+    if (fabs(cell.alpha - alpha) > 0.02) cell.alpha = alpha;
+}
 
 // Spotify gives a cover a square corner and an artist's picture a circle. Only the square becomes the Kit's.
 static void roundCorners(UIView *artwork, CGFloat radius) {
@@ -68,6 +103,11 @@ static void style(UIView *cell) {
     if (thumb) roundCorners(thumb, SGRRadiusThumb);
     else roundCorners(SGRFindByIdentifier(cell, @"Components.UI.CardLibrary.Artwork", &kCoverKey), SGRRadiusCover);
     hairline(cell, thumb);
+    UICollectionView *collection = nil;
+    for (UIView *view = cell.superview; view; view = view.superview) {
+        if ([view isKindOfClass:UICollectionView.class]) { collection = (UICollectionView *)view; break; }
+    }
+    applyVinylFlow(cell, collection);
 
     // The first cell that held an artwork, so the line says what was found rather than what had not loaded yet.
     static BOOL logged;
@@ -82,6 +122,17 @@ static void style(UIView *cell) {
 - (void)layoutSubviews {
     %orig;
     style((UIView *)self);
+}
+%end
+
+// Cells do not always relayout while a collection scrolls. Recompute the perspective from the visible
+// album positions on the list's own scroll layout pass; other Spotify collections are untouched.
+%hook UICollectionView
+- (void)layoutSubviews {
+    %orig;
+    UICollectionView *collection = (UICollectionView *)self;
+    if (!SGFlag(SGRKeyPlayerVinyl, NO) || ![collection.accessibilityIdentifier isEqualToString:SGRLibraryListIdentifier]) return;
+    for (UIView *cell in collection.visibleCells) applyVinylFlow(cell, collection);
 }
 %end
 
