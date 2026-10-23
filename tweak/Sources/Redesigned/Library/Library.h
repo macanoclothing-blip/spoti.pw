@@ -6,7 +6,8 @@
 //                       they leave. A folder opened from the library is the same header, its back button and
 //                       its own controls kept
 //     LibraryRows.x     every row and grid card: the artwork at the Kit's radius with continuous corners, a
-//                       circular one left round, and a hairline between the rows
+//                       circular one left round, and a hairline between the rows; Vinyl mode also turns
+//                       album rows into a selectable 3D cover flow while scrolling
 //     LibrarySearch.x   the search inside the library: its field a glass capsule, the way the Search tab's is
 //                       (Redesigned/Navbar/SearchField.x)
 //     MusicUniverse.x   a private listening atlas seeded from Spotify's extended-history export, followed by

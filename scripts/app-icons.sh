@@ -3,11 +3,11 @@
 #
 #   scripts/app-icons.sh <out.ipa>   (pipeline.sh runs it)
 #
-# Each icon is an Icon Composer document without its artwork: the Spotify logo is read out of the IPA's own
-# asset catalog, so the repo carries none of Spotify's. actool compiles the icons, car-tool.m merges their
-# Liquid Glass stacks into Spotify's Assets.car (no flattened fallbacks, so iOS 26 and up draws them),
-# CFBundleAlternateIcons lists them, and a 60 pt picture of each goes to SGAppIconPreviews/ for the list.
-# Spotify.icon is the stock icon's look, drawn for its picture only.
+# The Liquid Glass variants are Icon Composer documents whose Spotify logo is read out of the IPA's own
+# asset catalog, so the repo carries none of Spotify's. Iridescent.icon uses the supplied image directly.
+# actool compiles the icons, car-tool.m merges them into Spotify's Assets.car, CFBundleAlternateIcons lists
+# them, and a 60 pt picture of each goes to SGAppIconPreviews/ for the list. Spotify.icon is the stock
+# icon's look, drawn for its picture only.
 #
 # Without Xcode 26's Icon Composer, or without the logo in a later Spotify, the IPA is left as it was and
 # the setting is not offered.

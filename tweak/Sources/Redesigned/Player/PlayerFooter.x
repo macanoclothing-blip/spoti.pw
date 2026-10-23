@@ -38,7 +38,10 @@ static char kPlaybackButtonKey;
 // The Music app keeps that row just over the home indicator: its middle this far above the safe area's
 // bottom, and never less than kRowMinBottom above the screen's on a phone without a home indicator.
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
-// The volume row measures the gap and lifts the controls only when space is genuinely short.
+// Give portrait playback controls a little more air below the progress row. Keep this out of the
+// landscape lyrics composition, which positions its transport unit independently.
+static const CGFloat kPortraitControlsDrop = 12;
+// The volume row may lift the controls only when space is genuinely short.
 static const CGFloat kControlsLift = 0;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kFooterSettleKey;
@@ -165,7 +168,9 @@ static void lowerRow(UIView *row) {
 
     UIStackView *bottomStack = (UIStackView *)stack;
     UIView *controls = controlsIn(bottomStack, row);
-    CGFloat controlsMove = controls ? -kControlsLift : 0;
+    BOOL portrait = player.bounds.size.height > player.bounds.size.width;
+    CGFloat controlsMove = controls && portrait && !SGFlag(SGRKeyPlayerVinyl, NO)
+        ? kPortraitControlsDrop : (controls ? -kControlsLift : 0);
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
     SGRPlayerLayoutVolume(stack, controls, row);

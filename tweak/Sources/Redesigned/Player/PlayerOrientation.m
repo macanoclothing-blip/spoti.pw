@@ -233,6 +233,15 @@ void SGRPlayerInstallOrientationPolicy(void) {
 
 void SGRPlayerOrientationPlayerDidAppear(UIViewController *player) {
     NSCAssert(NSThread.isMainThread, @"Orientation player registration must run on the main thread");
+    // A forced mask belongs to one full-screen presentation. Spotify may reuse the same controller
+    // when the player closes and another track opens, so a new viewDidAppear must reset it even when
+    // the controller pointer did not change.
+    if (sg_forcedOrientationMask) {
+        sg_forcedOrientationMask = 0;
+        SGLog(@"redesign player: cleared forced orientation on player presentation");
+    }
+    UIDeviceOrientation physical = UIDevice.currentDevice.orientation;
+    if (physicalOrientationIsValid(physical)) sg_lastPhysicalOrientation = physical;
     sg_activePlayerController = player;
     SGRPlayerRefreshOrientationPolicy();
 }

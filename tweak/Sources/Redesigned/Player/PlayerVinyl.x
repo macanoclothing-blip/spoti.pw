@@ -61,6 +61,7 @@ static char kVinylProgressSliderKey;
 static char kVinylProgressStyledKey;
 static char kVinylVolumeSliderStyledKey;
 static const CGFloat kVinylProgressShift = 12;
+static const CGFloat kVinylPortraitVolumeLift = 14;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -1318,7 +1319,11 @@ static void updateVinylPlaybackSpacing(UIView *host) {
         if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;
     }
     if (volumeRow) {
-        if (!CGAffineTransformIsIdentity(volumeRow.transform)) volumeRow.transform = CGAffineTransformIdentity;
+        UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
+        BOOL portrait = UIInterfaceOrientationIsPortrait(orientation) ||
+            (!UIInterfaceOrientationIsLandscape(orientation) && stack.window.bounds.size.height > stack.window.bounds.size.width);
+        CGAffineTransform transform = CGAffineTransformMakeTranslation(0, portrait ? -kVinylPortraitVolumeLift : 0);
+        if (!CGAffineTransformEqualToTransform(volumeRow.transform, transform)) volumeRow.transform = transform;
     }
 }
 

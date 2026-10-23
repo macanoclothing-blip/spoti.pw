@@ -1,0 +1,25 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-gray:0.00000,1.00000",
+      "extended-gray:0.00000,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Iridescent.png",
+          "name": "Iridescent",
+          "position": {
+            "scale": 1.0,
+            "translation-in-points": [0, 0]
+          }
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
