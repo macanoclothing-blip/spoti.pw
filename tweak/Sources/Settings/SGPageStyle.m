@@ -248,7 +248,7 @@ UIViewController *SGTopController(void) {
 NSString *const SGSiteURL = @"https://spoti.pw";
 NSString *const SGRepoURL = @"https://github.com/skopevoj/spoti.pw";
 NSString *const SGDiscordURL = @"https://discord.gg/9e4GR8TKMj";
-NSString *const SGSupportedSpotifyVersion = @"9.1.78";
+NSString *const SGSupportedSpotifyVersion = @"9.1.90";
 
 void SGOpenURL(NSString *url) {
     NSURL *target = url ? [NSURL URLWithString:url] : nil;

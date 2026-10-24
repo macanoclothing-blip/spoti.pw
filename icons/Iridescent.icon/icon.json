@@ -1,9 +1,6 @@
 {
   "fill": {
-    "linear-gradient": [
-      "extended-gray:0.00000,1.00000",
-      "extended-gray:0.00000,1.00000"
-    ]
+    "solid": "extended-gray:1.00000,1.00000"
   },
   "groups": [
     {

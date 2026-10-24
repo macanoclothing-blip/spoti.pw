@@ -24,7 +24,7 @@ last three were the redesign's until they moved to `Shared/`, so their keys lost
 below that `SGRedesignTested()` (`Core/SGUIMode.h`) answers NO and the switch and the tour's card warn
 before it is picked (`SGRedesignUntestedWarning()`). The redesign runs there only when
 `SGKeyRedesignUntested` was set along with the switch, so one stored before the warning is dropped at
-launch. The native look's floor is iOS 16.1, which is Spotify 9.1.78's own.
+launch. The native look's floor is iOS 16.1, which is Spotify 9.1.90's own.
 
 ## Where code goes (`tweak/Sources/`)
 
@@ -68,7 +68,7 @@ Rules:
   other version gets the "isn't supported" alert and red row (`App/About/Compatibility.m`), so a bump
   without it warns everyone. Update the README (badge and text), `.github/ISSUE_TEMPLATE/bug_report.yml`,
   the iOS floor above and the web's `content/site.ts` with it. `Shared/Audio/SGAudioSourceQueue.m` pins
-  the 9.1.78 binary by UUID and offsets and stands down on any other until they are read off again.
+  the 9.1.78 binary by UUID and offsets and stands down on 9.1.90 until its queue layout is read off again.
 - Known traps: anything pushed onto Spotify's nav stack must conform to `SPTPageController`
   (`Settings/SGPage.m`). Setting `hidden` on views inside Spotify's `OverflowStackView` or its Encore
   stacks crashes, so use alpha. A `CADisplayLink` capped at 60 Hz drags the player's 120 Hz

@@ -16,7 +16,7 @@ static bool readWord(uintptr_t address, uint64_t *value) {
     return readMetadata(address, value, sizeof *value);
 }
 void SGAudioSourceQueueInitialize(void) {
-    // Spotify 9.1.78 arm64. A version string alone cannot establish the private queue ABI.
+    // Spotify 9.1.78 arm64 only. 9.1.90's private queue ABI has not been verified, so it stands down.
     static const unsigned char uuid[16] = {0xc7,0x12,0x37,0x0b,0x44,0xcd,0x35,0xc8,0xa0,0x58,0x4f,0xbe,0xd1,0xad,0x07,0x58};
     const struct mach_header_64 *header = (const void *)_dyld_get_image_header(0);
     if (!header || header->magic != MH_MAGIC_64) return;

@@ -1,8 +1,8 @@
 // Mod > App icon: the icon on the home screen, picked from the ones scripts/app-icons.sh put into the IPA
 // (icons/*.icon, listed under CFBundleAlternateIcons as SGAppIcon<Name>). iOS keeps the choice itself, so
 // nothing is stored here and Reset all settings leaves it, and iOS says that it changed in an alert of its
-// own. The icons are Liquid Glass stacks only, which nothing before iOS 26 draws, so below 26 the row says
-// so. The name under the icon is the signature's to set, not the app's.
+// own. The alternate catalog is built for iOS 26; most choices use Glass layers, while Iridescent is a
+// flattened image with no dynamic Glass layer. The name under the icon is the signature's to set, not the app's.
 #import "Core/SGCore.h"
 #import "Settings/SGPageStyle.h"
 #import "About.h"
@@ -21,7 +21,8 @@ static NSString *alternateName(NSString *file) {
     return [file isEqualToString:@"Spotify"] ? nil : [@"SGAppIcon" stringByAppendingString:file];
 }
 
-// The icons this build has: one built without Xcode 26 has none but Spotify's.
+// The icons this build has: a build without Xcode 26 has none but Spotify's. Most alternate icons use
+// a Liquid Glass mark; Iridescent is a flat, fully composited bitmap so its edges stay clean.
 static NSArray<NSString *> *availableFiles(void) {
     NSDictionary *alternates = NSBundle.mainBundle.infoDictionary[@"CFBundleIcons"][@"CFBundleAlternateIcons"];
     NSMutableArray<NSString *> *files = [NSMutableArray array];

@@ -40,11 +40,10 @@ static char kPlaybackButtonKey;
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
 // Give portrait playback controls a little more air below the progress row. Keep this out of the
 // landscape lyrics composition, which positions its transport unit independently.
-static const CGFloat kPortraitControlsDrop = 12;
-// The volume row may lift the controls only when space is genuinely short.
-static const CGFloat kControlsLift = 0;
+static const CGFloat kPortraitControlsDrop = 22;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kFooterSettleKey;
+static char kPreviousPlaybackButtonKey, kNextPlaybackButtonKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
 
 // The view the footer's stack view arranges around `view`.
@@ -140,25 +139,35 @@ static UIViewController *unitOf(UIView *view) {
     return [next isKindOfClass:UIViewController.class] && ((UIViewController *)next).viewIfLoaded == view ? (UIViewController *)next : nil;
 }
 
-// Find the transport unit without relying on its position in Spotify's arranged views.
+// Spotify wraps the player units differently across versions. Find the real transport controller by
+// its play button, instead of assuming it is a sibling immediately above the footer.
 static UIView *controlsIn(UIStackView *stack, UIView *footer) {
-    NSArray<UIView *> *units = [stack.arrangedSubviews containsObject:footer] ? stack.arrangedSubviews : stack.subviews;
-    NSUInteger footerIndex = [units indexOfObject:footer];
-    if (footerIndex == NSNotFound) return nil;
-    for (NSInteger i = (NSInteger)footerIndex - 1; i >= 0; i--) {
-        UIView *candidate = units[(NSUInteger)i];
-        if (SGRFindByIdentifier(candidate, @"SPTNowPlayingPlayButton", &kPlaybackButtonKey)) return candidate;
+    UIView *searchRoot = footer.window ?: (UIView *)stack;
+    UIView *play = SGRFindByIdentifier(searchRoot, @"SPTNowPlayingPlayButton", &kPlaybackButtonKey);
+    UIView *previous = SGRFindByIdentifier(searchRoot, @"SPTNowPlayingPreviousTrackButton", &kPreviousPlaybackButtonKey);
+    UIView *next = SGRFindByIdentifier(searchRoot, @"SPTNowPlayingNextTrackButton", &kNextPlaybackButtonKey);
+    UIView *commonControls = nil;
+    for (UIView *candidate = play; candidate; candidate = candidate.superview) {
+        if (previous && next && [previous isDescendantOfView:candidate] && [next isDescendantOfView:candidate] && !commonControls)
+            commonControls = candidate;
         UIViewController *unit = unitOf(candidate);
-        if ([NSStringFromClass(unit.class) containsString:@"PlaybackControlsElementsUnit"]) return candidate;
+        if (unit && [NSStringFromClass(unit.class) containsString:@"PlaybackControlsElementsUnit"]) return candidate;
     }
-    return nil;
+    return commonControls;
 }
 
 static void lowerRow(UIView *row) {
     UIView *stack = row.superview, *player = stack.superview;
     UIWindow *window = row.window;
+    UIView *controls = controlsIn([stack isKindOfClass:UIStackView.class] ? (UIStackView *)stack : nil, row);
+    BOOL portrait = player.bounds.size.height > player.bounds.size.width;
+    CGFloat controlsMove = controls && portrait && !SGFlag(SGRKeyPlayerVinyl, NO) ? kPortraitControlsDrop : 0;
+    CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
+    if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
     if (![stack isKindOfClass:UIStackView.class] || !player || !window) return;
-    // Where the stack put the row, the row's own transform left out, and where it belongs.
+
+    // Keep the footer's original positioning reference: Spotify lays it out in its immediate stack,
+    // and measuring against a parent controller can push its three controls below the visible area.
     CGFloat middle = [stack convertPoint:row.center toView:player].y;
     CGFloat height = player.bounds.size.height;
     CGFloat target = height - MAX(window.safeAreaInsets.bottom + kRowAboveSafeArea, kRowMinBottom);
@@ -167,13 +176,7 @@ static void lowerRow(UIView *row) {
     if (!CGAffineTransformEqualToTransform(row.transform, down)) row.transform = down;
 
     UIStackView *bottomStack = (UIStackView *)stack;
-    UIView *controls = controlsIn(bottomStack, row);
-    BOOL portrait = player.bounds.size.height > player.bounds.size.width;
-    CGFloat controlsMove = controls && portrait && !SGFlag(SGRKeyPlayerVinyl, NO)
-        ? kPortraitControlsDrop : (controls ? -kControlsLift : 0);
-    CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
-    if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
-    SGRPlayerLayoutVolume(stack, controls, row);
+    SGRPlayerLayoutVolume(bottomStack, controls, row);
 
     SGRFooterReach *reach = objc_getAssociatedObject(row, &kReachKey);
     if (!reach) {
@@ -182,17 +185,21 @@ static void lowerRow(UIView *row) {
         objc_setAssociatedObject(row, &kReachKey, reach, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (reach.superview != player) [player addSubview:reach];
-    CGRect stackFrame = [stack convertRect:stack.bounds toView:player];
+    CGRect stackFrame = [bottomStack convertRect:bottomStack.bounds toView:player];
     CGRect drawn = [row convertRect:row.bounds toView:player];
     CGFloat from = CGRectGetMaxY(stackFrame);
     CGRect band = CGRectMake(CGRectGetMinX(drawn), from, drawn.size.width, MAX(0, CGRectGetMaxY(drawn) - from));
     if (!CGRectEqualToRect(reach.frame, band)) reach.frame = band;
 
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        SGLog(@"redesign player: footer row from %.0f to %.0f of %.0f (safe area %.0f), controls %@ %.0f", middle, middle + move, height,
-              window.safeAreaInsets.bottom, controls ? @"lift" : @"stay", controlsMove);
-    });
+    static BOOL loggedTransport;
+    static NSUInteger missingTransportLogs;
+    if (controls && !loggedTransport) {
+        loggedTransport = YES;
+        SGLog(@"redesign player: footer row from %.0f to %.0f of %.0f (safe area %.0f), transport found and offset %.0f",
+              middle, middle + move, height, window.safeAreaInsets.bottom, controlsMove);
+    } else if (!controls && missingTransportLogs++ < 3) {
+        SGLog(@"redesign player: transport unit not found for footer layout; no portrait offset applied");
+    }
 }
 
 // Spotify and the redesign lay out the controls and footer in separate units. The footer can finish
@@ -210,6 +217,11 @@ static void scheduleFooterSettle(UIView *row) {
         [stack layoutIfNeeded];
         lowerRow(current);
     });
+}
+
+void SGRPlayerFooterRefreshLayout(void) {
+    UIView *host = sg_lyricsGlyph.superview;
+    if (host.window) scheduleFooterSettle(host);
 }
 
 static void layOutFooter(UIViewController *unit) {

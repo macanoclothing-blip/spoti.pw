@@ -61,7 +61,6 @@ static char kVinylProgressSliderKey;
 static char kVinylProgressStyledKey;
 static char kVinylVolumeSliderStyledKey;
 static const CGFloat kVinylProgressShift = 12;
-static const CGFloat kVinylPortraitVolumeLift = 14;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -1318,13 +1317,8 @@ static void updateVinylPlaybackSpacing(UIView *host) {
         CGAffineTransform down = CGAffineTransformMakeTranslation(0, kVinylProgressShift);
         if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;
     }
-    if (volumeRow) {
-        UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
-        BOOL portrait = UIInterfaceOrientationIsPortrait(orientation) ||
-            (!UIInterfaceOrientationIsLandscape(orientation) && stack.window.bounds.size.height > stack.window.bounds.size.width);
-        CGAffineTransform transform = CGAffineTransformMakeTranslation(0, portrait ? -kVinylPortraitVolumeLift : 0);
-        if (!CGAffineTransformEqualToTransform(volumeRow.transform, transform)) volumeRow.transform = transform;
-    }
+    // PlayerVolume positions the visible row in a measured gap and accounts for Vinyl's portrait
+    // lift there, so the slider and its hit target move together without a second transform here.
 }
 
 // ─────────────────────────────────────────────────────

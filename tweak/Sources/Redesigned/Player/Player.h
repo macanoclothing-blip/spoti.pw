@@ -111,6 +111,8 @@ BOOL SGRPlayerLyricsAvailable(void);
 BOOL SGRPlayerLyricsCanOpen(void);
 // Whether the player is showing them.
 BOOL SGRPlayerLyricsOpen(void);
+// Re-measures the footer controls and volume lane after a lyrics transition settles.
+void SGRPlayerFooterRefreshLayout(void);
 // Shows them, or puts the cover back; does nothing when there are none to show.
 void SGRPlayerToggleLyrics(void);
 // Called by PlayerLyrics.x whenever either of those two changed, so the footer's lyrics glyph follows

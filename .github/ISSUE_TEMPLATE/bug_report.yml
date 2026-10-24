@@ -29,8 +29,8 @@ body:
     id: spotify-version
     attributes:
       label: Spotify version
-      description: Mod Settings → Mod → Spotify. The mod is built for 9.1.78; other versions may break.
-      placeholder: "9.1.78"
+      description: Mod Settings → Mod → Spotify. The mod is built for 9.1.90; other versions may break.
+      placeholder: "9.1.90"
     validations:
       required: true
   - type: input

@@ -1,9 +1,8 @@
-// The dispatcher is a singleton the app builds at startup; -setMainUILoaded: is the last call of its
-// setup (objc-methods.txt:38809).
 #import "Core/SGCore.h"
 #import "Headers/SPTLinkDispatcherImplementation.h"
 #import "Links.h"
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 static __weak SPTLinkDispatcherImplementation *sg_linkDispatcher;
 
@@ -11,22 +10,67 @@ id SGLinkDispatcher(void) {
     return sg_linkDispatcher;
 }
 
+static id sg_send(id target, NSString *selector);
+
+// A real link context stolen from Spotify's own flow. Filling context: with nil is a
+// proven segfault (swift_getObjectType on 0x0), so the mod only goes in-process once
+// Spotify has opened a link for itself and the hook below captured a live context.
+static __strong id sg_realContext;
+
 BOOL SGOpenSpotifyURI(NSURL *uri) {
+    // Spotify's navigate entry moved out of ObjC reach in 9.1.90: its reason argument is
+    // a Swift enum that nil/zero segfaults. But the already-hooked link dispatcher
+    // exposes uriSchemeDispatcher, whose handleURI:context: is the same front door every
+    // in-app spotify: link takes - ObjC-callable, BOOL-answering, nil context tolerated.
     SPTLinkDispatcherImplementation *dispatcher = sg_linkDispatcher;
-    if (!uri || ![dispatcher respondsToSelector:@selector(navigateToURI:options:interactionID:)]) return NO;
-    [dispatcher navigateToURI:uri options:0 interactionID:nil];
+    if (!uri || !dispatcher) return NO;
+    id schemeDispatcher = sg_send(dispatcher, @"uriSchemeDispatcher");
+    SEL handle = NSSelectorFromString(@"handleURI:context:");
+    if (schemeDispatcher && [schemeDispatcher respondsToSelector:handle]) {
+        NSURL *clean = sg_send(uri, @"spt_normalizedSpotifyURI");
+        if (![clean isKindOfClass:NSURL.class]) clean = uri;
+        // nil context aliases a segfault inside the dispatcher's own Swift guts, so
+        // without a captured one the call is skipped and the fallback runs instead.
+        if ([clean isKindOfClass:NSURL.class] && sg_realContext) {
+            @try {
+                BOOL opened = ((BOOL (*)(id, SEL, id, id))objc_msgSend)(schemeDispatcher, handle, clean, sg_realContext);
+                SGLog(@"links: scheme dispatcher handleURI %@ ctx %@ -> %@", clean.absoluteString,
+                    NSStringFromClass([sg_realContext class]), opened ? @"YES" : @"NO");
+                if (opened) return YES;
+            } @catch (NSException *e) {
+                SGLog(@"links: scheme dispatcher threw %@", e.reason);
+            }
+        }
+    }
+    // Untouched fallback: iOS hands the spotify: link back to this app and Spotify runs
+    // it through its own dispatcher with a reason it composed itself - which the scheme
+    // dispatcher hook then captures for every later in-process open.
+    [[UIApplication sharedApplication] openURL:uri options:@{} completionHandler:NULL];
+    SGLog(@"links: opened via the system deep link");
     return YES;
+}
+
+// The navigate entry point has moved between Spotify majors; keep the actual list in the log
+// so the next rename is a log read, not a crash hunt.
+static void logDispatcherMethods(id dispatcher) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        unsigned count = 0;
+        Method *methods = class_copyMethodList(object_getClass(dispatcher), &count);
+        if (!methods) return;
+        NSMutableString *list = [[NSString stringWithFormat:@"dispatcher methods (%u):", count] mutableCopy];
+        for (unsigned i = 0; i < count; i++)
+            [list appendFormat:@"\n  %s %s", sel_getName(method_getName(methods[i])),
+                method_getTypeEncoding(methods[i])];
+        free(methods);
+        SGLogLong(@"links", list);
+    });
 }
 
 #pragma mark - asking before opening
 
-// The chain a spotify: link takes in 9.1.78, read off the binary: -[SPTLinkDispatcherImplementation
-// navigateToURI:…] hands it to the URI scheme dispatcher, whose "spotify" handler is the dispatcher's
-// -spotifyLinkHandler (SPTSpotifyLinkHandler). That one passes the cleaned URI to its
-// -URISubtypeRegistry (SPTURISubtypeRegistryImplementation), which keeps the handlers of its -handlers
-// hash table that answer -URISubtypeHandlerCanHandleURI: YES and opens with the first by priority;
-// pages go through Navigation's PageResolverURISubtypeHandler. With no taker, -handleSpotifyURL:
-// tries again once with -remapURI: (its fallback resolver's URI), and only then shows the alert.
+static void logDispatcherMethods(id dispatcher);
+
 static id sg_send(id target, NSString *selector) {
     SEL sel = NSSelectorFromString(selector);
     if (![target respondsToSelector:sel]) return nil;
@@ -39,9 +83,6 @@ static id sg_send1(id target, NSString *selector, id arg) {
     return ((id (*)(id, SEL, id))objc_msgSend)(target, sel, arg);
 }
 
-// The class of the first handler that takes `uri`, nil for none. A handler whose name says it only
-// listens (Jam's SGSNavigationURIHandledEventSource) is not asked, so a question is not taken for a
-// navigation.
 static NSString *takerFor(id<NSFastEnumeration> handlers, NSURL *uri, NSUInteger *asked) {
     SEL canHandle = NSSelectorFromString(@"URISubtypeHandlerCanHandleURI:");
     for (id handler in handlers) {
@@ -100,6 +141,19 @@ NSURL *SGSpotifyURIFromText(NSString *text) {
 - (void)setMainUILoaded:(BOOL)loaded {
     %orig;
     sg_linkDispatcher = (SPTLinkDispatcherImplementation *)self;
+    logDispatcherMethods(self);
+}
+%end
+
+// Transparent capture of the context Spotify composes for its own link flows; the
+// stored object is reused as the context: argument for the mod's own in-process opens.
+%hook SPTURISchemeDispatcher
+- (BOOL)handleURI:(NSURL *)uri context:(id)context {
+    if (context) {
+        sg_realContext = context;
+        SGLog(@"links: captured link context %@ (%@)", context, NSStringFromClass([context class]));
+    }
+    return %orig;
 }
 %end
 

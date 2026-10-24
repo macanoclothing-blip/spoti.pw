@@ -1246,6 +1246,7 @@ static void setOpen(BOOL open, BOOL animated) {
         } else {
             restoreSpotifyCover(host);
         }
+        SGRPlayerFooterRefreshLayout();
     };
 
     if (!animated) {
