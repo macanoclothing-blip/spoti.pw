@@ -14,6 +14,8 @@
 // being where translations show), and whether lines timed only by the line are swept word by word.
 SGModSection *SGLyricsSourcesSection(BOOL namingSource);
 SGModRow *SGLockScreenLyricsRow(void);
+SGModRow *SGLockScreenLyricsArtworkRow(void);
+SGModRow *SGLockScreenLyricsArtworkStyleRow(void);
 SGModRow *SGLyricsTranslationLanguageRow(void);
 SGModRow *SGLyricsWordTimingRow(void);
 
@@ -97,6 +99,8 @@ NSArray<SGKaraokeLine *> *SGKaraokeLinesForTrack(NSString *trackID);   // nil un
 void SGKaraokeKeepLines(NSString *trackID, NSArray<SGKaraokeLine *> *lines);
 // Posted on the main queue when a track's lines are kept, with the track's id as the object.
 extern NSNotificationName const SGKaraokeLinesDidChangeNotification;
+// Posted on the main queue whenever Spotify refreshes its captured service authorization headers.
+extern NSNotificationName const SGKaraokeSpotifyAuthorizationDidChangeNotification;
 // Asks spclient for a track's lyrics once, with the headers of Spotify's own requests, for when no
 // page of Spotify's has asked for them, e.g. with the app in the background.
 void SGKaraokeRequestLyrics(NSString *trackID);
@@ -104,9 +108,10 @@ void SGKaraokeRequestLyrics(NSString *trackID);
 // timed than the ones kept: the lyrics view was left with plain text, and Spotify may have it timed.
 void SGKaraokeAskSpotifyForTiming(NSString *trackID);
 // The headers of Spotify's own spclient requests (authorization, client-token, ...), nil until one has gone
-// out. Only ever sent back to Spotify's servers (the Canvas lookup), never to a lyrics source.
+// out. Sent only back to Spotify's spclient endpoints, never to an external lyrics source.
 NSDictionary<NSString *, NSString *> *SGKaraokeSpotifyHeaders(void);
 NSString *SGKaraokeSpotifyAuthorization(void);
+NSString *SGKaraokeSpotifyUsername(void); // captured from Spotify's authenticated account session or rootlist request
 NSString *SGKaraokePlayingTrack(void); // the base62 id, nil before the player reported
 NSInteger SGKaraokePositionMs(void);     // negative when unknown
 void SGKaraokeSeek(NSInteger ms);

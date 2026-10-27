@@ -46,6 +46,72 @@ void SGExportSettings(void) {
     [top presentViewController:sheet animated:YES completion:nil];
 }
 
+static NSString *redactedLogMessage(NSString *message) {
+    NSArray<NSArray<NSString *> *> *patterns = @[
+        @[@"(?i)(authorization\\s*[:=]\\s*)([^\\s,;]+(?:\\s+[^\\s,;]+)?)", @"$1[REDACTED]"],
+        @[@"(?i)(\\b(?:access[_-]?token|refresh[_-]?token|client[_-]?token)\\b\\s*[:=]\\s*)[^\\s,;]+", @"$1[REDACTED]"],
+    ];
+    NSString *safe = message ?: @"";
+    for (NSArray<NSString *> *pair in patterns) {
+        NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:pair[0] options:0 error:nil];
+        safe = [regex stringByReplacingMatchesInString:safe options:0 range:NSMakeRange(0, safe.length) withTemplate:pair[1]];
+    }
+    return safe;
+}
+
+static void presentLogFile(NSURL *url) {
+    UIViewController *top = SGTopController();
+    if (!top || !url) return;
+    UIActivityViewController *sheet = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];
+    sheet.popoverPresentationController.sourceView = top.view;
+    sheet.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(top.view.bounds), CGRectGetMidY(top.view.bounds), 1, 1);
+    [top presentViewController:sheet animated:YES completion:nil];
+}
+
+void SGExportLogs(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        SGLogFlush();
+        NSMutableArray<NSString *> *lines = [NSMutableArray array];
+        NSUInteger bytesRead = 0;
+        for (NSString *path in SGLogFilePaths()) {
+            NSData *data = [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:nil];
+            if (!data.length) continue;
+            bytesRead += data.length;
+            NSString *fileText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            if (!fileText.length) continue;
+            for (NSString *line in [fileText componentsSeparatedByString:@"\n"]) {
+                if (line.length) [lines addObject:redactedLogMessage(line)];
+            }
+        }
+
+        NSDateFormatter *filenameFormatter = [NSDateFormatter new];
+        filenameFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        filenameFormatter.timeZone = [NSTimeZone localTimeZone];
+        filenameFormatter.dateFormat = @"yyyyMMdd-HHmmss";
+        NSMutableString *contents = [NSMutableString stringWithFormat:
+            @"spoti.pw diagnostic logs\nMod version: %@\nSpotify version: %@\niOS: %@\nSource: local rolling log collected by this build\n",
+            @(SG_VERSION),
+            [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown",
+            UIDevice.currentDevice.systemVersion];
+        [contents appendFormat:@"Read %lu bytes and %lu log lines. Tokens and authorization headers are redacted.\n\n",
+         (unsigned long)bytesRead, (unsigned long)lines.count];
+        if (lines.count) {
+            for (NSString *line in lines) [contents appendFormat:@"%@\n", line];
+        } else {
+            [contents appendString:@"No local log entries have been collected yet. Restart Spotify, reproduce the issue, then export again.\n"];
+        }
+
+        NSString *filename = [NSString stringWithFormat:@"spotifyglass-logs-%@.txt", [filenameFormatter stringFromDate:NSDate.date]];
+        NSURL *url = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:filename]];
+        NSError *writeError = nil;
+        BOOL written = [contents writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:&writeError];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (written) presentLogFile(url);
+            else showAlert(@"Could not export logs", writeError.localizedDescription ?: @"The log file could not be created.", nil);
+        });
+    });
+}
+
 static Class kindOf(id value) {
     for (Class kind in @[NSNumber.class, NSString.class, NSArray.class, NSDictionary.class]) {
         if ([value isKindOfClass:kind]) return kind;

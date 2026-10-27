@@ -15,7 +15,7 @@
 // Below this a card's picture is a glyph or a placeholder, not a cover.
 static const CGFloat kCoverMinWidth = 80;
 
-static char kImageKey;
+static char kImageKey, kGlassFilmKey, kGlassRimKey, kGlassBoundsKey;
 
 static void roundCorners(UIView *view, CGFloat radius) {
     CALayer *layer = view.layer;
@@ -31,6 +31,50 @@ static void roundCover(UIView *card) {
         roundCorners(sub, SGRRadiusCover);
         if (!sub.layer.masksToBounds) sub.layer.masksToBounds = YES;
     }
+}
+
+// A very light glass wash and specular rim over artwork cards. It is a gradient and two shape layers rather
+// than a live blur, so scrolling a Home shelf does not add a backdrop blur pass for every visible card.
+static void glassArtworkCard(UIView *card) {
+    roundCorners(card, 16);
+    card.layer.masksToBounds = YES;
+    CAGradientLayer *film = objc_getAssociatedObject(card, &kGlassFilmKey);
+    CAShapeLayer *rim = objc_getAssociatedObject(card, &kGlassRimKey);
+    if (!film) {
+        film = [CAGradientLayer layer];
+        film.colors = @[(id)[UIColor colorWithWhite:1 alpha:0.105].CGColor,
+                        (id)[UIColor colorWithWhite:1 alpha:0.012].CGColor,
+                        (id)[UIColor colorWithWhite:1 alpha:0.035].CGColor];
+        film.locations = @[@0, @0.48, @1];
+        film.startPoint = CGPointMake(0.5, 0);
+        film.endPoint = CGPointMake(0.5, 1);
+        film.zPosition = 1;
+        CAShapeLayer *mask = [CAShapeLayer layer];
+        film.mask = mask;
+        [card.layer addSublayer:film];
+        objc_setAssociatedObject(card, &kGlassFilmKey, film, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!rim) {
+        rim = [CAShapeLayer layer];
+        rim.fillColor = UIColor.clearColor.CGColor;
+        rim.strokeColor = [UIColor colorWithWhite:1 alpha:0.28].CGColor;
+        rim.lineWidth = 1;
+        rim.zPosition = 2;
+        [card.layer addSublayer:rim];
+        objc_setAssociatedObject(card, &kGlassRimKey, rim, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGRect bounds = card.bounds;
+    NSValue *lastBounds = objc_getAssociatedObject(card, &kGlassBoundsKey);
+    if (lastBounds && CGRectEqualToRect(lastBounds.CGRectValue, bounds)) return;
+    if (!CGRectEqualToRect(film.frame, bounds)) film.frame = bounds;
+    CAShapeLayer *mask = (CAShapeLayer *)film.mask;
+    mask.frame = film.bounds;
+    mask.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(film.bounds, 0.5, 0.5)
+                                            cornerRadius:MIN(16, CGRectGetHeight(film.bounds) / 2)].CGPath;
+    rim.frame = bounds;
+    rim.path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(bounds, 0.5, 0.5)
+                                           cornerRadius:MIN(16, CGRectGetHeight(bounds) / 2)].CGPath;
+    objc_setAssociatedObject(card, &kGlassBoundsKey, [NSValue valueWithCGRect:bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 // The transcript's own labels are plain UILabels the Kit keeps transparent; the Swift views around them
@@ -57,6 +101,7 @@ static void style(UIView *button) {
     }
     if ([identifier isEqualToString:@"Components.UI.HomeCard"]) {
         roundCover(button);
+        glassArtworkCard(button);
         return;
     }
     static Class dj;

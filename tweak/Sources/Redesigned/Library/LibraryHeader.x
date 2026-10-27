@@ -47,6 +47,7 @@
 #import "Library.h"
 #import "MusicUniverse.h"
 #import "MusicParty.h"
+#import "Redesigned/Player/PlayerVinyl.h"
 
 NSString *const SGRLibraryListIdentifier = @"YourLibraryContent.collectionView";
 
@@ -227,9 +228,9 @@ static UILabel *titleIn(UIView *header) {
 }
 
 // The title Spotify's own says, so it follows the app's language, in the Music app's size on the row's middle.
-static void layoutTitle(UIView *header, UIView *spotifyTitle, CGFloat leading, CGFloat trailing, CGFloat middle) {
+static void layoutTitle(UIView *header, UIView *spotifyTitle, NSString *override, CGFloat leading, CGFloat trailing, CGFloat middle) {
     UILabel *title = titleIn(header);
-    NSString *text = textIn(spotifyTitle);
+    NSString *text = override ?: textIn(spotifyTitle);
     if (text.length && ![title.text isEqualToString:text]) {
         title.text = text;
         title.accessibilityLabel = text;
@@ -277,7 +278,8 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
 
     CGFloat leading = placeTrailing(header, trailing);
     CGRect row = SGFrameIn(trailing.firstObject, header);
-    layoutTitle(header, spotifyTitle, SGRSideMargin, leading, CGRectGetMidY(row));
+    NSString *override = SGFlag(SGRKeyPlayerVinyl, NO) ? @"Records" : nil;
+    layoutTitle(header, spotifyTitle, override, SGRSideMargin, leading, CGRectGetMidY(row));
     for (UIView *control in trailing) watchRow(control.superview, header, placeRoot);
     return trailing;
 }
@@ -299,7 +301,7 @@ static NSArray<UIView *> *placeFolder(UIView *header) {
     if (back) [placed insertObject:back atIndex:0];
     CGRect rowFrame = SGFrameIn(placed.firstObject, header);
     CGFloat leading = back ? CGRectGetMaxX(rowFrame) + SGRGrid : SGRSideMargin;
-    layoutTitle(header, spotifyTitle, leading, trailingEdge, CGRectGetMidY(rowFrame));
+    layoutTitle(header, spotifyTitle, nil, leading, trailingEdge, CGRectGetMidY(rowFrame));
     for (UIView *control in placed) watchRow(control.superview, header, placeFolder);
     return placed;
 }

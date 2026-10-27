@@ -68,6 +68,7 @@ static const CGFloat kLandscapeControlsGap = 22;
 static const CGFloat kLandscapeTransportScale = 0.78;
 static const CGFloat kLandscapeProgressWidthScale = 0.58;
 static const CGFloat kLandscapeProgressHeightScale = 0.76;
+static const CGFloat kPortraitPlayerRowsLift = 20; // cumulative portrait lift, in UIKit points
 // The lines are a surface arriving, not something moving: they come up from just under full size as the
 // room for them opens, and go at once when it closes. An exit the eye waits through reads as a stall.
 static const CGFloat kLyricsEnterScale = 0.96;
@@ -119,8 +120,9 @@ static BOOL playerIsLandscape(void) {
 static void syncLandscapeFooter(void) {
     UIView *footer = sg_footer.viewIfLoaded;
     if (!footer) return;
-    // The landscape lyrics composition uses the lower edge for its translation and meaning controls.
-    CGFloat alpha = sg_open && playerIsLandscape() ? 0 : 1;
+    // Lyrics in landscape use the lower edge for translation and meaning controls. Vinyl already has
+    // its own transport row in portrait too, so Spotify's original footer must stay out of that view.
+    CGFloat alpha = sg_open && (playerIsLandscape() || SGFlag(SGRKeyPlayerVinyl, NO)) ? 0 : 1;
     if (fabs(footer.alpha - alpha) > 0.01) footer.alpha = alpha;
     footer.userInteractionEnabled = alpha > 0.01;
     footer.accessibilityElementsHidden = alpha < 0.01;
@@ -382,7 +384,9 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
                           lines, kRotateButtonSide, kRotateButtonSide);
     CGFloat stageTop = lines + kRotateButtonSide + kRotateButtonGap;
-    l.stage = CGRectMake(CGRectGetMinX(area), stageTop, area.size.width, CGRectGetMinY(bar) - kLyricsBottom - stageTop);
+    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : kPortraitPlayerRowsLift;
+    l.stage = CGRectMake(CGRectGetMinX(area), stageTop, area.size.width,
+                         CGRectGetMinY(bar) - progressLift - kLyricsBottom - stageTop);
     // With the controls away: from the header row's top, just under the status bar, down to the home
     // indicator. The lines fade out at both ends, so nothing needs clearing beyond that.
     UIView *header = sg_header.viewIfLoaded;
@@ -846,6 +850,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     if (!info) return;
     syncLandscapeFooter();
     BOOL landscape = sg_host.bounds.size.width > sg_host.bounds.size.height;
+    CGFloat portraitLift = (!landscape && !SGFlag(SGRKeyPlayerVinyl, NO)) ? kPortraitPlayerRowsLift : 0;
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
     if (landscape && sg_open && duration && controls) {
@@ -861,10 +866,20 @@ static void placeTitleRow(SGRLyricsLayout l) {
         restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         restoreUnitFrame(controls, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     }
+    SGRVinylSetLyricsTransportFrame(sg_host,
+        sg_open && landscape && SGFlag(SGRKeyPlayerVinyl, NO) && l.ok ? l.controls : CGRectNull);
     [SGRowIn(info) layoutIfNeeded];
-    CGFloat lift = sg_open ? l.lift : 0, shift = sg_open ? l.shift : (landscape ? l.baseShift : 0);
+    CGFloat lift = (sg_open ? l.lift : 0) - portraitLift;
+    CGFloat shift = sg_open ? l.shift : (landscape ? l.baseShift : 0);
     CGAffineTransform rise = CGAffineTransformMakeTranslation(0, round(lift));
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
+    // Keep the progress slider and both time labels together. The information unit contains the
+    // title, artist and any inline add/remove actions, so its matching offset moves that whole row.
+    // Landscape lyrics and Vinyl keep their independently measured layouts.
+    if (!SGFlag(SGRKeyPlayerVinyl, NO) && duration) {
+        CGAffineTransform progressOffset = CGAffineTransformMakeTranslation(0, landscape ? 0 : -portraitLift);
+        if (!CGAffineTransformEqualToTransform(duration.transform, progressOffset)) duration.transform = progressOffset;
+    }
     UIView *title = sg_titleElement;
     if (!title) return;
     CGAffineTransform slide = CGAffineTransformIdentity;
@@ -1147,6 +1162,19 @@ static void keepLandscapeCover(UIView *host, SGRLyricsLayout l) {
 }
 
 static void restoreSpotifyCover(UIView *host) {
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
+        // Vinyl owns the artwork in both orientations. The lyrics thumbnail is only a transition
+        // surface; after it closes, neither that square nor Spotify's cover cell may remain visible.
+        SGRVinylRemoveMiniDisc();
+        SGRPlayerSetCoverHidden(YES);
+        UIView *coverList = SGRPlayerCoverList();
+        coverList.alpha = 0;
+        coverList.userInteractionEnabled = NO;
+        coverList.accessibilityElementsHidden = YES;
+        SGRPlayerLyricsOverlay *vinylOverlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
+        if (vinylOverlay && !sg_open) [vinylOverlay removeFromSuperview];
+        return;
+    }
     SGRPlayerSetCoverHidden(NO);
     SGRPlayerCoverList().alpha = 1;
     SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
@@ -1240,7 +1268,7 @@ static void setOpen(BOOL open, BOOL animated) {
         SGRVinylLyricsDidSettleClosed();
         // Vinyl mode: restore the cover thumbnail.
         SGRVinylRemoveMiniDisc();
-        if (host.bounds.size.width > host.bounds.size.height) {
+        if (!SGFlag(SGRKeyPlayerVinyl, NO) && host.bounds.size.width > host.bounds.size.height) {
             SGRLyricsLayout closed = layoutIn(host);
             keepLandscapeCover(host, closed);
         } else {
@@ -1298,7 +1326,7 @@ static void replace(void) {
     placeTitleRow(l);
     sg_floating.viewIfLoaded.alpha = sg_open ? 0 : 1;
     if (!sg_open) {
-        if (host.bounds.size.width > host.bounds.size.height && l.ok) keepLandscapeCover(host, l);
+        if (!SGFlag(SGRKeyPlayerVinyl, NO) && host.bounds.size.width > host.bounds.size.height && l.ok) keepLandscapeCover(host, l);
         else restoreSpotifyCover(host);
         return;
     }
@@ -1395,7 +1423,9 @@ static void replace(void) {
     info.transform = CGAffineTransformIdentity;
     title.transform = CGAffineTransformIdentity;
     title.layer.mask = nil;
-    restoreUnitFrame(sg_duration.viewIfLoaded, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+    UIView *duration = sg_duration.viewIfLoaded;
+    restoreUnitFrame(duration, sg_host, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
+    if (!SGFlag(SGRKeyPlayerVinyl, NO)) duration.transform = CGAffineTransformIdentity;
     restoreUnitFrame(sg_controls.viewIfLoaded, sg_host, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
     %orig;
 }

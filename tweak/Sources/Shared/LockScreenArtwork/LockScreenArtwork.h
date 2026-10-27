@@ -32,6 +32,10 @@ NSString *SGAnimatedArtworkKey(CGFloat *aspect);
 // Each supported shape's artwork in a copy of `info`, removing stale injected keys for unsupported
 // shapes. The lock screen lyrics rewrite the dictionary on a timer, so the keys are put back on each one.
 NSDictionary *SGArtworkInInfo(NSDictionary *info, NSDictionary<NSString *, id> *artworkByKey);
+// Temporarily replace the current track's full-screen artwork with synchronized lyrics. Passing nil
+// restores the Canvas or Apple Music artwork. Main queue; the artwork setter remains owned here so
+// lyrics cannot race or overwrite the source artwork hook.
+void SGArtworkSetLyricsOverlay(NSDictionary<NSString *, id> *artworkByKey, NSString *title);
 // Told by KaraokeSource.x when Spotify's token has been captured; main queue.
 void SGArtworkSpotifyHeadersChanged(void);
 // A Sources row for the order under `key`, opening the page it is dragged in with `note` under the list.

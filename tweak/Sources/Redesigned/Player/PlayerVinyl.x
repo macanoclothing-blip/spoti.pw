@@ -61,6 +61,10 @@ static char kVinylProgressSliderKey;
 static char kVinylProgressStyledKey;
 static char kVinylVolumeSliderStyledKey;
 static const CGFloat kVinylProgressShift = 12;
+static CGRect sg_vinylLyricsTransportFrame;
+static __weak UIView *sg_vinylLyricsCoordinateView;
+static __weak UIStackView *sg_vinylBottomStack;
+static BOOL sg_vinylLyricsTransportFrameValid;
 
 // ─────────────────────────────────────────────────────
 #pragma mark - helpers
@@ -435,6 +439,8 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
 - (void)setCanvasHoldRecognizer:(UILongPressGestureRecognizer *)recognizer;
 - (void)_applyDiscRotation;
 - (BOOL)handlesVinylControlAtPoint:(CGPoint)point;
+- (void)setLyricsTransportFrame:(CGRect)frame fromView:(UIView *)coordinateView;
+- (CGRect)transportButtonsFrameInView:(UIView *)view;
 // Returns the current disc rotation angle (used by the mini disc in lyrics).
 @property (nonatomic, readonly) CGFloat discAngle;
 @property (nonatomic, readonly) UIImage *currentArtwork;
@@ -472,6 +478,8 @@ static __weak SGRVinylOverlayView *sg_vinylOverlay;
     double           _progress;
     CGFloat          _discR;
     CGPoint          _discCenter;
+    CGRect           _lyricsTransportFrame;
+    BOOL             _hasLyricsTransportFrame;
 
     UIImage *_currentArtwork;
     UIColor *_currentTint;
@@ -818,6 +826,52 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     }
 }
 
+- (void)setLyricsTransportFrame:(CGRect)frame fromView:(UIView *)coordinateView {
+    if (CGRectIsNull(frame) || CGRectIsEmpty(frame) || !coordinateView || !self.window || coordinateView.window != self.window) {
+        _hasLyricsTransportFrame = NO;
+        [self setNeedsLayout];
+        return;
+    }
+    CGRect local = [coordinateView convertRect:frame toView:self];
+    if (CGRectIsNull(local) || CGRectIsEmpty(local)) {
+        _hasLyricsTransportFrame = NO;
+        [self setNeedsLayout];
+        return;
+    }
+    _lyricsTransportFrame = local;
+    _hasLyricsTransportFrame = YES;
+    [self setNeedsLayout];
+}
+
+- (CGRect)transportButtonsFrameInView:(UIView *)view {
+    if (!view || !_btnPlay || !_btnLyrics || !_btnPrev || !_btnNext) return CGRectNull;
+    CGRect frame = CGRectNull;
+    for (UIView *button in @[_btnPlay, _btnLyrics, _btnPrev, _btnNext]) {
+        CGRect item = [button convertRect:button.bounds toView:view];
+        frame = CGRectIsNull(frame) ? item : CGRectUnion(frame, item);
+    }
+    return frame;
+}
+
+- (void)layoutLandscapeLyricsControls {
+    CGRect area = CGRectIntersection(_lyricsTransportFrame, self.bounds);
+    if (CGRectIsNull(area) || CGRectIsEmpty(area)) return;
+    CGFloat height = MIN(44, CGRectGetHeight(area));
+    CGFloat gap = MIN(12, MAX(5, height * 0.27));
+    CGFloat sideW = height * 1.4, midW = height * 1.75;
+    CGFloat naturalWidth = 2 * midW + 2 * sideW + 3 * gap;
+    CGFloat scale = MIN(1, MAX(0, (CGRectGetWidth(area) - 8) / MAX(naturalWidth, 1)));
+    sideW *= scale;
+    midW *= scale;
+    CGFloat total = 2 * midW + 2 * sideW + 3 * gap;
+    CGFloat x = CGRectGetMidX(area) - total / 2;
+    CGFloat y = CGRectGetMidY(area) - height / 2;
+    _btnPlay.frame   = CGRectMake(x, y, midW, height);
+    _btnLyrics.frame = CGRectMake(x + midW + gap, y, midW, height);
+    _btnPrev.frame   = CGRectMake(x + 2 * midW + 2 * gap, y, sideW, height);
+    _btnNext.frame   = CGRectMake(x + 2 * midW + sideW + 3 * gap, y, sideW, height);
+}
+
 // ── Layout ──
 
 - (void)layoutSubviews {
@@ -883,6 +937,7 @@ shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherG
     _btnLyrics.frame = CGRectMake(startX + midW + gap,                btnY, midW, buttonHeight);
     _btnPrev.frame   = CGRectMake(startX + 2 * midW + 2 * gap,        btnY, sideW, buttonHeight);
     _btnNext.frame   = CGRectMake(startX + 2 * midW + sideW + 3 * gap, btnY, sideW, buttonHeight);
+    if (landscape && SGRPlayerLyricsOpen() && _hasLyricsTransportFrame) [self layoutLandscapeLyricsControls];
 }
 
 // ── Tonearm ──
@@ -1010,6 +1065,24 @@ void SGRVinylLyricsDidSettleClosed(void) {
     coverList.alpha = 0;
     coverList.userInteractionEnabled = NO;
     coverList.accessibilityElementsHidden = YES;
+}
+
+void SGRVinylSetLyricsTransportFrame(UIView *coordinateView, CGRect frame) {
+    BOOL active = coordinateView && !CGRectIsNull(frame) && !CGRectIsEmpty(frame);
+    sg_vinylLyricsTransportFrameValid = active;
+    sg_vinylLyricsCoordinateView = active ? coordinateView : nil;
+    if (active) sg_vinylLyricsTransportFrame = frame;
+    SGRVinylOverlayView *overlay = (SGRVinylOverlayView *)sg_vinylOverlay;
+    if (overlay) {
+        if (active) [overlay setLyricsTransportFrame:frame fromView:coordinateView];
+        else [overlay setLyricsTransportFrame:CGRectNull fromView:nil];
+    }
+}
+
+CGRect SGRVinylTransportButtonsFrameInView(UIView *view) {
+    if (!view) return CGRectNull;
+    SGRVinylOverlayView *overlay = (SGRVinylOverlayView *)sg_vinylOverlay;
+    return overlay ? [overlay transportButtonsFrameInView:view] : CGRectNull;
 }
 
 // ─────────────────────────────────────────────────────
@@ -1162,6 +1235,12 @@ static void placeOverlay(UIView *plane) {
     if (!CGRectEqualToRect(overlay.frame, plane.bounds)) overlay.frame = plane.bounds;
     if (overlay.superview != plane)                  [plane addSubview:overlay];
     else if (plane.subviews.lastObject != overlay)   [plane bringSubviewToFront:overlay];
+    if (sg_vinylLyricsTransportFrameValid && sg_vinylLyricsCoordinateView) {
+        [overlay setLyricsTransportFrame:sg_vinylLyricsTransportFrame fromView:sg_vinylLyricsCoordinateView];
+    }
+    [overlay setNeedsLayout];
+    [overlay layoutIfNeeded];
+    if (sg_vinylBottomStack) SGRPlayerLayoutVinylVolume(sg_vinylBottomStack);
 
     UILongPressGestureRecognizer *hold = objc_getAssociatedObject(plane, &kCanvasHoldKey);
     if (!hold) {
@@ -1277,14 +1356,6 @@ static UIView *arrangedSubviewContainingView(UIStackView *stack, UIView *view) {
     return nil;
 }
 
-static UIView *vinylVolumeRow(UIStackView *stack) {
-    __block UIView *volume = nil;
-    SGForEachView(stack, ^(UIView *view) {
-        if (!volume && [view isKindOfClass:MPVolumeView.class]) volume = view;
-    });
-    return volume ? arrangedSubviewContainingView(stack, volume) : nil;
-}
-
 void SGRVinylStyleVolumeView(MPVolumeView *volumeView) {
     if (!vinylOn() || !volumeView) return;
     __block UISlider *slider = nil;
@@ -1305,20 +1376,14 @@ void SGRVinylStyleVolumeView(MPVolumeView *volumeView) {
 static void updateVinylPlaybackSpacing(UIView *host) {
     UIStackView *stack = vinylBottomStackIn(host);
     if (!stack) return;
+    sg_vinylBottomStack = stack;
     UIView *slider = SGRFindByIdentifier(stack, @"SPTNowPlayingSliderV2", &kVinylProgressSliderKey);
     UIView *progressRow = slider ? arrangedSubviewContainingView(stack, slider) : nil;
-    UIView *volumeRow = vinylVolumeRow(stack);
-    __block MPVolumeView *volume = nil;
-    SGForEachView(volumeRow, ^(UIView *view) {
-        if (!volume && [view isKindOfClass:MPVolumeView.class]) volume = (MPVolumeView *)view;
-    });
-    SGRVinylStyleVolumeView(volume);
     if (progressRow) {
         CGAffineTransform down = CGAffineTransformMakeTranslation(0, kVinylProgressShift);
         if (!CGAffineTransformEqualToTransform(progressRow.transform, down)) progressRow.transform = down;
     }
-    // PlayerVolume positions the visible row in a measured gap and accounts for Vinyl's portrait
-    // lift there, so the slider and its hit target move together without a second transform here.
+    SGRPlayerLayoutVinylVolume(stack);
 }
 
 // ─────────────────────────────────────────────────────

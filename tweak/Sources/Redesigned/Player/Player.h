@@ -49,8 +49,24 @@
 typedef NS_ENUM(NSInteger, SGRPlayerBackground) {
     SGRPlayerBackgroundFluid,      // the artwork itself warped (SGRWarp.h)
     SGRPlayerBackgroundAnimated,   // a clip over Fluid artwork, where the track has one (PlayerAnimated.x)
+    SGRPlayerBackgroundVisualiser, // the track's spectrum in the cover's colors
+    SGRPlayerBackgroundMosaic,     // a reactive grid of cover-colored lights
 };
 SGRPlayerBackground SGRPlayerBackgroundStyle(void);
+#define SGRKeyMosaicDots @"spotifyglass.redesign.player.mosaic.dots"
+#define SGRKeyMosaicSize @"spotifyglass.redesign.player.mosaic.size"
+#define SGRKeyMosaicTextShadow @"spotifyglass.redesign.player.mosaic.textShadow"
+enum { SGRMosaicDotsLeast = 12, SGRMosaicDotsMost = 64, SGRMosaicDotsDefault = 30 };
+enum { SGRMosaicSizeLeast = 30, SGRMosaicSizeMost = 100, SGRMosaicSizeDefault = 78 };
+NSInteger SGRMosaicDots(void);
+NSInteger SGRMosaicSize(void);
+void SGRPlayerSetBackgroundStyle(SGRPlayerBackground style);
+void SGRPlayerHoldField(void);
+void SGRPlayerVisualiserUpdate(void);
+BOOL SGRPlayerVisualiserShowing(void);
+UIView *SGRPlayerVisualiserPreview(void);
+void SGRPlayerVisualiserPreviewSetMosaic(UIView *preview, BOOL mosaic);
+void SGRPlayerTextShadowsChanged(void);
 // Posted when the choice changes, so the player follows without a restart.
 extern NSNotificationName const SGRPlayerBackgroundDidChangeNotification;
 // Animated artwork's sources in the order they are asked (Shared/LockScreenArtwork's, apart from the
@@ -125,3 +141,5 @@ void SGRPlayerVanish(UIView *view);
 
 // Positions the system output-volume control in the gap between the transport controls and footer.
 BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer);
+// Vinyl mode: align the injected volume row to the gap above the Vinyl transport controls.
+BOOL SGRPlayerLayoutVinylVolume(UIView *stack);

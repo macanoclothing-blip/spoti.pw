@@ -44,5 +44,11 @@ void SGRVinylLyricsControlsDidChange(CGFloat alpha);
 // Spotify's artwork collection must remain hidden after the lyrics transition finishes in Vinyl mode.
 void SGRVinylLyricsDidSettleClosed(void);
 
+// In landscape lyrics, puts Vinyl's four transport controls under the measured progress row. `frame`
+// is in `coordinateView`; pass CGRectNull to return them to the regular bottom row.
+void SGRVinylSetLyricsTransportFrame(UIView *coordinateView, CGRect frame);
+// The overlay transport buttons' bounding box in the requested coordinate view, or CGRectNull.
+CGRect SGRVinylTransportButtonsFrameInView(UIView *view);
+
 // Applies the vinyl mode's retro treatment to the iPhone volume slider.
 void SGRVinylStyleVolumeView(MPVolumeView *volumeView);

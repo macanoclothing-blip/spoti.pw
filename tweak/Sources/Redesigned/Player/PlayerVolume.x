@@ -1,23 +1,45 @@
-// A fixed, touchable volume lane between the transport controls and the footer.
-#import <AVFoundation/AVFoundation.h>
+// Place the system output-volume control in the space between the transport controls and footer.
 #import <MediaPlayer/MediaPlayer.h>
-#import <QuartzCore/QuartzCore.h>
-#import <objc/runtime.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
 #import "PlayerVinyl.h"
 
-static const CGFloat kVolumeRowHeight = 32;
-static const CGFloat kVolumeGlyphSize = 13;
-static const CGFloat kVolumeGlyphGap = 10;
+static const CGFloat kVolumeRowHeight = 34;
+static const CGFloat kVolumeGlyphSize = 16;
+static const CGFloat kVolumeGlyphGap = 8;
 static const CGFloat kVolumeSideInset = 24;
-static const CGFloat kVolumeControlClearance = 6;
-static const CGFloat kVolumeTrackRest = 5, kVolumeTrackHeld = 8;
-static const CGFloat kVolumeFillRest = 0.70, kVolumeFillHeld = 1, kVolumeEmpty = 0.30;
+static const CGFloat kVolumeControlClearance = 12;
 static char kVolumeRowKey;
 static char kPreviousButtonKey, kPlayButtonKey, kNextButtonKey;
-static char kVolumeSessionContext, kVolumeSliderContext;
+static char kVolumeProgressSliderKey;
+
+static UIImage *volumeTrackImage(UIColor *color) {
+    CGSize size = CGSizeMake(6, 4);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = 2;
+    format.opaque = NO;
+    UIImage *image = [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format]
+        imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            (void)context;
+            [color setFill];
+            [[UIBezierPath bezierPathWithRoundedRect:(CGRect){CGPointZero, size}
+                                        cornerRadius:size.height / 2] fill];
+        }];
+    return [image resizableImageWithCapInsets:UIEdgeInsetsMake(0, 2, 0, 2)
+                                 resizingMode:UIImageResizingModeStretch];
+}
+
+static UIImage *volumeThumbImage(void) {
+    CGSize size = CGSizeMake(18, 18);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+    format.scale = 2;
+    format.opaque = NO;
+    return [[[UIGraphicsImageRenderer alloc] initWithSize:size format:format]
+        imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            (void)context;
+        }];
+}
 
 static UIImageView *volumeGlyph(NSString *symbol) {
     UIImageSymbolConfiguration *configuration =
@@ -33,257 +55,157 @@ static UIImageView *volumeGlyph(NSString *symbol) {
 static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
     static const void *keys[] = {&kPreviousButtonKey, &kPlayButtonKey, &kNextButtonKey};
     NSArray<NSString *> *identifiers = @[
-        @"SPTNowPlayingShuffleButton", @"Components.UI.ShuffleButton",
-        @"SPTNowPlayingPreviousTrackButton", @"SPTNowPlayingPlayButton", @"SPTNowPlayingNextTrackButton",
-        @"SPTNowPlayingRepeatButton", @"Components.UI.RepeatButton", @"Nowplaying-RepeatButton"
+        @"SPTNowPlayingPreviousTrackButton", @"SPTNowPlayingPlayButton", @"SPTNowPlayingNextTrackButton"
     ];
-    // Anchor to the controls' actual hit areas, rather than the often much taller unit view.
-    CGRect frame = CGRectNull;
-    for (NSString *identifier in identifiers) {
-        const void *key = nil;
-        if ([identifier isEqualToString:@"SPTNowPlayingPreviousTrackButton"]) key = keys[0];
-        else if ([identifier isEqualToString:@"SPTNowPlayingPlayButton"]) key = keys[1];
-        else if ([identifier isEqualToString:@"SPTNowPlayingNextTrackButton"]) key = keys[2];
-        UIView *button = SGRFindByIdentifier(stack ?: controls, identifier, key);
+    // Use the whole controls unit as the safe envelope. Spotify's button identifiers can sit on small
+    // inner views while their rendered glyphs and hit targets extend past those bounds.
+    CGRect frame = [controls convertRect:controls.bounds toView:stack];
+    for (NSUInteger index = 0; index < identifiers.count; index++) {
+        UIView *button = SGRFindByIdentifier(controls, identifiers[index], keys[index]);
         if (!button || button.hidden || button.alpha < 0.01) continue;
         CGRect buttonFrame = [button convertRect:button.bounds toView:stack];
-        frame = CGRectIsNull(frame) ? buttonFrame : CGRectUnion(frame, buttonFrame);
+        frame = CGRectUnion(frame, buttonFrame);
     }
-    if (CGRectIsNull(frame)) frame = [controls convertRect:controls.bounds toView:stack];
     return CGRectInset(frame, -2, -4);
 }
 
-@interface SGRVolumeRow : UIControl
+@interface SGRVolumeRow : UIView
+@end
+
+@interface SGRInteractiveVolumeView : MPVolumeView
+@end
+
+@implementation SGRInteractiveVolumeView
+- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesBegan:touches withEvent:event];
+    [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.transform = CGAffineTransformMakeScale(1, 1.55);
+    } completion:nil];
+}
+- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesEnded:touches withEvent:event];
+    [self sgr_restoreTrack];
+}
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    [super touchesCancelled:touches withEvent:event];
+    [self sgr_restoreTrack];
+}
+- (void)sgr_restoreTrack {
+    [UIView animateWithDuration:0.22 delay:0 options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
+        self.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
 @end
 
 @implementation SGRVolumeRow {
-    MPVolumeView *_system;
-    UISlider *_systemSlider;
-    UIView *_track, *_fill;
-    UIImageView *_quiet, *_loud;
-    CGFloat _value, _trackMin, _trackMax;
-    BOOL _held, _observingSession, _observingSlider;
-    NSTimer *_poll;
-    CFTimeInterval _lastPush;
-    NSHashTable<UIGestureRecognizer *> *_suspended;
+    MPVolumeView *_volume;
+    UIImageView *_quiet;
+    UIImageView *_loud;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
-
-    // Keep Apple's volume engine in the hierarchy, but draw and lay out the visible track ourselves.
-    _system = [MPVolumeView new];
+    _volume = [SGRInteractiveVolumeView new];
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    _system.showsRouteButton = NO;
+    _volume.showsRouteButton = NO;
 #pragma clang diagnostic pop
-    _system.alpha = 0.01;
-    _system.userInteractionEnabled = NO;
-    _system.accessibilityElementsHidden = YES;
-    [self addSubview:_system];
-
-    _track = [UIView new];
-    _track.userInteractionEnabled = NO;
-    _track.clipsToBounds = YES;
-    _track.layer.cornerCurve = kCACornerCurveContinuous;
-    _track.backgroundColor = [UIColor colorWithWhite:1 alpha:kVolumeEmpty];
-    _fill = [UIView new];
-    _fill.userInteractionEnabled = NO;
-    _fill.backgroundColor = [UIColor colorWithWhite:1 alpha:kVolumeFillRest];
-    [_track addSubview:_fill];
-    [self addSubview:_track];
-
+    _volume.showsVolumeSlider = YES;
+    UIImage *minimumTrack = volumeTrackImage([UIColor colorWithWhite:1 alpha:0.82]);
+    UIImage *maximumTrack = volumeTrackImage([UIColor colorWithWhite:1 alpha:0.30]);
+    UIImage *thumb = volumeThumbImage();
+    for (NSNumber *state in @[@(UIControlStateNormal), @(UIControlStateHighlighted), @(UIControlStateDisabled)]) {
+        UIControlState controlState = state.unsignedIntegerValue;
+        [_volume setMinimumVolumeSliderImage:minimumTrack forState:controlState];
+        [_volume setMaximumVolumeSliderImage:maximumTrack forState:controlState];
+        [_volume setVolumeThumbImage:thumb forState:controlState];
+    }
+    _volume.accessibilityLabel = @"iPhone volume";
     _quiet = volumeGlyph(@"speaker.fill");
     _loud = volumeGlyph(@"speaker.wave.3.fill");
     [self addSubview:_quiet];
+    [self addSubview:_volume];
     [self addSubview:_loud];
-
-    _value = AVAudioSession.sharedInstance.outputVolume;
-    @try {
-        [AVAudioSession.sharedInstance addObserver:self forKeyPath:@"outputVolume"
-                                           options:NSKeyValueObservingOptionNew context:&kVolumeSessionContext];
-        _observingSession = YES;
-    } @catch (__unused NSException *exception) {}
-    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshFromSystem)
-                                               name:UIApplicationDidBecomeActiveNotification object:nil];
-
-    self.isAccessibilityElement = YES;
-    self.accessibilityLabel = @"Volume";
-    self.accessibilityTraits = UIAccessibilityTraitAdjustable;
     return self;
-}
-
-- (void)dealloc {
-    [_poll invalidate];
-    [self restoreAncestorGestures];
-    [NSNotificationCenter.defaultCenter removeObserver:self];
-    if (_observingSession) {
-        [AVAudioSession.sharedInstance removeObserver:self forKeyPath:@"outputVolume" context:&kVolumeSessionContext];
-    }
-    if (_observingSlider) {
-        [_systemSlider removeObserver:self forKeyPath:@"value" context:&kVolumeSliderContext];
-    }
-}
-
-- (UISlider *)systemSlider {
-    if (!_systemSlider) {
-        __block UISlider *slider = nil;
-        SGForEachView(_system, ^(UIView *view) {
-            if (!slider && [view isKindOfClass:UISlider.class]) slider = (UISlider *)view;
-        });
-        _systemSlider = slider;
-        if (_systemSlider) @try {
-            [_systemSlider addObserver:self forKeyPath:@"value" options:NSKeyValueObservingOptionNew
-                               context:&kVolumeSliderContext];
-            _observingSlider = YES;
-        } @catch (__unused NSException *exception) {}
-    }
-    _systemSlider.thumbTintColor = UIColor.clearColor;
-    _systemSlider.minimumTrackTintColor = UIColor.clearColor;
-    _systemSlider.maximumTrackTintColor = UIColor.clearColor;
-    return _systemSlider;
-}
-
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
-    if (context != &kVolumeSliderContext && context != &kVolumeSessionContext) {
-        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
-        return;
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{ [self refreshFromSystem]; });
-}
-
-- (void)refreshFromSystem {
-    if (_held || CACurrentMediaTime() - _lastPush < 0.6) return;
-    UISlider *slider = [self systemSlider];
-    CGFloat systemValue = slider ? slider.value : AVAudioSession.sharedInstance.outputVolume;
-    if (fabs(systemValue - _value) > 0.002) [self setVolumeValue:systemValue fromUser:NO];
-}
-
-- (void)pushVolume {
-    UISlider *slider = [self systemSlider];
-    if (!slider) return;
-    _lastPush = CACurrentMediaTime();
-    [slider setValue:_value animated:NO];
-    [slider sendActionsForControlEvents:UIControlEventValueChanged];
-}
-
-- (void)syncTrack {
-    CGFloat height = MIN(_held ? kVolumeTrackHeld : kVolumeTrackRest, MAX(1, CGRectGetHeight(self.bounds) - 4));
-    CGFloat scale = self.traitCollection.displayScale ?: 3;
-    CGFloat top = round((CGRectGetMidY(self.bounds) - height / 2) * scale) / scale;
-    _track.frame = CGRectMake(_trackMin, top, MAX(0, _trackMax - _trackMin), height);
-    _track.layer.cornerRadius = height / 2;
-    _fill.frame = CGRectMake(0, 0, CGRectGetWidth(_track.bounds) * _value, CGRectGetHeight(_track.bounds));
-}
-
-- (void)syncStyle {
-    _fill.backgroundColor = [UIColor colorWithWhite:1 alpha:_held ? kVolumeFillHeld : kVolumeFillRest];
-    _quiet.alpha = _loud.alpha = _held ? 1 : 0.72;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect bounds = self.bounds;
-    CGFloat rowHeight = MIN(kVolumeRowHeight, CGRectGetHeight(bounds));
-    CGFloat middle = CGRectGetMidY(bounds);
-    CGFloat glyphWidth = rowHeight / 2 + kVolumeGlyphSize / 2;
-    CGFloat loudX = CGRectGetWidth(bounds) - glyphWidth;
-
-    // The system view is an invisible output-volume adapter only.
-    _system.frame = CGRectMake(0, 0, MAX(140, CGRectGetWidth(bounds)), rowHeight);
-    [_system layoutIfNeeded];
-    [self systemSlider];
-
-    _quiet.bounds = _loud.bounds = CGRectMake(0, 0, glyphWidth, rowHeight);
-    _quiet.center = CGPointMake(glyphWidth / 2, middle);
-    _loud.center = CGPointMake(loudX + glyphWidth / 2, middle);
-    _trackMin = glyphWidth + kVolumeGlyphGap;
-    _trackMax = loudX - kVolumeGlyphGap;
-    [self syncTrack];
-    [self syncStyle];
+    CGFloat midY = CGRectGetMidY(bounds);
+    CGFloat iconWidth = kVolumeRowHeight / 2 + kVolumeGlyphSize / 2;
+    _quiet.frame = CGRectMake(0, midY - kVolumeRowHeight / 2, iconWidth, kVolumeRowHeight);
+    _loud.frame = CGRectMake(CGRectGetWidth(bounds) - iconWidth, midY - kVolumeRowHeight / 2,
+                             iconWidth, kVolumeRowHeight);
+    CGFloat left = CGRectGetMaxX(_quiet.frame) + kVolumeGlyphGap;
+    CGFloat right = CGRectGetMinX(_loud.frame) - kVolumeGlyphGap;
+    CGSize fitting = [_volume sizeThatFits:CGSizeMake(MAX(0, right - left), kVolumeRowHeight)];
+    CGFloat volumeHeight = fitting.height > 0 ? MIN(kVolumeRowHeight, fitting.height) : kVolumeRowHeight;
+    _volume.frame = CGRectMake(left, round(midY - volumeHeight / 2),
+                               MAX(0, right - left), volumeHeight);
 }
-
-- (void)didMoveToWindow {
-    [super didMoveToWindow];
-    if (!self.window) {
-        [_poll invalidate];
-        _poll = nil;
-        [self restoreAncestorGestures];
-        return;
-    }
-    [self systemSlider];
-    [self refreshFromSystem];
-    if (_poll) return;
-    __weak SGRVolumeRow *weakSelf = self;
-    _poll = [NSTimer timerWithTimeInterval:0.25 repeats:YES block:^(__unused NSTimer *timer) {
-        [weakSelf refreshFromSystem];
-    }];
-    _poll.tolerance = 0.1;
-    [NSRunLoop.mainRunLoop addTimer:_poll forMode:NSRunLoopCommonModes];
-}
-
-- (void)suspendAncestorGestures {
-    if (_suspended) return;
-    _suspended = [NSHashTable weakObjectsHashTable];
-    for (UIView *view = self.superview; view; view = view.superview) {
-        for (UIGestureRecognizer *recognizer in view.gestureRecognizers) {
-            if (![recognizer isKindOfClass:UIPanGestureRecognizer.class] ||
-                [recognizer isKindOfClass:UIScreenEdgePanGestureRecognizer.class] || !recognizer.enabled) continue;
-            recognizer.enabled = NO;
-            [_suspended addObject:recognizer];
-        }
-    }
-}
-
-- (void)restoreAncestorGestures {
-    for (UIGestureRecognizer *recognizer in _suspended) recognizer.enabled = YES;
-    _suspended = nil;
-}
-
-- (void)setVolumeValue:(CGFloat)value fromUser:(BOOL)fromUser {
-    _value = MIN(1, MAX(0, value));
-    if (!fromUser && !_held && self.window) {
-        [UIView animateWithDuration:0.14 delay:0 options:UIViewAnimationOptionBeginFromCurrentState |
-             UIViewAnimationOptionAllowUserInteraction | UIViewAnimationOptionCurveEaseOut
-                         animations:^{ [self syncTrack]; } completion:nil];
-    } else {
-        [self syncTrack];
-    }
-    if (fromUser) [self pushVolume];
-}
-
-- (void)setHeld:(BOOL)held {
-    if (_held == held) return;
-    _held = held;
-    if (held) [self suspendAncestorGestures]; else [self restoreAncestorGestures];
-    void (^apply)(void) = ^{ [self syncTrack]; [self syncStyle]; };
-    UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
-    [UIView animateWithDuration:held ? 0.16 : 0.14 delay:0 options:options animations:apply completion:nil];
-}
-
-- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
-    [self setHeld:YES];
-    CGFloat x = [touch locationInView:self].x;
-    CGFloat span = MAX(1, _trackMax - _trackMin);
-    [self setVolumeValue:(x - _trackMin) / span fromUser:YES];
-    return YES;
-}
-
-- (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
-    CGFloat x = [touch locationInView:self].x;
-    CGFloat span = MAX(1, _trackMax - _trackMin);
-    [self setVolumeValue:(x - _trackMin) / span fromUser:YES];
-    return YES;
-}
-
-- (void)endTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event { [self setHeld:NO]; }
-- (void)cancelTrackingWithEvent:(UIEvent *)event { [self setHeld:NO]; }
-
-- (NSString *)accessibilityValue { return [NSString stringWithFormat:@"%d%%", (int)round(_value * 100)]; }
-- (void)accessibilityIncrement { [self setVolumeValue:_value + 0.0625 fromUser:YES]; }
-- (void)accessibilityDecrement { [self setVolumeValue:_value - 0.0625 fromUser:YES]; }
 
 @end
+
+static UIView *volumeArrangedRow(UIStackView *stack, UIView *view) {
+    for (UIView *candidate = view; candidate && candidate != stack; candidate = candidate.superview) {
+        if (candidate.superview == stack) return candidate;
+    }
+    return nil;
+}
+
+BOOL SGRPlayerLayoutVinylVolume(UIView *stack) {
+    SGRVolumeRow *volume = stack ? objc_getAssociatedObject(stack, &kVolumeRowKey) : nil;
+    if (!stack || !volume) return NO;
+    UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
+    BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
+        (!UIInterfaceOrientationIsPortrait(orientation) && stack.window.bounds.size.width > stack.window.bounds.size.height);
+    if (landscape || !stack.window) {
+        volume.hidden = YES;
+        volume.alpha = 0;
+        volume.userInteractionEnabled = NO;
+        volume.accessibilityElementsHidden = YES;
+        return NO;
+    }
+
+    CGRect buttons = SGRVinylTransportButtonsFrameInView(stack);
+    if (CGRectIsNull(buttons) || CGRectIsEmpty(buttons)) {
+        volume.alpha = 0;
+        volume.userInteractionEnabled = NO;
+        volume.accessibilityElementsHidden = YES;
+        return NO;
+    }
+    UIView *slider = SGRFindByIdentifier(stack, @"SPTNowPlayingSliderV2", &kVolumeProgressSliderKey);
+    UIView *progress = slider ? volumeArrangedRow((UIStackView *)stack, slider) : nil;
+    CGRect progressFrame = progress ? [progress convertRect:progress.bounds toView:stack] : CGRectNull;
+
+    CGFloat bottom = CGRectGetMinY(buttons) - kVolumeControlClearance;
+    CGFloat top = CGRectIsNull(progressFrame) ? CGRectGetMinY(stack.bounds) + 48
+                                             : CGRectGetMaxY(progressFrame) + 8;
+    CGFloat available = MAX(0, bottom - top);
+    CGFloat height = MIN(kVolumeRowHeight, available);
+    // The controls sit on the lower edge of the player's artwork. A compact row is still preferable
+    // to letting Spotify's old layout put the slider across the transport buttons.
+    if (height < 18) {
+        top = MAX(CGRectGetMinY(stack.bounds) + 24, bottom - 22);
+        height = MAX(18, bottom - top);
+    }
+    CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
+    CGRect frame = CGRectMake(kVolumeSideInset, round(bottom - height), width, height);
+    volume.hidden = NO;
+    volume.userInteractionEnabled = YES;
+    volume.accessibilityElementsHidden = NO;
+    volume.frame = frame;
+    [volume setNeedsLayout];
+    [stack bringSubviewToFront:volume];
+    __block MPVolumeView *systemVolume = nil;
+    SGForEachView(volume, ^(UIView *view) {
+        if (!systemVolume && [view isKindOfClass:MPVolumeView.class]) systemVolume = (MPVolumeView *)view;
+    });
+    SGRVinylStyleVolumeView(systemVolume);
+    volume.alpha = 1;
+    return YES;
+}
 
 BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     if (!stack) return NO;
@@ -293,13 +215,11 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         objc_setAssociatedObject(stack, &kVolumeRowKey, volume, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (volume.superview != stack) [stack addSubview:volume];
-
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) return SGRPlayerLayoutVinylVolume(stack);
     UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
     BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
         (!UIInterfaceOrientationIsPortrait(orientation) && stack.window.bounds.size.width > stack.window.bounds.size.height);
-    // Lyrics take over the landscape player. Once they close, restore the same volume lane
-    // between the now-restored transport and footer controls.
-    if (landscape && SGRPlayerLyricsOpen()) {
+    if (landscape) {
         volume.hidden = YES;
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;
@@ -317,23 +237,36 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
 
     CGRect controlsFrame = volumeControlsFrame(controls, stack);
     CGRect footerFrame = [footer convertRect:footer.bounds toView:stack];
-    // One stable lane, measured after Spotify lays out both units. Never place the slider over the
-    // progress track or another control, even when the player resizes or rotates automatically.
     CGFloat top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
     CGFloat bottom = CGRectGetMinY(footerFrame) - kVolumeControlClearance;
     CGFloat room = bottom - top;
+    if (room < kVolumeRowHeight) {
+        // Footer layout resets the transport to its base translation before calling here. Reclaim only
+        // the space needed for the volume row, preserving any scale/rotation Spotify put on that unit.
+        CGFloat minimumTop = MAX(stack.safeAreaInsets.top + 48, 56);
+        CGFloat availableLift = MAX(0, CGRectGetMinY(controlsFrame) - minimumTop);
+        CGFloat shortage = MIN(kVolumeRowHeight - room, availableLift);
+        CGAffineTransform transform = controls.transform;
+        transform.ty -= shortage;
+        controls.transform = transform;
+        controlsFrame = volumeControlsFrame(controls, stack);
+        top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+        room = bottom - top;
+    }
+
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
     CGFloat rowHeight = MIN(kVolumeRowHeight, room);
-    if (width < 1 || rowHeight < 18) {
+    if (width < 1 || rowHeight < 12) {
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;
         static NSUInteger noGapLogs;
-        if (noGapLogs++ < 3) SGLog(@"redesign player: volume row hidden because no controls-to-footer gap is available (%.0fpt)", room);
+        if (noGapLogs++ < 3) SGLog(@"redesign player: volume row hidden because no non-overlapping gap is available (%.0fpt)", room);
         return NO;
     }
-
-    CGRect frame = CGRectMake(kVolumeSideInset, round(top + (room - rowHeight) / 2), width, rowHeight);
-    if (SGFlag(SGRKeyPlayerVinyl, NO)) frame.origin.y -= 14;
+    // Keep the system slider wholly between the transport's hit targets and the footer. A small gap
+    // becomes a compact row; it never falls back across either set of controls.
+    CGFloat rowY = round(top + (room - rowHeight) / 2);
+    CGRect frame = CGRectMake(kVolumeSideInset, rowY, width, rowHeight);
     if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame)) {
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;

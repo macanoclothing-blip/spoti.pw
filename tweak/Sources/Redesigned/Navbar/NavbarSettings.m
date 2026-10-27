@@ -5,6 +5,7 @@
 #import "Redesigned/NowPlayingBar/NowPlayingBar.h"
 #import "Navbar.h"
 #import "Shared/Navigation/Links.h"
+#import "Redesigned/Player/PlayerVinyl.h"
 #import "Headers/SPTEncoreIconView.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
@@ -15,7 +16,7 @@
 // spotify:playlists is the form its collection URI parser lists, next to spotify:playlists:by-you.
 // The picker still asks the dispatcher about each one and leaves out what it has nowhere to send.
 static NSArray<NSDictionary *> *tabPresets(void) {
-    return @[
+    NSMutableArray<NSDictionary *> *presets = [@[
         @{SGRNavbarTitle: @"Home", SGRNavbarURI: @"spotify:home", SGRNavbarIcon: @"home"},
         @{SGRNavbarTitle: @"Search", SGRNavbarURI: @"spotify:search", SGRNavbarIcon: @"search"},
         @{SGRNavbarTitle: @"Your Library", SGRNavbarURI: @"spotify:collection", SGRNavbarIcon: @"collection"},
@@ -33,7 +34,11 @@ static NSArray<NSDictionary *> *tabPresets(void) {
         @{SGRNavbarTitle: @"Concerts", SGRNavbarURI: @"spotify:concerts", SGRNavbarIcon: @"events"},
         @{SGRNavbarTitle: @"Queue", SGRNavbarURI: @"spotify:now-playing:queue", SGRNavbarIcon: @"queue"},
         @{SGRNavbarTitle: @"Create", SGRNavbarURI: @"spotify:create-menu", SGRNavbarIcon: @"plus"},
-    ];
+    ] mutableCopy];
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
+        [presets addObject:@{SGRNavbarTitle: @"Records", SGRNavbarURI: @"spotifyglass:records", SGRNavbarIcon: @"sf:opticaldisc"}];
+    }
+    return presets;
 }
 
 // The list the Navbar page edits: the saved order first, then every tab of Spotify's it does not

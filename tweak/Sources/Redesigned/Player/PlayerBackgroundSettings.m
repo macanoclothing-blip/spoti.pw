@@ -48,7 +48,16 @@ static void migrate(void) {
 SGRPlayerBackground SGRPlayerBackgroundStyle(void) {
     migrate();
     NSInteger style = SGInt(SGRKeyPlayerBackground, kDefaultBackground);
-    return style >= SGRPlayerBackgroundFluid && style <= SGRPlayerBackgroundAnimated ? (SGRPlayerBackground)style : kDefaultBackground;
+    return style >= SGRPlayerBackgroundFluid && style <= SGRPlayerBackgroundMosaic ? (SGRPlayerBackground)style : kDefaultBackground;
+}
+
+void SGRPlayerSetBackgroundStyle(SGRPlayerBackground style) {
+    if (style < SGRPlayerBackgroundFluid || style > SGRPlayerBackgroundMosaic || style == SGRPlayerBackgroundStyle()) return;
+    SGSetInt(SGRKeyPlayerBackground, style);
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRPlayerBackgroundDidChangeNotification object:nil];
+    SGRPlayerHoldField();
+    SGRPlayerVisualiserUpdate();
+    SGRPlayerTextShadowsChanged();
 }
 
 SGRWarpLook SGRPlayerFluidLook(void) {
@@ -72,6 +81,95 @@ static const CGFloat kPreviewHeight = 240, kPreviewRadius = 26;
 // A band across the middle of the player at the player's own scale, so the blur and the warp look the
 // size they will there.
 @interface SGRFluidPreview : SGRWarpView
+@end
+
+@interface SGRPlayerStylePreview : UIView
+@end
+
+@implementation SGRPlayerStylePreview {
+    SGRFluidPreview *_fluid;
+    UIView *_visualiser;
+    UILabel *_caption;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    self.layer.cornerRadius = kPreviewRadius;
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.clipsToBounds = YES;
+    self.backgroundColor = [UIColor colorWithWhite:0.04 alpha:1];
+    _fluid = [[SGRFluidPreview alloc] initWithFrame:self.bounds];
+    [self addSubview:_fluid];
+    _caption = [UILabel new];
+    _caption.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+    _caption.textColor = UIColor.whiteColor;
+    _caption.textAlignment = NSTextAlignmentCenter;
+    _caption.backgroundColor = [UIColor colorWithWhite:0 alpha:0.46];
+    _caption.layer.cornerRadius = 11;
+    _caption.clipsToBounds = YES;
+    _caption.hidden = YES;
+    [self addSubview:_caption];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateStyle) name:SGRPlayerBackgroundDidChangeNotification object:nil];
+    [self updateStyle];
+    return self;
+}
+
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    _fluid.frame = self.bounds;
+    _visualiser.frame = self.bounds;
+    CGSize captionSize = [_caption sizeThatFits:CGSizeMake(self.bounds.size.width - 24, 30)];
+    _caption.frame = CGRectMake(12, self.bounds.size.height - 42, MIN(self.bounds.size.width - 24, captionSize.width + 20), 28);
+    _caption.center = CGPointMake(CGRectGetMidX(self.bounds), _caption.center.y);
+}
+
+- (void)updateStyle {
+    SGRPlayerBackground style = SGRPlayerBackgroundStyle();
+    BOOL visual = style == SGRPlayerBackgroundVisualiser || style == SGRPlayerBackgroundMosaic;
+    if (visual && !_visualiser) {
+        _visualiser = SGRPlayerVisualiserPreview();
+        [self addSubview:_visualiser];
+    } else if (!visual && _visualiser) {
+        [_visualiser removeFromSuperview];
+        _visualiser = nil;
+    }
+    if (visual) SGRPlayerVisualiserPreviewSetMosaic(_visualiser, style == SGRPlayerBackgroundMosaic);
+    _caption.hidden = style != SGRPlayerBackgroundAnimated;
+    _caption.text = @"Canvas / animated artwork";
+    [self setNeedsLayout];
+}
+@end
+
+@interface SGRPlayerBackgroundPicker : UIView
+@end
+
+@implementation SGRPlayerBackgroundPicker {
+    UISegmentedControl *_segments;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    _segments = [[UISegmentedControl alloc] initWithItems:@[@"Fluid", @"Animated", @"Visualizer", @"Mosaic"]];
+    _segments.apportionsSegmentWidthsByContent = YES;
+    _segments.selectedSegmentIndex = SGRPlayerBackgroundStyle();
+    _segments.selectedSegmentTintColor = [UIColor colorWithWhite:1 alpha:0.24];
+    _segments.tintColor = SGRPrimary();
+    [_segments setTitleTextAttributes:@{NSForegroundColorAttributeName: SGRPrimary(), NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold]} forState:UIControlStateNormal];
+    [_segments setTitleTextAttributes:@{NSForegroundColorAttributeName: SGRPrimary(), NSFontAttributeName: [UIFont systemFontOfSize:12 weight:UIFontWeightBold]} forState:UIControlStateSelected];
+    [_segments addTarget:self action:@selector(picked) forControlEvents:UIControlEventValueChanged];
+    [self addSubview:_segments];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateSelection) name:SGRPlayerBackgroundDidChangeNotification object:nil];
+    return self;
+}
+
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)layoutSubviews { [super layoutSubviews]; _segments.frame = self.bounds; }
+- (void)picked { SGRPlayerSetBackgroundStyle((SGRPlayerBackground)_segments.selectedSegmentIndex); }
+- (void)updateSelection { _segments.selectedSegmentIndex = SGRPlayerBackgroundStyle(); }
 @end
 
 @implementation SGRFluidPreview {
@@ -133,13 +231,8 @@ static NSArray<SGModRow *> *shownFor(SGRPlayerBackground background, NSArray<SGM
 
 NSArray<SGModSection *> *SGRPlayerBackgroundSections(void) {
     migrate();
-    NSArray<SGModRow *> *choices = SGChoiceListRows(SGRKeyPlayerBackground, @[@"Fluid artwork", @"Animated artwork"],
-        @[@"The cover itself, blurred and slowly warped", @"The track's Canvas or the album's animated cover, looping"],
-        kDefaultBackground, ^(NSInteger index) {
-            [NSNotificationCenter.defaultCenter postNotificationName:SGRPlayerBackgroundDidChangeNotification object:nil];
-        });
-
-    SGModRow *preview = SGViewRow([SGRFluidPreview new], kPreviewHeight);
+    SGModRow *picker = SGViewRow([SGRPlayerBackgroundPicker new], 40);
+    SGModRow *preview = SGViewRow([SGRPlayerStylePreview new], kPreviewHeight);
     NSArray<SGModRow *> *sliders = @[sliderRow(kSpeed), sliderRow(kWarp), sliderRow(kBlur), sliderRow(kSaturation), sliderRow(kBrightness)];
     SGModRow *reset = SGActionRow(@"Reset", nil, ^{
         for (NSString *key in @[SGRKeyFluidSpeed, SGRKeyFluidWarp, SGRKeyFluidBlur, SGRKeyFluidSaturation, SGRKeyFluidBrightness]) {
@@ -153,13 +246,27 @@ NSArray<SGModSection *> *SGRPlayerBackgroundSections(void) {
     SGModRow *sources = SGArtworkSourcesRow(SGRKeyPlayerArtworkSources,
         @"Asked top to bottom until one has a clip. Apple Music gets only the artist and album name.");
 
+    NSArray<SGModRow *> *mosaic = @[
+        SGSliderRow(@"Dots across", nil, SGRMosaicDotsLeast, SGRMosaicDotsMost, 1,
+                    ^double { return SGRMosaicDots(); },
+                    ^(double value) { SGSetInt(SGRKeyMosaicDots, lround(value)); },
+                    ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f", value]; }),
+        SGSliderRow(@"Dot size", nil, SGRMosaicSizeLeast, SGRMosaicSizeMost, 1,
+                    ^double { return SGRMosaicSize(); },
+                    ^(double value) { SGSetInt(SGRKeyMosaicSize, lround(value)); },
+                    ^NSString *(double value) { return [NSString stringWithFormat:@"%.0f%%", value]; }),
+        SGSwitchRow(@"Shadow under text", nil, SGRKeyMosaicTextShadow),
+    ];
+
     return @[
-        SGNotedSection(@"Background", choices, @"A paused song holds the background still."),
-        SGSection(nil, shownFor(SGRPlayerBackgroundFluid, @[preview])),
+        SGNotedSection(@"Background", @[picker], @"Fluid warps the cover, Animated shows Canvas, Visualizer follows the sound, and Mosaic turns the cover colors into a reactive grid."),
+        SGSection(nil, @[preview]),
         SGNotedSection(nil, shownFor(SGRPlayerBackgroundFluid, sliders),
                        @"The player follows these as they move. Brightness past 100% can make white text harder to read on a light cover."),
         SGSection(nil, shownFor(SGRPlayerBackgroundFluid, @[reset])),
         SGNotedSection(nil, shownFor(SGRPlayerBackgroundAnimated, @[sources]),
                        @"A track without a clip shows Fluid artwork, and so does every track in Low Power Mode or with Reduce Motion on."),
+        SGNotedSection(nil, shownFor(SGRPlayerBackgroundMosaic, mosaic),
+                       @"Adjust the grid density and light size. Text shadow improves contrast over bright dots."),
     ];
 }

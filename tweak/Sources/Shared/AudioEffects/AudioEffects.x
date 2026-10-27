@@ -53,6 +53,8 @@ static atomic_int sg_outputState;
 static atomic_uint_fast64_t sg_rateBits;
 static atomic_uint_fast64_t sg_layout;
 static atomic_uint_fast64_t sg_skipped;        // renders whose buffers were not laid out as the format says
+static _Atomic(SGAudioOutputReader) sg_reader;
+static float sg_mono[kScratchFrames];
 
 static os_unfair_lock sg_errorLock = OS_UNFAIR_LOCK_INIT;
 static NSMutableDictionary<NSString *, NSString *> *sg_errors;
@@ -162,14 +164,50 @@ static void processBuffer(SGDSPEngine *engine, AudioUnitRenderActionFlags *flags
     if (loud) *flags &= ~kAudioUnitRenderAction_OutputIsSilence;
 }
 
+void SGAudioSetOutputReader(SGAudioOutputReader reader) {
+    atomic_store_explicit(&sg_reader, reader, memory_order_release);
+}
+
+// The buffer after effects, mixed to mono for the reader. Its format and layout are the same snapshot used by
+// the effect engine; malformed or concurrently changed buffers are skipped instead of being read as noise.
+static void readOut(SGAudioOutputReader reader, AudioUnitRenderActionFlags flags, UInt32 frames, const AudioBufferList *data) {
+    uint64_t layout = atomic_load_explicit(&sg_layout, memory_order_relaxed);
+    UInt32 formatFlags = (UInt32)layout, channels = (UInt32)(layout >> 32) & 0xffff, bytes = (UInt32)(layout >> 48);
+    BOOL isFloat = (formatFlags & kAudioFormatFlagIsFloat) != 0;
+    BOOL split = (formatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
+    UInt32 fraction = (formatFlags & kLinearPCMFormatFlagsSampleFractionMask) >> kLinearPCMFormatFlagsSampleFractionShift;
+    if ((bytes != 2 && bytes != 4) || channels < 1 || !data || !data->mNumberBuffers) return;
+    BOOL fits = split ? data->mNumberBuffers == channels : data->mNumberBuffers == 1 && data->mBuffers[0].mNumberChannels == channels;
+    for (UInt32 b = 0; fits && b < data->mNumberBuffers; b++)
+        fits = data->mBuffers[b].mData && data->mBuffers[b].mDataByteSize == frames * bytes * (split ? 1 : channels);
+    if (!fits) return;
+    BOOL silent = (flags & kAudioUnitRenderAction_OutputIsSilence) != 0;
+    double rate = loadDouble(&sg_rateBits);
+    const void *first = data->mBuffers[0].mData;
+    const void *second = split && channels > 1 ? data->mBuffers[1].mData : first;
+    UInt32 stride = split ? 1 : channels, secondOffset = !split && channels > 1 ? 1 : 0;
+    for (UInt32 done = 0; done < frames;) {
+        UInt32 count = MIN(frames - done, (UInt32)kScratchFrames);
+        for (UInt32 i = 0; i < count; i++) {
+            UInt32 at = (done + i) * stride;
+            sg_mono[i] = silent ? 0 : 0.5f * (readSample(first, at, bytes, isFloat, fraction) +
+                                               readSample(second, at + secondOffset, bytes, isFloat, fraction));
+        }
+        reader(sg_mono, count, rate);
+        done += count;
+    }
+}
+
 static OSStatus rendered(void *refCon, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *timestamp, UInt32 bus,
                          UInt32 frames, AudioBufferList *data) {
     if (!(*flags & kAudioUnitRenderAction_PostRender) || bus != 0 || !data || !data->mNumberBuffers || !frames) return noErr;
-    if (!atomic_load_explicit(&sg_running, memory_order_acquire)) return noErr;
-    SGDSPEngine *engine = atomic_load_explicit(&sg_engine, memory_order_acquire);
-    // A new rate is being set up on the queue: until then the sound passes as it is.
-    if (!engine || SGDSPEngineSampleRate(engine) != loadDouble(&sg_rateBits)) return noErr;
-    processBuffer(engine, flags, frames, data);
+    if (atomic_load_explicit(&sg_running, memory_order_acquire)) {
+        SGDSPEngine *engine = atomic_load_explicit(&sg_engine, memory_order_acquire);
+        // A new rate is being set up on the queue: until then the sound passes as it is.
+        if (engine && SGDSPEngineSampleRate(engine) == loadDouble(&sg_rateBits)) processBuffer(engine, flags, frames, data);
+    }
+    SGAudioOutputReader reader = atomic_load_explicit(&sg_reader, memory_order_acquire);
+    if (reader) readOut(reader, *flags, frames, data);
     return noErr;
 }
 

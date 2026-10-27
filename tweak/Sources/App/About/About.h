@@ -77,6 +77,7 @@ void SGShowCertificateSheet(NSDictionary *offer, UIImage *logo);   // the sheet 
 // what is set and restarting.
 void SGExportSettings(void);
 void SGImportSettings(void);
+void SGExportLogs(void);
 
 // AppIcon.m: the row that opens the list of app icons, nil in a build without them (scripts/app-icons.sh).
 SGModRow *SGAppIconRow(void);

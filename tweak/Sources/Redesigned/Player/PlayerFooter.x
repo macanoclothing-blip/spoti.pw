@@ -71,8 +71,24 @@ static CGFloat moveTo(UIView *arranged, UIView *view, CGPoint point, UIView *hos
 
 #pragma mark - lyrics
 
+static void removeLyricsGlyphFrom(UIView *host) {
+    SGRGlyphButton *glyph = host ? objc_getAssociatedObject(host, &kLyricsGlyphKey) : nil;
+    if (!glyph) return;
+    glyph.alpha = 0;
+    glyph.userInteractionEnabled = NO;
+    glyph.accessibilityElementsHidden = YES;
+    [glyph removeFromSuperview];
+    if (sg_lyricsGlyph == glyph) sg_lyricsGlyph = nil;
+}
+
 void SGRPlayerLyricsChanged(void) {
+    SGRPlayerVisualiserUpdate();
+    SGRPlayerTextShadowsChanged();
     SGRGlyphButton *glyph = sg_lyricsGlyph;
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
+        if (glyph) removeLyricsGlyphFrom(glyph.superview);
+        return;
+    }
     if (!glyph) return;
     BOOL enabled = SGRPlayerLyricsCanOpen() || SGRPlayerLyricsOpen(), open = SGRPlayerLyricsOpen();
     BOOL wasOpen = [glyph.glyph.symbol isEqualToString:kLyricsSymbolOpen];
@@ -241,12 +257,24 @@ static void layOutFooter(UIViewController *unit) {
     SGRPlayerVanish(trimmer);
     SGRPlayerVanish(arrangedAround(trimmer, host));
 
+    UIView *connect = SGRFindByIdentifier(host, @"Components.ConnectButtonOutputSwitcher", &kConnectKey);
+    UIView *queue = SGRFindByIdentifier(host, @"QueueButtonNowPlaying", &kQueueKey);
+    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
+        // Vinyl draws its own lyrics control on the record. Remove the redesign's footer glyph from
+        // the hierarchy altogether so a later Spotify layout cannot bring it back.
+        removeLyricsGlyphFrom(host);
+        SGRPlayerVanish(arrangedAround(connect, host));
+        SGRPlayerVanish(arrangedAround(queue, host));
+        lowerRow(host);
+        scheduleFooterSettle(host);
+        return;
+    }
+
     SGRGlyphButton *lyrics = lyricsGlyphIn(host);
     lyrics.bounds = CGRectMake(0, 0, 44, 44);
     lyrics.center = CGPointMake(round(width * (rtl ? kTrailing : kLeading)), middleY);
     SGRPlayerLyricsChanged();
 
-    UIView *connect = SGRFindByIdentifier(host, @"Components.ConnectButtonOutputSwitcher", &kConnectKey);
     UIView *glyph = connectGlyphIn(connect);
     for (UIView *view = glyph.superview; view && view != connect; view = view.superview) {
         for (UIView *sibling in view.subviews) {
@@ -256,15 +284,6 @@ static void layOutFooter(UIViewController *unit) {
     UIView *pinned = glyph ?: connect;
     CGFloat connectFrom = moveTo(arrangedAround(connect, host), pinned, CGPointMake(CGRectGetMidX(pinned.bounds), CGRectGetMidY(pinned.bounds)), host, round(width * kMiddle));
 
-    UIView *queue = SGRFindByIdentifier(host, @"QueueButtonNowPlaying", &kQueueKey);
-    if (SGFlag(SGRKeyPlayerVinyl, NO)) {
-        SGRPlayerVanish(lyrics);
-        SGRPlayerVanish(arrangedAround(connect, host));
-        SGRPlayerVanish(arrangedAround(queue, host));
-        lowerRow(host);
-        scheduleFooterSettle(host);
-        return;
-    }
     CGFloat queueFrom = moveTo(arrangedAround(queue, host), queue, CGPointMake(CGRectGetMidX(queue.bounds), CGRectGetMidY(queue.bounds)), host, round(width * (rtl ? kLeading : kTrailing)));
 
     lowerRow(host);

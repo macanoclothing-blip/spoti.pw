@@ -847,8 +847,7 @@ static UIAction *artworkChoice(SGRPlayerMenuTakeover *t, SGRPlayerBackground bac
     UIAction *action = [UIAction actionWithTitle:title image:symbol(imageName) identifier:nil handler:^(UIAction *sender) {
         pick(weak, ^(SGRPlayerMenuTakeover *strong) {
             (void)strong;
-            SGSetInt(SGRKeyPlayerBackground, background);
-            [NSNotificationCenter.defaultCenter postNotificationName:SGRPlayerBackgroundDidChangeNotification object:nil];
+            SGRPlayerSetBackgroundStyle(background);
             SGLog(@"redesign player: %@ selected from Artwork menu", title);
         });
     }];
@@ -861,6 +860,8 @@ static UIMenu *artworkMenu(SGRPlayerMenuTakeover *t) {
         options:UIMenuOptionsSingleSelection children:@[
             artworkChoice(t, SGRPlayerBackgroundFluid, @"Cover art", @"photo"),
             artworkChoice(t, SGRPlayerBackgroundAnimated, @"Animated", @"livephoto"),
+            artworkChoice(t, SGRPlayerBackgroundVisualiser, @"Visualizer", @"waveform"),
+            artworkChoice(t, SGRPlayerBackgroundMosaic, @"Mosaic", @"circle.grid.3x3.fill"),
         ]];
 }
 

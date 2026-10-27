@@ -14,6 +14,7 @@
 #import "Headers/SPTPlayer.h"
 
 NSNotificationName const SGKaraokeLinesDidChangeNotification = @"spotifyglass.karaokeLinesDidChange";
+NSNotificationName const SGKaraokeSpotifyAuthorizationDidChangeNotification = @"spotifyglass.spotifyAuthorizationDidChange";
 
 static const NSUInteger kKeptTracks = 40;
 static const NSUInteger kSeenTracks = 200;
@@ -30,6 +31,7 @@ static NSMutableSet<NSString *> *sg_requested;
 static NSMutableSet<NSString *> *sg_asking;
 static NSMutableDictionary<NSString *, NSNumber *> *sg_losses;   // requests lost in a row, by track
 static NSDictionary<NSString *, NSString *> *sg_spclientHeaders;
+static NSString *sg_spotifyUsername;
 static __weak id sg_player;
 // Every track the player has reported, by id, so a source can name a track that is not the one
 // playing at the moment it is asked: a lyrics request routinely lands a beat before the player
@@ -49,8 +51,33 @@ static NSString *trackInURL(NSURL *url) {
     return track.length ? track : nil;
 }
 
+static void rememberSpotifyUsername(NSString *username) {
+    if (![username isKindOfClass:NSString.class]) return;
+    username = [username stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!username.length) return;
+    NSString *captured = [username copy];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if ([captured isEqualToString:sg_spotifyUsername]) return;
+        sg_spotifyUsername = captured;
+        SGLog(@"records: captured the current username from Spotify's authenticated account session");
+    });
+}
+
 static void rememberHeaders(NSURLSession *session, NSURLRequest *request) {
-    if (![request.URL.host containsString:@"spclient"]) return;
+    if (![request.URL.host.lowercaseString containsString:@"spclient"]) return;
+
+    NSString *path = request.URL.path;
+    NSString *marker = @"/playlist/v2/user/";
+    NSRange markerRange = [path rangeOfString:marker];
+    if (markerRange.location != NSNotFound) {
+        NSString *tail = [path substringFromIndex:NSMaxRange(markerRange)];
+        NSString *candidate = [tail componentsSeparatedByString:@"/"].firstObject;
+        if (candidate.length && [[tail substringFromIndex:candidate.length] hasPrefix:@"/rootlist"]) {
+            NSString *username = [candidate stringByRemovingPercentEncoding] ?: candidate;
+            rememberSpotifyUsername(username);
+        }
+    }
+
     NSMutableDictionary<NSString *, NSString *> *all = [NSMutableDictionary dictionary];
     [session.configuration.HTTPAdditionalHeaders enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *stop) {
         if ([key isKindOfClass:NSString.class] && [value isKindOfClass:NSString.class]) all[[key lowercaseString]] = value;
@@ -67,7 +94,10 @@ static void rememberHeaders(NSURLSession *session, NSURLRequest *request) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSString *before = sg_spclientHeaders[@"authorization"];
         sg_spclientHeaders = headers;
-        if (![headers[@"authorization"] isEqualToString:before]) SGArtworkSpotifyHeadersChanged();
+        if (![headers[@"authorization"] isEqualToString:before]) {
+            SGArtworkSpotifyHeadersChanged();
+            [NSNotificationCenter.defaultCenter postNotificationName:SGKaraokeSpotifyAuthorizationDidChangeNotification object:nil];
+        }
     });
 }
 
@@ -150,6 +180,10 @@ NSDictionary<NSString *, NSString *> *SGKaraokeSpotifyHeaders(void) {
 
 NSString *SGKaraokeSpotifyAuthorization(void) {
     return sg_spclientHeaders[@"authorization"];
+}
+
+NSString *SGKaraokeSpotifyUsername(void) {
+    return sg_spotifyUsername;
 }
 
 // `retry`: the sources' walk failed on the way, so an answer with no lines is not final either.
@@ -312,6 +346,32 @@ static void prefetch(SPTPlayerTrack *track, NSString *trackID, SPTPlayerState *s
 }
 %end
 
+// Spotify 9.1.78 exposes the account name through these auth objects. Capture it when Spotify
+// reads its own signed-in account, instead of relying on a rootlist request reaching one delegate.
+%hook SPTAuthSessionImplementation
+- (NSString *)canonicalUsername {
+    NSString *username = %orig;
+    rememberSpotifyUsername(username);
+    return username;
+}
+%end
+
+%hook SPTAuthLegacySession
+- (NSString *)currentUsername {
+    NSString *username = %orig;
+    rememberSpotifyUsername(username);
+    return username;
+}
+%end
+
+%hook SPTAccountInfo
+- (NSString *)username {
+    NSString *username = %orig;
+    rememberSpotifyUsername(username);
+    return username;
+}
+%end
+
 // A new track is noticed where the player is asked for its state, and with nothing on screen nothing
 // may ask: the player's own report of the change asks it, so the walk starts at the skip.
 @interface SGKaraokeTrackWatcher : NSObject <SGPlayerStateObserver>
@@ -355,6 +415,7 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
     sg_requested = [NSMutableSet set];
     sg_asking = [NSMutableSet set];
     sg_losses = [NSMutableDictionary dictionary];
+    sg_spotifyUsername = nil;
     sg_ownSources = SGLyricsActive();
     %init;
     sg_trackWatcher = [SGKaraokeTrackWatcher new];
@@ -370,6 +431,7 @@ static SGKaraokeTrackWatcher *sg_trackWatcher;
     SGLog(@"karaoke: on");
     SGRequireClasses(@[
         @"SPTEsperantoPlayer", @"SPTPlayerState",
+        @"SPTAuthSessionImplementation", @"SPTAuthLegacySession", @"SPTAccountInfo",
         @"SPTDataLoaderService", @"_TtC26Connectivity_HttpClientKit20HttpClientURLSession",
     ]);
 }

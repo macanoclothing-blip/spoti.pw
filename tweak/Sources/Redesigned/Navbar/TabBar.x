@@ -17,7 +17,9 @@
 #import "Settings/SGPage.h"
 #import "Headers/SPTEncoreIconView.h"
 #import "Shared/Player/PlayerState.h"
+#import "Shared/Navigation/Links.h"
 #import "Redesigned/NowPlayingBar/NowPlayingBar.h"
+#import "Redesigned/Player/PlayerVinyl.h"
 #import <objc/message.h>
 
 static char kBarKey, kHostKey;
@@ -136,6 +138,35 @@ static UIImage *glyphOf(UIView *item, BOOL active) {
     return size.width >= 2 ? renderLayer(live.layer, size) : nil;
 }
 
+static BOOL isLibrarySource(UIView *source) {
+    NSString *label = labelIn(source).text;
+    if (!label.length) return NO;
+    NSString *folded = [label stringByFoldingWithOptions:NSDiacriticInsensitiveSearch locale:[NSLocale localeWithLocaleIdentifier:@"en_US"]].lowercaseString;
+    return [folded containsString:@"library"] || [folded containsString:@"librer"] || [folded containsString:@"biblioteca"];
+}
+
+static NSString *visibleTitle(UIView *source, BOOL hideLabels) {
+    if (hideLabels) return nil;
+    if (SGFlag(SGRKeyPlayerVinyl, NO) && isLibrarySource(source)) return @"Records";
+    return labelIn(source).text;
+}
+
+static UIImage *visibleGlyph(UIView *source, BOOL active) {
+    if (SGFlag(SGRKeyPlayerVinyl, NO) && isLibrarySource(source)) {
+        UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIFontWeightSemibold];
+        UIImage *image = [UIImage systemImageNamed:@"opticaldisc" withConfiguration:configuration];
+        return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+    return glyphOf(source, active);
+}
+
+static BOOL openRecordsForLibrary(UIView *source) {
+    if (!SGFlag(SGRKeyPlayerVinyl, NO) || !isLibrarySource(source)) return NO;
+    NSURL *uri = [NSURL URLWithString:@"spotifyglass:records"];
+    if (!SGOpenSpotifyURI(uri)) SGLog(@"tab bar: could not open Records from the Library tab");
+    return YES;
+}
+
 #pragma mark - passing a tap on
 
 // NavigationUI_TabBarImpl's TabBarItemElementUI answers a tap recognizer (-handleTap), so the tap is
@@ -209,7 +240,7 @@ static UITabBarItem *itemAtPoint(UITabBar *bar, CGPoint point) {
     if (index == NSNotFound || index >= self.sources.count) return;
     SGRTabPicked(self.sources[index]);
     // Home tapped while on Home pops Spotify's stack, which would take Mod Settings straight off it.
-    if (!self.holding) forwardTap(self.sources[index]);
+    if (!self.holding && !openRecordsForLibrary(self.sources[index])) forwardTap(self.sources[index]);
     // Spotify repaints its labels a moment later; a tap it did not take snaps the selection back.
     UIView *stockBar = self.stockBar;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -425,7 +456,7 @@ static void syncBar(UIView *stockBar) {
 
     if (![sources isEqualToArray:bar.sources]) {
         NSMutableArray<UITabBarItem *> *items = [NSMutableArray array];
-        for (UIView *source in sources) [items addObject:[[UITabBarItem alloc] initWithTitle:hideLabels ? nil : labelIn(source).text image:nil tag:items.count]];
+        for (UIView *source in sources) [items addObject:[[UITabBarItem alloc] initWithTitle:visibleTitle(source, hideLabels) image:nil tag:items.count]];
         bar.sources = sources;
         [bar setItems:items animated:NO];
         NSMutableString *out = [NSMutableString stringWithString:@"tab bar icons"];
@@ -446,10 +477,12 @@ static void syncBar(UIView *stockBar) {
     BOOL missing = NO;
     for (NSUInteger i = 0; i < sources.count; i++) {
         UITabBarItem *item = bar.items[i];
-        if (!item.image) item.image = glyphOf(sources[i], NO);
-        if (!item.selectedImage || item.selectedImage == item.image) item.selectedImage = glyphOf(sources[i], YES);
+        UIImage *normalGlyph = visibleGlyph(sources[i], NO);
+        UIImage *activeGlyph = visibleGlyph(sources[i], YES);
+        if (normalGlyph && item.image != normalGlyph) item.image = normalGlyph;
+        if (activeGlyph && item.selectedImage != activeGlyph) item.selectedImage = activeGlyph;
         missing |= !item.image || !item.selectedImage;
-        NSString *title = hideLabels ? nil : labelIn(sources[i]).text;
+        NSString *title = visibleTitle(sources[i], hideLabels);
         if (hideLabels ? item.title != nil : title.length && ![title isEqualToString:item.title]) item.title = title;
         if (!selected && (modTab != NSNotFound ? i == modTab : isActive(sources[i]))) selected = item;
     }
@@ -644,7 +677,7 @@ static void nameScrollView(void) {
     if (self.leadRedirected) index = 0;
     if (index < self.sources.count) SGRTabPicked(self.sources[index]);
     // Home tapped while on Home pops Spotify's stack, which would take Mod Settings straight off it.
-    if (index < self.sources.count && !self.holding) forwardTap(self.sources[index]);
+    if (index < self.sources.count && !self.holding && !openRecordsForLibrary(self.sources[index])) forwardTap(self.sources[index]);
     UIView *stockBar = self.stockBar;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (stockBar) syncBar(stockBar);
@@ -762,19 +795,19 @@ static void syncInline(UIView *stockBar) API_AVAILABLE(ios(26.0)) {
     if (![sources isEqualToArray:tabs.sources]) {
         NSMutableArray<UITab *> *list = [NSMutableArray array];
         for (UIView *source in sources) {
-            NSString *title = hideLabels ? @"" : (labelIn(source).text ?: @"");
+            NSString *title = visibleTitle(source, hideLabels) ?: @"";
             UITab *tab;
             // UIKit keeps a search tab in its own circle beside the minimized bar, so the last tab of the
             // Navbar order is one, whichever it is.
             if (sources.count > 1 && source == sources.lastObject) {
                 UISearchTab *search = [[UISearchTab alloc] initWithViewControllerProvider:^UIViewController *(UITab *t) { return inlinePage(t); }];
                 search.title = title;
-                search.image = glyphOf(source, NO);
+                search.image = visibleGlyph(source, NO);
                 search.automaticallyActivatesSearch = NO;
                 tab = search;
             } else {
                 NSString *identifier = [NSString stringWithFormat:@"spotifyglass.tab.%lu", (unsigned long)list.count];
-                tab = [[UITab alloc] initWithTitle:title image:glyphOf(source, NO) identifier:identifier
+                tab = [[UITab alloc] initWithTitle:title image:visibleGlyph(source, NO) identifier:identifier
                             viewControllerProvider:^UIViewController *(UITab *t) { return inlinePage(t); }];
             }
             [list addObject:tab];
@@ -801,7 +834,7 @@ static void syncInline(UIView *stockBar) API_AVAILABLE(ios(26.0)) {
         UITab *tab = tabs.tabs[i];
         BOOL active = modTab != NSNotFound ? i == modTab : isActive(sources[i]);
         if (active && !selected) selected = tab;
-        UIImage *image = glyphOf(sources[i], active);
+        UIImage *image = visibleGlyph(sources[i], active);
         missing |= !image;
         if (lead && [tabs isMiddle:i]) image = lead;
         if (image && tab.image != image) tab.image = image;

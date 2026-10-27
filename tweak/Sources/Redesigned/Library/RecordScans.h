@@ -1,0 +1,76 @@
+// A record's own sleeve for the Records page (RecordsPage.m), scanned from a vinyl pressing of the album: its front,
+// its back, its spine, a hype sticker scanned on its own, and the inside of a gatefold, from the Cover Art Archive
+// (coverartarchive.org), which keeps MusicBrainz's releases' pictures with what each shows.
+//
+// The album is MusicBrainz's release group of that title, artist and kind (album, single or EP, compilation), the
+// title the same letter for letter but for case and accents, so a single of the same name or a deluxe edition is not
+// taken for it (musicbrainz.org/ws/2, at most one request a second as it asks). Of that group's releases only the
+// official vinyl ones of the same title with a front picture are looked at, plain pressings before any with a note
+// (a colored vinyl, a reissue) and never a picture disc or a deluxe, anniversary or expanded one, the oldest first.
+// The first whose pictures have a front gives the whole sleeve. A CD is never used: an album without a vinyl scan
+// keeps its streaming cover. Pictures are kept by what MusicBrainz says they show: a spine only when that is all it
+// shows and it is drawn out like one (a back photographed with its spine is a back).
+//
+// With a Discogs token (SGKeyDiscogsToken, the user's own, from discogs.com > Settings > Developers), an album none of
+// MusicBrainz's pressings has a scan of is looked for on Discogs too (api.discogs.com, which answers its database
+// only to a signed-in program): its master release of that title, the master's vinyl versions as above, and the first
+// whose front shows the cover. Discogs names a picture only as the front or not, so the rest are told by their shape:
+// one drawn out like a spine is the spine, one twice as wide as tall is a spread (the inside, unless its right half
+// is the front, when its left half is the back), and the first square one after the front the back.
+//
+// What is found, and what is not, is kept in Caches, so an album is asked about once (one that had nothing is asked
+// again after a month).
+//
+// Threading: main thread, but for the downloads, which report on main.
+#import <UIKit/UIKit.h>
+
+#define SGKeyDiscogsToken @"spotifyglass.records.discogsToken"
+// After the token is set or changed: every album found to have no sleeve is looked for again. Main thread.
+void SGRRecordScansForgetMissing(void);
+
+// What the lookups are doing, for the Records page to show: the album being looked for, what is being asked, and
+// how far along it is (0 to 1); nil while none is. Posted on main as it changes.
+extern NSNotificationName const SGRRecordScansDidChangeNotification;
+@interface SGRScanStatus : NSObject
+@property (nonatomic, copy) NSString *title, *artist, *step;
+@property (nonatomic) float progress;
+// Albums waiting after this one.
+@property (nonatomic) NSUInteger waiting;
+@end
+SGRScanStatus *SGRRecordScansStatus(void);
+
+@interface SGRSleeve : NSObject
+@property (nonatomic, strong) UIImage *front, *back, *spine, *sticker;
+// The inside of a gatefold, its left and right halves; nil when the sleeve has none, or no scan of it.
+@property (nonatomic, copy) NSArray<UIImage *> *gatefold;
+@end
+
+// `kind` is Spotify's album_type: album, single (a single or an EP), ep or compilation. A pressing's front must show the
+// same picture as `cover`, the streaming one, allowing for a scan's light and color, so a picture disc in its clear
+// sleeve, or another edition's cover, is passed over for the next. `done` on main, once, with the sleeve, or nil when
+// no vinyl pressing has a scan of it. `again` looks again for an album found to have none, or whose lookup failed.
+void SGRRecordSleeve(NSString *title, NSString *artist, NSString *kind, UIImage *cover, BOOL again, void (^done)(SGRSleeve *sleeve));
+
+// A spine photographed standing turned to lie along the record's edge, its writing reading left to right. Any thread.
+UIImage *SGRLyingSpine(UIImage *spine);
+
+// The cover's most vivid color of those it has a fair amount of, for a record pressed in the album's color: its colors
+// weighed by how much of the cover each takes and how strong it is. Black for a cover with no color. Any thread.
+UIColor *SGRProminentColor(UIImage *cover);
+
+// The people in each artist, to keep an artist's side projects with them (RecordsPage.m's Artist order): a band's
+// members, past ones too, or a person themself, from MusicBrainz (its artist search, then the artist's band
+// relations), kept in Caches. `artists` not known yet are looked up one at a time behind the sleeves' lookups'
+// rate; SGRArtistFamiliesDidChangeNotification is posted on main after each few, and when the last is in.
+extern NSNotificationName const SGRArtistFamiliesDidChangeNotification;
+void SGRLookUpArtists(NSArray<NSString *> *artists);
+// MusicBrainz's ids of the people in `artist`; nil while not known, empty when it was not found.
+NSSet<NSString *> *SGRArtistPeople(NSString *artist);
+
+// A short description of the album from Wikipedia (its search, then the page's summary), when a page of that title
+// names the artist; `done` on main with it, or nil. Kept in Caches, misses for a month.
+void SGRAlbumAbout(NSString *title, NSString *artist, void (^done)(NSString *about));
+
+// The colors a label strip in the cover's colors takes: the cover's most common color, and of the cover's other
+// colors the one that reads best on it, else white or black. Any thread.
+void SGRSpineColors(UIImage *cover, UIColor **back, UIColor **text);

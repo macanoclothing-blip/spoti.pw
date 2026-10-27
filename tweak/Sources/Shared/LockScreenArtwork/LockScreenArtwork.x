@@ -7,6 +7,7 @@
 #import "SGArtworkFile.h"
 #import "SGCanvas.h"
 #import "Headers/SPTPlayer.h"
+#import "Shared/LockScreenLyrics/LockScreenLyrics.h"
 #import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Player/PlayerState.h"
@@ -20,6 +21,8 @@ static NSDictionary *sg_info;
 static CFAbsoluteTime sg_infoAt;
 static MPMediaItemArtwork *sg_cover;
 static NSDictionary<NSString *, id> *sg_artworkByKey;
+static NSDictionary<NSString *, id> *sg_lyricsArtworkByKey;
+static NSString *sg_lyricsArtworkTitle;
 
 static NSString *sg_wanted;
 static NSString *sg_playing;   // the source the artwork set for sg_wanted came from
@@ -141,6 +144,16 @@ static void resend(void) {
     MPNowPlayingInfoCenter.defaultCenter.nowPlayingInfo = now;
 }
 
+void SGArtworkSetLyricsOverlay(NSDictionary<NSString *, id> *artworkByKey, NSString *title) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        @synchronized (sg_lock) {
+            sg_lyricsArtworkByKey = artworkByKey.count ? [artworkByKey copy] : nil;
+            sg_lyricsArtworkTitle = artworkByKey.count ? [title copy] : nil;
+        }
+        resend();
+    });
+}
+
 static NSDictionary *localStillArtwork(NSDictionary *info) {
     if (!info.count) return info;
     NSString *uri = SGURIString(SGPlayerState().track.URI);
@@ -222,6 +235,8 @@ static void play(NSString *uri, SGCanvas *canvas, NSString *source) {
     SGArtworkFetch(canvas.identifier, canvas.address, ^(NSURL *file, NSString *note) {
         SGLog(@"lock artwork: %@ %@", canvas.identifier, note);
         if (!file) return;
+        if (![sg_wanted isEqualToString:uri]) return;
+        SGLyricsArtworkSetMotion(uri, file);
         NSArray<NSString *> *keys = SGAnimatedArtworkKeys();
         NSMutableDictionary<NSString *, id> *artworks = [NSMutableDictionary dictionary];
         prepareArtworkVariant(keys, 0, uri, source, canvas, file, artworks);
@@ -325,6 +340,7 @@ static void resolve(SPTPlayerTrack *track) {
     if (same && (spotifyAt == NSNotFound || (sg_playing && [order indexOfObject:sg_playing] < spotifyAt))) return;
     sg_wanted = uri;
     sg_playing = nil;
+    SGLyricsArtworkSetMotion(uri, nil);
     SGArtworkCancelFetch();
     @synchronized (sg_lock) {
         sg_artworkByKey = nil;
@@ -371,7 +387,10 @@ void SGArtworkSpotifyHeadersChanged(void) {
         if (info[MPMediaItemPropertyArtwork]) sg_cover = info[MPMediaItemPropertyArtwork];
         sg_info = SGArtworkInInfo(info, nil);
         sg_infoAt = CFAbsoluteTimeGetCurrent();
-        artworkByKey = sg_artworkByKey;
+        NSString *title = [info[MPMediaItemPropertyTitle] isKindOfClass:NSString.class]
+            ? info[MPMediaItemPropertyTitle] : nil;
+        artworkByKey = title.length && [title isEqualToString:sg_lyricsArtworkTitle]
+            ? sg_lyricsArtworkByKey : sg_artworkByKey;
     }
     %orig(SGArtworkInInfo(info, artworkByKey));
 }

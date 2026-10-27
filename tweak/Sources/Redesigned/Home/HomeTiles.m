@@ -18,6 +18,7 @@
 
 // How far the cover sits in from the tile's top, bottom and leading edges, and its corners there.
 static const CGFloat kInset = 5, kCoverRadius = 4;
+static const CGFloat kTileRadius = 14;
 
 static char kSurfaceKey, kImageKey, kShownKey;
 
@@ -69,6 +70,11 @@ static UIView *surfaceIn(UIView *tile, UIView *fill) {
         else [tile insertSubview:surface atIndex:0];
     }
     if (!CGRectEqualToRect(surface.frame, tile.bounds)) surface.frame = tile.bounds;
+    surface.layer.cornerRadius = kTileRadius;
+    surface.layer.cornerCurve = kCACornerCurveContinuous;
+    surface.layer.borderWidth = 0.75;
+    surface.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.24].CGColor;
+    surface.clipsToBounds = YES;
     return surface;
 }
 

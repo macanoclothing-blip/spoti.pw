@@ -58,6 +58,7 @@ UIViewController *SGAboutPage(void) {
         ]),
         SGSection(nil, @[
             withSymbol(SGActionRow(@"Export settings", nil, ^{ SGExportSettings(); }), @"square.and.arrow.up"),
+            withSymbol(SGActionRow(@"Export logs", @"Share recent spoti.pw logs for troubleshooting.", ^{ SGExportLogs(); }), @"doc.text.magnifyingglass"),
             withSymbol(SGActionRow(@"Import settings", nil, ^{ SGImportSettings(); }), @"square.and.arrow.down"),
         ]),
         SGSection(nil, @[reset]),

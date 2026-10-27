@@ -13,6 +13,7 @@
 //
 // Threading: everything here is main thread, except SGDSPStatus and SGDSPError, which any thread may call.
 #import <Foundation/Foundation.h>
+#import <stdint.h>
 
 #pragma mark - keys
 
@@ -135,3 +136,11 @@ NSString *SGDSPError(NSString *switchKey);
 void SGDSPEqualizerResponse(NSArray<NSNumber *> *gains, NSInteger count, double *frequencies, double *decibels);
 // The compander's amounts drawn as a smooth curve, the same way.
 void SGDSPCompanderResponse(NSArray<NSNumber *> *gains, NSInteger count, double *frequencies, double *values);
+
+#pragma mark - observing the output
+
+// A read-only observer of Spotify's speaker-bound output, after Speed/Pitch and the effects stage. Called on
+// the render thread in bounded chunks; it must not allocate, lock, block, or send Objective-C messages.
+typedef void (*SGAudioOutputReader)(const float *samples, uint32_t count, double sampleRate);
+// Replaces the single observer. NULL removes it. A removed reader may finish a call already in progress.
+void SGAudioSetOutputReader(SGAudioOutputReader reader);

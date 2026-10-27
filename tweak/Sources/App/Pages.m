@@ -63,7 +63,8 @@ UIViewController *SGNavbarPage(void) {
 // Pronunciation, translation, word sweeping and line meanings exist only in the redesign's lyrics.
 UIViewController *SGLyricsSettingsPage(void) {
     BOOL redesigned = SGRedesignedUIStored();
-    NSMutableArray<SGModRow *> *more = [NSMutableArray arrayWithObject:SGLockScreenLyricsRow()];
+    NSMutableArray<SGModRow *> *more = [NSMutableArray arrayWithObjects:SGLockScreenLyricsRow(), SGLockScreenLyricsArtworkRow(),
+        SGLockScreenLyricsArtworkStyleRow(), nil];
     if (!redesigned) [more insertObject:SGGlassLyricsRow() atIndex:0];
     NSMutableArray<SGModSection *> *sections = [NSMutableArray arrayWithObject:SGLyricsSourcesSection(redesigned)];
     if (redesigned) {

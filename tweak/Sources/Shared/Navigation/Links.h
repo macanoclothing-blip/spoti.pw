@@ -1,9 +1,13 @@
-// Opening a spotify: URI the way the app opens a link of its own, through its link dispatcher: the
-// tabs of the mod's own on either look's bar, the redesigned player's lyrics glyph.
+// Opening a Spotify URI through its dispatcher, or a registered spotifyglass: URI on the current tab's stack.
 #import <Foundation/Foundation.h>
+@class UIViewController;
 
-// NO before the dispatcher is set up, or for a nil URI.
+// NO before the dispatcher is set up for Spotify URIs, or for an unknown URI.
 BOOL SGOpenSpotifyURI(NSURL *uri);
+// A page of the mod's own, made on each open and pushed onto the selected Spotify navigation stack.
+void SGRegisterModPage(NSString *uri, UIViewController *(^make)(void));
+// The higher UI layer supplies presentation so Shared does not depend on Settings or Redesigned.
+void SGRegisterModPageOpener(BOOL (^open)(UIViewController *page, NSURL *uri));
 id SGLinkDispatcher(void);   // SPTLinkDispatcherImplementation, nil until it is set up
 
 // Whether the dispatcher has somewhere to send a URI, asked the way it asks itself before it opens
