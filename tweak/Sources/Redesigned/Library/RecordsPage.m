@@ -253,7 +253,6 @@ static NSDate *recordDate(id value) {
 
 // Spotify's own Library uses the spclient rootlist, which includes private playlists without asking
 // the Web API token for playlist-read-private. Rootlist items and their metadata are parallel arrays.
-static SGRRecord *recordOfRootlistItem(id item, id metadata, NSString *userID) {
 static SGRRecord *recordOfRootlistItem(id item, id metadata, NSString *username) {
     if (![item isKindOfClass:NSDictionary.class]) return nil;
     NSString *uri = [item[@"uri"] isKindOfClass:NSString.class] ? item[@"uri"] : nil;
@@ -269,7 +268,6 @@ static SGRRecord *recordOfRootlistItem(id item, id metadata, NSString *username)
                    ([attributes[@"name"] isKindOfClass:NSString.class] ? attributes[@"name"] : @"");
     NSString *owner = [meta[@"ownerUsername"] isKindOfClass:NSString.class] ? meta[@"ownerUsername"] :
                       ([attributes[@"ownerUsername"] isKindOfClass:NSString.class] ? attributes[@"ownerUsername"] : nil);
-    record.ownerID = owner.length ? owner : userID;
     record.ownerID = owner.length ? owner : username;
     record.artist = owner.length ? owner : @"Your playlist";
     NSDictionary *entryAttributes = [item[@"attributes"] isKindOfClass:NSDictionary.class] ? item[@"attributes"] : @{};
@@ -292,12 +290,10 @@ static SGRRecord *recordOfRootlistItem(id item, id metadata, NSString *username)
     return record;
 }
 
-static void readSpotifyRootlist(NSString *userID, NSUInteger from, NSMutableArray<SGRRecord *> *sofar,
 static void readSpotifyRootlist(NSString *username, NSUInteger from, NSMutableArray<SGRRecord *> *sofar,
                                 void (^done)(NSArray<SGRRecord *> *playlists)) {
     NSDictionary<NSString *, NSString *> *headers = SGKaraokeSpotifyHeaders();
     NSString *authorization = headers[@"authorization"] ?: headers[@"Authorization"];
-    if (!authorization.length || !userID.length || from > 10000) {
     if (!authorization.length || !username.length || from > 10000) {
         SGLog(@"records: Spotify rootlist skipped (authorization %@, profile %@, offset %lu)",
               authorization.length ? @"available" : @"missing", username.length ? @"available" : @"missing", (unsigned long)from);
@@ -306,7 +302,6 @@ static void readSpotifyRootlist(NSString *username, NSUInteger from, NSMutableAr
     }
 
     NSString *path = [NSString stringWithFormat:@"https://spclient.wg.spotify.com/playlist/v2/user/%@/rootlist?decorate=revision%%2Clength%%2Cattributes%%2Ctimestamp%%2Cowner&from=%lu&length=120",
-                      [userID stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet], (unsigned long)from];
                       [username stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLPathAllowedCharacterSet], (unsigned long)from];
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:path]];
     request.HTTPMethod = @"GET";
@@ -330,14 +325,11 @@ static void readSpotifyRootlist(NSString *username, NSUInteger from, NSMutableAr
             NSArray *metadata = [contents[@"metaItems"] isKindOfClass:NSArray.class] ? contents[@"metaItems"] : @[];
             for (NSUInteger i = 0; i < items.count; i++) {
                 id meta = i < metadata.count ? metadata[i] : nil;
-                SGRRecord *record = recordOfRootlistItem(items[i], meta, userID);
                 SGRRecord *record = recordOfRootlistItem(items[i], meta, username);
                 if (record) [sofar addObject:record];
             }
             // The endpoint pages every rootlist entry, including folder markers. Advance by raw
             // entries, not by playlists, and stop on a short page.
-            if (items.count == 120) readSpotifyRootlist(userID, from + items.count, sofar, done);
-            else done(sofar);
             if (items.count == 120) {
                 readSpotifyRootlist(username, from + items.count, sofar, done);
             } else {
@@ -348,15 +340,6 @@ static void readSpotifyRootlist(NSString *username, NSUInteger from, NSMutableAr
     }] resume];
 }
 
-static void readSavedPlaylists(NSMutableArray<SGRRecord *> *sofar, NSString *path,
-                               void (^done)(NSArray<SGRRecord *> *playlists));
-
-static NSArray<SGRRecord *> *mergePlaylistRecords(NSArray<SGRRecord *> *webPlaylists, NSArray<SGRRecord *> *rootlist) {
-    NSMutableArray<SGRRecord *> *merged = [NSMutableArray arrayWithArray:webPlaylists ?: @[]];
-    NSMutableDictionary<NSString *, NSNumber *> *indexByURI = [NSMutableDictionary dictionary];
-    for (NSUInteger i = 0; i < merged.count; i++) {
-        NSString *uri = merged[i].uri;
-        if (uri.length) indexByURI[uri] = @(i);
 static void readRootlistWhenAccountIsReady(NSUInteger attempt, void (^done)(NSArray<SGRRecord *> *playlists)) {
     NSString *username = SGKaraokeSpotifyUsername();
     NSDictionary<NSString *, NSString *> *headers = SGKaraokeSpotifyHeaders();
@@ -369,60 +352,18 @@ static void readRootlistWhenAccountIsReady(NSUInteger attempt, void (^done)(NSAr
         });
         return;
     }
-    for (SGRRecord *rootRecord in rootlist ?: @[]) {
-        NSString *uri = rootRecord.uri;
-        if (!uri.length) continue;
-        NSNumber *index = indexByURI[uri];
-        if (!index) {
-            indexByURI[uri] = @(merged.count);
-            [merged addObject:rootRecord];
-            continue;
-        }
-
-        // Prefer the rootlist's private-playlist metadata, but keep the public API's richer display
-        // name and cover URL when the rootlist omits them. Preserve the public list's stable position.
-        SGRRecord *webRecord = merged[index.unsignedIntegerValue];
-        if (!rootRecord.title.length) rootRecord.title = webRecord.title;
-        if (!rootRecord.picture.length) rootRecord.picture = webRecord.picture;
-        if (webRecord.artist.length) rootRecord.artist = webRecord.artist;
-        if (!rootRecord.ownerID.length) rootRecord.ownerID = webRecord.ownerID;
-        if (rootRecord.trackCount <= 0) rootRecord.trackCount = webRecord.trackCount;
-        if ([rootRecord.added isEqualToDate:NSDate.distantPast]) rootRecord.added = webRecord.added;
-        merged[index.unsignedIntegerValue] = rootRecord;
     if (attempt >= 40) {
         SGLog(@"records: account session not ready for rootlist (username %@, authorization %@)",
               username.length ? @"available" : @"missing", authorization.length ? @"available" : @"missing");
         done(nil);
         return;
     }
-    return merged;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         readRootlistWhenAccountIsReady(attempt + 1, done);
     });
 }
 
 static void readCurrentUsersPlaylists(void (^done)(NSArray<SGRRecord *> *playlists)) {
-    // Read the stable public endpoint first, then merge the first-party rootlist for private entries.
-    readSavedPlaylists([NSMutableArray array], @"me/playlists?limit=50", ^(NSArray<SGRRecord *> *webPlaylists) {
-        SGWebAPI(@"GET", @"me", ^(NSInteger status, id answer) {
-            NSString *userID = status == 200 && [answer isKindOfClass:NSDictionary.class] && [answer[@"id"] isKindOfClass:NSString.class]
-                ? answer[@"id"] : nil;
-            if (!userID.length) {
-                SGLog(@"records: current profile answered %ld; using Web API playlists only", (long)status);
-                done(webPlaylists);
-                return;
-            }
-
-            readSpotifyRootlist(userID, 0, [NSMutableArray array], ^(NSArray<SGRRecord *> *rootlist) {
-                if (!rootlist.count) {
-                    SGLog(@"records: rootlist unavailable or empty; using Web API playlists only");
-                    done(webPlaylists);
-                    return;
-                }
-                done(mergePlaylistRecords(webPlaylists, rootlist));
-            });
-        });
-    });
     // `spclient` credentials are not a Web API OAuth token; `/me/playlists` returns 404 with them.
     // Use the same authenticated rootlist Spotify uses for its Library, after its account session
     // hooks have supplied the canonical username and service headers.
