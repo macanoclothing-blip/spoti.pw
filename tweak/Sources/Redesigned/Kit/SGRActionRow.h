@@ -21,6 +21,10 @@
 @property (nonatomic, copy) UIColor *fillColor;
 // The glyph's and the word's colour; nil is the accent.
 @property (nonatomic, copy) UIColor *contentColor;
+// Used when the Spotify control has no accessible title in its view tree.
+@property (nonatomic, copy) NSString *titleOverride;
+// Used when the Spotify control draws its glyph outside a UIImageView.
+@property (nonatomic, strong) UIImage *fallbackGlyph;
 // Takes the glyph, the word and the language from `source`, and follows the glyph as Spotify swaps it
 // (play becoming pause) without the header laying out again. Cheap to call again on every pass.
 - (void)feedFrom:(UIView *)source;

@@ -376,18 +376,72 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 }
 
 - (void)exportToController:(UIViewController *)controller source:(UIView *)source {
-    NSArray *events = self.events;
-    NSError *error = nil;
-    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"version": @1, kEventsKey: events}
-                                                   options:NSJSONWritingPrettyPrinted error:&error];
+    CGSize canvasSize = CGSizeMake(1080, 1350);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
+    UIImage *atlas = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextRef graphics = context.CGContext;
+        CGContextSetFillColorWithColor(graphics, UIColor.blackColor.CGColor);
+        CGContextFillRect(graphics, (CGRect){CGPointZero, canvasSize});
+
+        NSDictionary *titleAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:64 weight:UIFontWeightBold],
+            NSForegroundColorAttributeName: UIColor.whiteColor,
+        };
+        [@"Music Universe" drawAtPoint:CGPointMake(64, 64) withAttributes:titleAttributes];
+
+        NSDictionary *summaryAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:30 weight:UIFontWeightRegular],
+            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.65],
+        };
+        NSMutableSet<NSString *> *artists = [NSMutableSet set];
+        for (NSDictionary *event in self.events) {
+            NSString *artist = event[kArtistKey];
+            if (artist.length) [artists addObject:artist];
+        }
+        NSString *summary = [NSString stringWithFormat:@"%lu ascolti · %lu artisti",
+                             (unsigned long)self.events.count, (unsigned long)artists.count];
+        [summary drawAtPoint:CGPointMake(68, 145) withAttributes:summaryAttributes];
+
+        CGRect mapFrame = CGRectMake(48, 230, canvasSize.width - 96, 760);
+        UIBezierPath *mapPath = [UIBezierPath bezierPathWithRoundedRect:mapFrame cornerRadius:36];
+        [[UIColor colorWithWhite:1 alpha:0.06] setFill];
+        [mapPath fill];
+        NSArray *artistNames = artists.allObjects;
+        NSUInteger nodeCount = MIN(artistNames.count, 24);
+        for (NSUInteger index = 0; index < nodeCount; index++) {
+            NSString *artist = artistNames[index];
+            CGFloat angle = (CGFloat)index / MAX(1, nodeCount) * (CGFloat)M_PI * 2.0;
+            CGFloat radius = 150 + (index % 4) * 55;
+            CGPoint point = CGPointMake(CGRectGetMidX(mapFrame) + cos(angle) * radius,
+                                        CGRectGetMidY(mapFrame) + sin(angle) * radius);
+            CGFloat size = 22 + (index % 3) * 8;
+            [[UIColor colorWithHue:(CGFloat)index / MAX(1, nodeCount)
+                        saturation:0.72 brightness:0.95 alpha:0.9] setFill];
+            [[UIBezierPath bezierPathWithOvalInRect:CGRectMake(point.x - size / 2, point.y - size / 2,
+                                                                size, size)] fill];
+            NSDictionary *artistAttributes = @{
+                NSFontAttributeName: [UIFont systemFontOfSize:20 weight:UIFontWeightMedium],
+                NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.8],
+            };
+            [artist drawAtPoint:CGPointMake(point.x + size / 2 + 10, point.y - 11)
+                 withAttributes:artistAttributes];
+        }
+
+        NSDictionary *footerAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:24 weight:UIFontWeightMedium],
+            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.5],
+        };
+        [@"spoti.pw · Music Universe" drawAtPoint:CGPointMake(68, 1245) withAttributes:footerAttributes];
+    }];
+    NSData *data = UIImagePNGRepresentation(atlas);
     if (!data) {
-        SGLog(@"music universe: failed to serialize the user's local export: %@", error);
+        SGLog(@"music universe: failed to render the atlas image");
         return;
     }
-    NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"MusicUniverse.json"]];
+    NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"MusicUniverse.png"]];
     NSError *writeError = nil;
     if (![data writeToURL:file options:NSDataWritingAtomic error:&writeError]) {
-        SGLog(@"music universe: could not prepare export: %@", writeError);
+        SGLog(@"music universe: could not prepare image export: %@", writeError);
         return;
     }
     UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[file] applicationActivities:nil];
@@ -419,6 +473,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 @property (nonatomic, readonly) UIPanGestureRecognizer *explorationPanGestureRecognizer;
 - (void)setArtwork:(UIImage *)image forArtist:(NSDictionary *)artist;
 - (UIImage *)thumbnailForArtist:(NSDictionary *)artist diameter:(CGFloat)diameter;
+- (UIImage *)atlasImageWithSize:(CGSize)size;
 - (void)focusArtist:(NSString *)artist;
 - (void)resetView;
 @end
@@ -540,7 +595,21 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
             [symbol drawInRect:CGRectInset(bounds, diameter * 0.3, diameter * 0.3)
                      blendMode:kCGBlendModeNormal alpha:0.9];
         }
+
         (void)rendererContext;
+    }];
+}
+
+- (UIImage *)atlasImageWithSize:(CGSize)size {
+    if (size.width < 1 || size.height < 1) return nil;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
+        CGContextRef context = rendererContext.CGContext;
+        CGContextSaveGState(context);
+        CGContextScaleCTM(context, size.width / MAX(1, self.bounds.size.width),
+                          size.height / MAX(1, self.bounds.size.height));
+        [self drawRect:self.bounds];
+        CGContextRestoreGState(context);
     }];
 }
 
@@ -1117,7 +1186,60 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
 }
 
 - (void)exportHistory {
-    [SGRUniverseStore.shared exportToController:self source:self.view];
+    CGSize canvasSize = CGSizeMake(1080, 1350);
+    UIImage *mapImage = [_map atlasImageWithSize:CGSizeMake(984, 820)];
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvasSize];
+    UIImage *atlas = [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
+        CGContextRef context = rendererContext.CGContext;
+        CGContextSetFillColorWithColor(context, UIColor.blackColor.CGColor);
+        CGContextFillRect(context, (CGRect){CGPointZero, canvasSize});
+
+        NSDictionary *titleAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:64 weight:UIFontWeightBold],
+            NSForegroundColorAttributeName: UIColor.whiteColor,
+        };
+        [@"Music Universe" drawAtPoint:CGPointMake(64, 64) withAttributes:titleAttributes];
+
+        NSMutableSet<NSString *> *artists = [NSMutableSet set];
+        for (NSDictionary *event in _events) {
+            NSString *artist = event[kArtistKey];
+            if (artist.length) [artists addObject:artist];
+        }
+        NSDictionary *summaryAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:30 weight:UIFontWeightRegular],
+            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.65],
+        };
+        NSString *summary = [NSString stringWithFormat:@"%lu ascolti · %lu artisti",
+                             (unsigned long)_events.count, (unsigned long)artists.count];
+        [summary drawAtPoint:CGPointMake(68, 145) withAttributes:summaryAttributes];
+
+        CGRect mapFrame = CGRectMake(48, 230, 984, 820);
+        UIBezierPath *mapPath = [UIBezierPath bezierPathWithRoundedRect:mapFrame cornerRadius:36];
+        [mapPath addClip];
+        [mapImage drawInRect:mapFrame];
+
+        NSDictionary *footerAttributes = @{
+            NSFontAttributeName: [UIFont systemFontOfSize:24 weight:UIFontWeightMedium],
+            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.5],
+        };
+        [@"spoti.pw · Music Universe" drawAtPoint:CGPointMake(68, 1245) withAttributes:footerAttributes];
+    }];
+    NSData *data = UIImagePNGRepresentation(atlas);
+    if (!data) {
+        SGLog(@"music universe: failed to render the atlas image");
+        return;
+    }
+    NSURL *file = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"MusicUniverse.png"]];
+    NSError *error = nil;
+    if (![data writeToURL:file options:NSDataWritingAtomic error:&error]) {
+        SGLog(@"music universe: could not prepare image export: %@", error);
+        return;
+    }
+    UIActivityViewController *activity = [[UIActivityViewController alloc] initWithActivityItems:@[file]
+                                                                            applicationActivities:nil];
+    activity.popoverPresentationController.sourceView = self.view;
+    activity.popoverPresentationController.sourceRect = self.view.bounds;
+    [self presentViewController:activity animated:YES completion:nil];
 }
 
 - (void)confirmClearHistory {
@@ -1280,7 +1402,7 @@ static NSDictionary *eventFromHistoryRow(NSDictionary *row, NSISO8601DateFormatt
         if ([edge[@"weight"] unsignedIntegerValue] >= 2) [recurringEdges addObject:edge];
     }
     _visibleEdges = [recurringEdges copy];
-    _map.nodes = [_visibleArtists subarrayWithRange:NSMakeRange(0, MIN(60, _visibleArtists.count))];
+    _map.nodes = _visibleArtists;
     _map.edges = _visibleEdges;
     _map.selectedArtist = _selectedArtist[kArtistKey];
     [self updateArtistList];

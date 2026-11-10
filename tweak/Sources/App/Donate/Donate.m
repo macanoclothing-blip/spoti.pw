@@ -105,12 +105,6 @@ void SGShowDonateSheet(void) {
     [sheet present];
 }
 
-SGModRow *SGDonateRow(void) {
-    SGModRow *row = SGWithSymbol(SGActionRow(@"Support spoti.pw", @"Buy the student behind it a coffee", ^{ SGShowDonateSheet(); }), @"cup.and.saucer.fill");
-    row.color = SGKofiColor();
-    return row;
-}
-
 // Never over the tour or an alert. On schedule it also stays out of an update-notice run and asks once
 // a run; after a tour, first or replayed from the Mod page, it always comes.
 static void offerWhenClear(NSInteger tries) {

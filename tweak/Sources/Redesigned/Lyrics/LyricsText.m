@@ -44,6 +44,20 @@ void SGRSetLyricsTextOrder(NSArray<NSNumber *> *order) {
     [NSNotificationCenter.defaultCenter postNotificationName:SGRLyricsTextDidChangeNotification object:nil];
 }
 
+SGRLyricsAlignment SGRLyricsTextAlignment(void) {
+    NSNumber *stored = [NSUserDefaults.standardUserDefaults objectForKey:SGRKeyLyricsAlignment];
+    if (![stored isKindOfClass:NSNumber.class]) return SGRLyricsAlignmentCenter;
+    NSInteger alignment = stored.integerValue;
+    return alignment >= SGRLyricsAlignmentLeft && alignment <= SGRLyricsAlignmentRight
+        ? (SGRLyricsAlignment)alignment : SGRLyricsAlignmentCenter;
+}
+
+void SGRSetLyricsTextAlignment(SGRLyricsAlignment alignment) {
+    if (alignment < SGRLyricsAlignmentLeft || alignment > SGRLyricsAlignmentRight) return;
+    [NSUserDefaults.standardUserDefaults setInteger:alignment forKey:SGRKeyLyricsAlignment];
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRLyricsTextDidChangeNotification object:nil];
+}
+
 void SGRSetLyricsTextShown(SGRLyricsText text, BOOL shown) {
     SGSetEnabled(text == SGRLyricsTextTranslation ? SGRKeyLyricsTranslation : SGRKeyLyricsPronunciation, shown);
     [NSNotificationCenter.defaultCenter postNotificationName:SGRLyricsTextDidChangeNotification object:nil];

@@ -17,5 +17,7 @@ void SGRArtistLogoSetAppleEnabled(BOOL enabled);
 void SGRArtistLogoForArtist(NSString *artist, void (^done)(UIImage *logo));
 void SGRArtistLogoOptionsForArtist(NSString *artist, void (^done)(NSArray<SGRArtistLogoOption *> *options));
 NSString *SGRArtistLogoSelectedKeyForArtist(NSString *artist);
+UIImage *SGRArtistLogoCustomImageForArtist(NSString *artist);
 void SGRArtistLogoSelectOption(NSString *artist, SGRArtistLogoOption *option);
+void SGRArtistLogoSelectImage(NSString *artist, UIImage *image, void (^done)(NSError *error));
 void SGRArtistLogoUseAutomatic(NSString *artist);

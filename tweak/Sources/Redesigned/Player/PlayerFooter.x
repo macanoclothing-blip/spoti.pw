@@ -2,10 +2,9 @@
 // evenly across the player, and no share button.
 //
 // Spotify's footer is Connect with the device's name at the leading edge, share, and the queue at the
-// trailing edge. Connect and the queue stay Spotify's controls (the device sheet, the remote device
-// tint, the Jam avatars) and are only moved, by a translation of the arranged view that holds each: a
-// transform survives the stack view laying them out again, and moving the holder keeps its touches
-// inside its own bounds. The device name goes transparent, since the glyph alone sits in the middle.
+// trailing edge. Connect stays Spotify's control (the device sheet, remote-device tint and Jam avatars);
+// the queue is replaced with the redesign's in-player mode (PlayerQueue.x). The device row is only moved,
+// by a translation of its arranged view, which keeps its touches inside its own bounds.
 // Spotify has no lyrics control down here, so that one is the Kit's glyph button, and it turns the
 // lyrics in the player on and off (PlayerLyrics.x): filled while they are up, dimmed when closed, and
 // enabled whenever a track is active so the first tap can request its lyrics.
@@ -23,6 +22,7 @@
 #import "Redesigned/Kit/SGRKit.h"
 #import "Player.h"
 #import "PlayerVinyl.h"
+#import <AVFoundation/AVFoundation.h>
 #import <MediaPlayer/MediaPlayer.h>
 
 static const CGFloat kLyricsGlyphSize = 20;
@@ -42,9 +42,10 @@ static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
 // landscape lyrics composition, which positions its transport unit independently.
 static const CGFloat kPortraitControlsDrop = 22;
 
-static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kReachKey, kFooterSettleKey;
+static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kQueueGlyphKey, kRoutePickerKey, kReachKey, kFooterSettleKey;
 static char kPreviousPlaybackButtonKey, kNextPlaybackButtonKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
+static NSHashTable<MPVolumeView *> *sg_routePickers;
 
 // The view the footer's stack view arranges around `view`.
 static UIView *arrangedAround(UIView *view, UIView *host) {
@@ -118,6 +119,19 @@ static SGRGlyphButton *lyricsGlyphIn(UIView *host) {
     return glyph;
 }
 
+static SGRGlyphButton *queueGlyphIn(UIView *host) {
+    SGRGlyphButton *glyph = objc_getAssociatedObject(host, &kQueueGlyphKey);
+    if (!glyph) {
+        glyph = [SGRGlyphButton buttonWithSymbol:@"list.bullet" pointSize:kLyricsGlyphSize title:@"Queue"];
+        __weak UIView *weakHost = host;
+        glyph.onTap = ^{ SGRPlayerQueuePresentFrom(weakHost); };
+        objc_setAssociatedObject(host, &kQueueGlyphKey, glyph, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    glyph.glyph.tintColor = SGRPlayerQueueIsOpen() ? SGRPrimary() : SGRSecondary();
+    if (glyph.superview != host) [host addSubview:glyph];
+    return glyph;
+}
+
 #pragma mark - the row
 
 static UIView *connectGlyphIn(UIView *holder) {
@@ -126,6 +140,82 @@ static UIView *connectGlyphIn(UIView *holder) {
         if (!glyph && [view isKindOfClass:UIImageView.class] && view.bounds.size.width > 0 && view.bounds.size.width <= kGlyphMaxWidth) glyph = view;
     });
     return glyph;
+}
+
+static void updateRoutePickerIcon(MPVolumeView *picker);
+
+@interface SGRRoutePicker : MPVolumeView
+@end
+
+@implementation SGRRoutePicker
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    updateRoutePickerIcon(self);
+}
+@end
+
+static MPVolumeView *routePickerIn(UIView *host) {
+    MPVolumeView *picker = objc_getAssociatedObject(host, &kRoutePickerKey);
+    if (!picker) {
+        picker = [SGRRoutePicker new];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        picker.showsVolumeSlider = NO;
+        picker.showsRouteButton = YES;
+#pragma clang diagnostic pop
+        picker.tintColor = SGRPrimary();
+        picker.backgroundColor = UIColor.clearColor;
+        picker.accessibilityLabel = @"Dispositivo di riproduzione";
+        objc_setAssociatedObject(host, &kRoutePickerKey, picker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (!sg_routePickers) sg_routePickers = [NSHashTable weakObjectsHashTable];
+        [sg_routePickers addObject:picker];
+    }
+    if (picker.superview != host) [host addSubview:picker];
+    return picker;
+}
+
+static NSString *routePickerSymbol(void) {
+    for (AVAudioSessionPortDescription *output in AVAudioSession.sharedInstance.currentRoute.outputs) {
+        NSString *name = output.portName.lowercaseString;
+        NSString *type = output.portType;
+        if ([name containsString:@"airpods max"]) return @"airpodsmax";
+        if ([name containsString:@"airpods pro"]) return @"airpodspro";
+        if ([name containsString:@"airpods"]) return @"airpods";
+        if ([type isEqualToString:AVAudioSessionPortHeadphones] ||
+            [type isEqualToString:AVAudioSessionPortBluetoothA2DP] ||
+            [type isEqualToString:AVAudioSessionPortBluetoothLE] ||
+            [type isEqualToString:AVAudioSessionPortBluetoothHFP]) return @"headphones";
+        if ([type isEqualToString:AVAudioSessionPortAirPlay]) return @"airplayaudio";
+    }
+    return @"airplayaudio";
+}
+
+static void updateRoutePickerIcon(MPVolumeView *picker) {
+    if (!picker) return;
+    __block UIButton *button = nil;
+    SGForEachView(picker, ^(UIView *view) {
+        if (!button && [view isKindOfClass:UIButton.class]) button = (UIButton *)view;
+    });
+    if (!button) return;
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:24 weight:UIImageSymbolWeightMedium];
+    UIImage *image = [UIImage systemImageNamed:routePickerSymbol() withConfiguration:configuration];
+    if (!image) image = [UIImage systemImageNamed:@"airplayaudio" withConfiguration:configuration];
+    image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    [button setImage:image forState:UIControlStateNormal];
+    [button setImage:image forState:UIControlStateHighlighted];
+    // MPVolumeView stretches its internal button to the whole control. Keep the
+    // symbol in a square hit target so AirPlay/headphone glyphs retain their
+    // optical proportions.
+    button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentCenter;
+    button.contentVerticalAlignment = UIControlContentVerticalAlignmentCenter;
+    button.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    button.tintColor = SGRPrimary();
+    button.accessibilityLabel = @"Dispositivo di riproduzione";
+}
+
+static void updateAllRoutePickerIcons(void) {
+    for (MPVolumeView *picker in sg_routePickers.allObjects) updateRoutePickerIcon(picker);
 }
 
 #pragma mark - lower down
@@ -259,6 +349,8 @@ static void layOutFooter(UIViewController *unit) {
 
     UIView *connect = SGRFindByIdentifier(host, @"Components.ConnectButtonOutputSwitcher", &kConnectKey);
     UIView *queue = SGRFindByIdentifier(host, @"QueueButtonNowPlaying", &kQueueKey);
+    SGRPlayerVanish(queue);
+    SGRPlayerVanish(arrangedAround(queue, host));
     if (SGFlag(SGRKeyPlayerVinyl, NO)) {
         // Vinyl draws its own lyrics control on the record. Remove the redesign's footer glyph from
         // the hierarchy altogether so a later Spotify layout cannot bring it back.
@@ -271,11 +363,22 @@ static void layOutFooter(UIViewController *unit) {
     }
 
     SGRGlyphButton *lyrics = lyricsGlyphIn(host);
+    SGRGlyphButton *queueGlyph = queueGlyphIn(host);
+    MPVolumeView *routePicker = routePickerIn(host);
+    updateRoutePickerIcon(routePicker);
     lyrics.bounds = CGRectMake(0, 0, 44, 44);
+    queueGlyph.bounds = CGRectMake(0, 0, 44, 44);
+    routePicker.frame = CGRectMake(round(width * kMiddle) - 24, round(middleY - 24), 48, 48);
+    routePicker.hidden = NO;
+    routePicker.alpha = 1;
+    [host bringSubviewToFront:routePicker];
     lyrics.center = CGPointMake(round(width * (rtl ? kTrailing : kLeading)), middleY);
+    queueGlyph.center = CGPointMake(round(width * (rtl ? kLeading : kTrailing)), middleY);
     SGRPlayerLyricsChanged();
 
     UIView *glyph = connectGlyphIn(connect);
+    SGRPlayerVanish(connect);
+    SGRPlayerVanish(arrangedAround(connect, host));
     for (UIView *view = glyph.superview; view && view != connect; view = view.superview) {
         for (UIView *sibling in view.subviews) {
             if ([NSStringFromClass(sibling.class) containsString:@"MarqueeLabel"]) SGRPlayerVanish(sibling);
@@ -314,5 +417,24 @@ static void layOutFooter(UIViewController *unit) {
 %ctor {
     if (!SGRedesignedUI()) return;
     %init;
+    sg_routePickers = [NSHashTable weakObjectsHashTable];
+    void (^refreshRoutePickerIcons)(NSNotification *) = ^(NSNotification *note) {
+        updateAllRoutePickerIcons();
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            updateAllRoutePickerIcons();
+        });
+    };
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    for (NSNotificationName name in @[AVAudioSessionRouteChangeNotification,
+                                      MPVolumeViewWirelessRoutesAvailableDidChangeNotification,
+                                      MPVolumeViewWirelessRouteActiveDidChangeNotification]) {
+        [NSNotificationCenter.defaultCenter addObserverForName:name
+                                                         object:nil
+                                                          queue:NSOperationQueue.mainQueue
+                                                     usingBlock:refreshRoutePickerIcons];
+    }
+#pragma clang diagnostic pop
     SGRequireClasses(@[@"_TtC20NowPlaying_ModesImpl18FooterElementsUnit", @"_TtC32ReinventFree_ReinventFreeNpvImpl30ReinventFreeFooterElementsUnit"]);
 }

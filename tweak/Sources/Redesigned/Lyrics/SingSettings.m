@@ -128,6 +128,11 @@ static SGModSection *karaokeSection(void) {
     });
     spatialStatus.visible = ^BOOL { return SGSingSpatialEnabled(); };
     spatialStatus.refreshOn = SGSingDidChangeNotification;
+    SGModRow *thermal = SGOptionRow(@"Ignore temperature block", @"Allow Sing to start while the iPhone is warm", SGKeySingIgnoreThermal);
+    thermal.changed = ^(BOOL on) {
+        (void)on;
+        [[NSNotificationCenter defaultCenter] postNotificationName:SGSingDidChangeNotification object:nil];
+    };
 
     SGModRow *model = SGStatActionRow(@"Voice model", nil, ^NSString *{ return modelStatus(); }, ^{ explainModel(); });
     model.progress = ^double {
@@ -149,7 +154,7 @@ static SGModSection *karaokeSection(void) {
         SGSingModelState state = SGSingModelCurrentState();
         return state == SGSingModelInstalled || (state == SGSingModelMissing && SGSingModelReceived() > 0);
     };
-    return SGNotedSection(@"Karaoke", @[sing, spatial, spatialStatus, model, download, cancel, remove], footer());
+    return SGNotedSection(@"Karaoke", @[sing, spatial, spatialStatus, thermal, model, download, cancel, remove], footer());
 }
 
 UIViewController *SGRKaraokeSettingsPage(void) {

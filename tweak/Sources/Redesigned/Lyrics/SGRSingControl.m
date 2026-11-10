@@ -22,7 +22,7 @@
 #import "Redesigned/Kit/SGRTokens.h"
 #import <objc/runtime.h>
 
-static char kControlKey, kPanelGlass;
+static char kControlKey, kPanelGlass, kSpatialGlass;
 
 static const CGFloat kSide = 44;               // the button, and the capsule's width
 static const CGFloat kOpenHeight = 144;        // the capsule with the slider out above the button
@@ -212,6 +212,7 @@ static SGRSingLook lookOf(SGSingState state) {
 
 @interface SGRSingControl : UIView <UIGestureRecognizerDelegate>
 @property (nonatomic) UIButton *button;
+@property (nonatomic) UIButton *spatialButton;
 @property (nonatomic) UIImageView *glyph, *glyphOn;   // the microphone white on the glass, and dark on the fill
 @property (nonatomic) SGRSingRing *ring;
 @property (nonatomic) UIView *panel, *fill;
@@ -253,6 +254,20 @@ static SGRSingLook lookOf(SGSingState state) {
     _slider.accessibilityHint = @"Vocals only at the top, original mix in the middle, instrumental at the bottom";
     _slider.accessibilityIdentifier = @"sing.mixLevel";
     [_slider addTarget:self action:@selector(changed) forControlEvents:UIControlEventValueChanged];
+    _spatialButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    _spatialButton.accessibilityLabel = @"Spatial Voice";
+    _spatialButton.accessibilityHint = @"Attiva o disattiva Spatial Voice per le cuffie compatibili.";
+    _spatialButton.tintColor = SGSingSpatialEnabled() ? SGRAccent() : UIColor.whiteColor;
+    _spatialButton.selected = SGSingSpatialEnabled();
+    _spatialButton.accessibilityValue = SGSingSpatialEnabled() ? @"Attivo" : @"Disattivo";
+    UIImageSymbolConfiguration *spatialConfiguration =
+        [UIImageSymbolConfiguration configurationWithPointSize:15 weight:UIImageSymbolWeightSemibold];
+    [_spatialButton setImage:[UIImage systemImageNamed:@"person.spatialaudio.3d.fill"
+                                    withConfiguration:spatialConfiguration]
+                    forState:UIControlStateNormal];
+    [_spatialButton addTarget:self action:@selector(toggleSpatialVoice:)
+             forControlEvents:UIControlEventTouchUpInside];
+    _spatialButton.clipsToBounds = YES;
     // The capsule draws on and off itself: a custom button, so UIKit adds no highlight or selected look.
     _button = [UIButton buttonWithType:UIButtonTypeCustom];
     _button.accessibilityIdentifier = @"sing.microphone";
@@ -281,6 +296,16 @@ static SGRSingLook lookOf(SGSingState state) {
     [NSNotificationCenter.defaultCenter removeObserver:self];
 }
 
+- (void)toggleSpatialVoice:(UIButton *)sender {
+    sender.selected = !sender.selected;
+    SGSingSetSpatialEnabled(sender.selected);
+    sender.tintColor = UIColor.whiteColor;
+    sender.backgroundColor = sender.selected ? [UIColor colorWithWhite:1 alpha:0.24] : UIColor.clearColor;
+    sender.accessibilityValue = sender.selected ? @"Attivo" : @"Disattivo";
+    SGLog(@"redesign lyrics: Spatial Voice %@ (iOS manages spatial audio for compatible AirPods)",
+          sender.selected ? @"enabled" : @"disabled");
+}
+
 #pragma mark - what it shows
 
 // The capsule is open, preparing, turning off or explaining itself: the player keeps its controls meanwhile.
@@ -295,7 +320,7 @@ static SGRSingLook lookOf(SGSingState state) {
 
 // With the controls away the microphone stays only while Sing is on.
 - (void)updateVisibility {
-    BOOL visible = !_immersive || SGSingStateIsOn(SGSingCurrentState());
+    BOOL visible = !_immersive || SGSingAvailable();
     self.alpha = visible ? 1 : 0;
     self.accessibilityElementsHidden = !visible;
 }
@@ -384,7 +409,7 @@ static SGRSingLook lookOf(SGSingState state) {
 - (void)placeAnimated:(BOOL)animated {
     void (^place)(void) = ^{
         CGFloat height = self.expanded ? kOpenHeight : kSide;
-        self.frame = CGRectMake(self.anchor.x, self.anchor.y + kSide - height, kSide, height);
+        self.frame = CGRectMake(self.anchor.x - 52, self.anchor.y + kSide - height, 96, height);
         [self layoutIfNeeded];
     };
     if (animated) SGRAnimate(SGRMotionLayout, place, nil);
@@ -439,7 +464,7 @@ static SGRSingLook lookOf(SGSingState state) {
     // slider's numeric endpoints. A bounded response follows the finger in either direction.
     CGFloat stretch = _expanded && !SGRReduceMotion() ? _stretch : 0;
     CGFloat extension = fabs(stretch) * 16, width = kSide + fabs(stretch) * 2;
-    _panel.frame = CGRectMake((kSide - width) / 2, -extension / 2 + stretch * 6, width, CGRectGetHeight(self.bounds) + extension);
+    _panel.frame = CGRectMake(52 + (kSide - width) / 2, -extension / 2 + stretch * 6, width, CGRectGetHeight(self.bounds) + extension);
     UIView *glass = SGRGlassCapsuleInside(_panel, &kPanelGlass, _panel.bounds.size, NO);
     UIView *content = glass;
     if ([glass isKindOfClass:UIVisualEffectView.class]) {
@@ -457,6 +482,7 @@ static SGRSingLook lookOf(SGSingState state) {
     content.clipsToBounds = YES;
     content.layer.cornerRadius = width / 2;
     for (UIView *view in @[_fill, _button]) if (view.superview != content) [content addSubview:view];
+    if (_spatialButton.superview != self) [self addSubview:_spatialButton];
     // Interactive glass exposes its content as an accessibility container. Remove the folded
     // slider from that container instead of leaving a zero-height adjustable element in it.
     if (_expanded) { if (_slider.superview != content) [content insertSubview:_slider belowSubview:_button]; }
@@ -468,12 +494,24 @@ static SGRSingLook lookOf(SGSingState state) {
     _fill.frame = CGRectMake(0, height - fill, width, fill);
     _slider.frame = CGRectMake(0, 0, width, height - kSide);
     _button.frame = CGRectMake(0, height - kSide, width, kSide);
+    // Spatial Voice is a separate control beside the Sing capsule, never over its microphone.
+    // Keep the route control at the upper-left corner of the karaoke slider.
+    _spatialButton.frame = CGRectMake(4, 4, 36, 36);
+    _spatialButton.alpha = _expanded ? 1 : 0;
+    _spatialButton.userInteractionEnabled = _expanded;
+    UIView *spatialGlass = SGRGlassInside(_spatialButton, &kSpatialGlass, 36);
+    spatialGlass.hidden = _spatialButton.selected;
+    _spatialButton.layer.cornerRadius = 18;
+    _spatialButton.layer.cornerCurve = kCACornerCurveContinuous;
+    _spatialButton.backgroundColor = _spatialButton.selected
+        ? [UIColor colorWithWhite:1 alpha:0.24] : UIColor.clearColor;
+    _spatialButton.tintColor = UIColor.whiteColor;
     CGRect square = CGRectMake((width - kSide) / 2, 0, kSide, kSide);
     for (UIView *view in @[_ring, _glyph, _glyphOn]) view.frame = square;
 }
 
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
-    return CGRectContainsPoint(_panel.frame, point);
+    return CGRectContainsPoint(_panel.frame, point) || CGRectContainsPoint(_spatialButton.frame, point);
 }
 
 #pragma mark - touches
@@ -631,4 +669,9 @@ UIView *SGRSingControlForPage(UIView *page, CGRect lyrics, BOOL immersive, void 
 void SGRSingControlDismiss(UIView *page) {
     SGRSingControl *control = objc_getAssociatedObject(page, &kControlKey);
     [control dismissControls];
+}
+
+void SGRSingControlRemove(UIView *page) {
+    SGRSingControl *control = objc_getAssociatedObject(page, &kControlKey);
+    [control retireFrom:page];
 }

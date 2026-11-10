@@ -20,6 +20,7 @@
 #import "Shared/AudioEffects/AudioEffects.h"
 #import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
 #import "Shared/Player/PlayerState.h"
+#import "Redesigned/Lyrics/LyricsText.h"
 #import "Player.h"
 
 // A sheet this soon after the ⋯'s tap is the player's.
@@ -796,6 +797,13 @@ static UIAction *actionFor(SGRPlayerMenuTakeover *t, SGRPlayerMenuSpotifyRow *ro
     __weak SGRPlayerMenuTakeover *weak = t;
     UIAction *action = [UIAction actionWithTitle:row.title image:image identifier:nil handler:^(UIAction *sender) {
         pick(weak, ^(SGRPlayerMenuTakeover *strong) {
+            if ([row.identifier isEqualToString:@"34"]) {
+                UIView *player = strong.player.viewIfLoaded;
+                finish(strong, @"the redesigned queue opened", ^{
+                    SGRPlayerQueuePresentFrom(player);
+                });
+                return;
+            }
             if (strong.direct) {
                 startDirectRow(strong, row);
                 return;
@@ -865,6 +873,34 @@ static UIMenu *artworkMenu(SGRPlayerMenuTakeover *t) {
         ]];
 }
 
+static UIAction *lyricsAlignmentChoice(SGRLyricsAlignment alignment, NSString *title, NSString *imageName) {
+    UIAction *action = [UIAction actionWithTitle:title image:symbol(imageName) identifier:nil handler:^(__unused UIAction *sender) {
+        SGRSetLyricsTextAlignment(alignment);
+    }];
+    action.state = SGRLyricsTextAlignment() == alignment ? UIMenuElementStateOn : UIMenuElementStateOff;
+    return action;
+}
+
+static UIMenu *lyricsAlignmentMenu(void) {
+    return [UIMenu menuWithTitle:@"Stile testo" image:symbol(@"text.alignleft") identifier:nil
+        options:UIMenuOptionsSingleSelection children:@[
+            lyricsAlignmentChoice(SGRLyricsAlignmentLeft, @"A sinistra", @"text.alignleft"),
+            lyricsAlignmentChoice(SGRLyricsAlignmentCenter, @"Centrato", @"text.aligncenter"),
+            lyricsAlignmentChoice(SGRLyricsAlignmentRight, @"A destra", @"text.alignright"),
+        ]];
+}
+
+static UIAction *canvasBlurAction(void) {
+        UIAction *action = [UIAction actionWithTitle:@"Blur Canvas" image:symbol(@"camera.filters") identifier:nil
+            handler:^(UIAction *sender) {
+            BOOL enabled = !SGRPlayerCanvasBlurEnabled();
+            SGRPlayerSetCanvasBlurEnabled(enabled);
+            SGLog(@"redesign player: Canvas blur %@", enabled ? @"on" : @"off");
+        }];
+        action.state = SGRPlayerCanvasBlurEnabled() ? UIMenuElementStateOn : UIMenuElementStateOff;
+        return action;
+}
+
 static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
     NSArray<SGRPlayerMenuSpotifyRow *> *rows = t.rows ?: @[];
     // Tiles in the Music app's order, Share last.
@@ -893,6 +929,9 @@ static UIMenu *menuFor(SGRPlayerMenuTakeover *t) {
     }
     [main addObject:speedAndPitchAction(t)];
     [main addObject:artworkMenu(t)];
+    [main addObject:lyricsAlignmentMenu()];
+    if (SGRPlayerBackgroundStyle() == SGRPlayerBackgroundAnimated)
+        [main addObject:canvasBlurAction()];
     UIAction *localArtwork = localArtworkAction(t);
     if (localArtwork) [main addObject:localArtwork];
     if (more.count == 1) {

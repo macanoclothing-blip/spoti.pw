@@ -58,6 +58,7 @@
 
 static const CGFloat kThumbSide = 72;          // the portrait thumbnail once the lyrics are up
 static const CGFloat kThumbGap = 16;           // between the thumbnail and the title beside it
+static const CGFloat kCanvasInfoArtworkSide = 72, kCanvasInfoArtworkGap = 12;
 static const CGFloat kTitleGap = 12;           // between the title and the controls at the trailing edge
 static const CGFloat kTitleFade = 20;          // over how much of its end a title too long to fit fades out
 static const CGFloat kThumbTop = 8;            // below the top of the artwork band
@@ -73,6 +74,8 @@ static const CGFloat kPortraitPlayerRowsLift = 20; // cumulative portrait lift, 
 // room for them opens, and go at once when it closes. An exit the eye waits through reads as a stall.
 static const CGFloat kLyricsEnterScale = 0.96;
 static const NSTimeInterval kLyricsIn = 0.3, kLyricsInDelay = 0.12, kLyricsOut = 0.16;
+static const NSTimeInterval kPlayerIdleAfter = 3;
+static const CGFloat kIdleProgressFraction = 0.9, kIdleBottomClearance = 8, kIdleInfoGap = 16;
 // A track that changes while the lines are up has this long to bring its own before they are put away.
 static const NSTimeInterval kLyricsGrace = 3;
 // Below this the player has not laid out yet and nothing can be measured from it.
@@ -96,21 +99,32 @@ static char kLandscapeTitleActionFrameKey, kLandscapeTitleActionsKey;
 static char kLandscapeSliderKey, kLandscapeTakenKey, kLandscapeRemainingKey;
 static char kLandscapeShuffleKey, kLandscapePreviousKey, kLandscapePlayKey;
 static char kLandscapeNextKey, kLandscapeRepeatKey, kLandscapeReachKey;
+static char kPlayerAddStarKey, kPlayerAddStarAnimatorKey, kPlayerAddCircleKey, kCanvasInfoArtworkKey;
 static BOOL sg_open;
+static BOOL sg_queueOpen;
+static BOOL sg_idleChromeHidden;
 static BOOL sg_moving;                      // the transition is in flight, so no layout pass may re-place it
 static BOOL sg_alone;                       // the controls are away and the lines have the player
 static BOOL sg_landscapeChromeHidden;
 static BOOL sg_tapBroughtBack;              // the touch going on began with them away, so its tap seeks nowhere
+static CGFloat sg_goodAreaTop;
+static CGSize sg_goodAreaHost;
 static NSTimer *sg_aloneTimer;
 static NSTimer *sg_landscapeChromeTimer;
+static NSTimer *sg_idleChromeTimer;
+static __weak UIView *sg_idleCoverList;
+static BOOL sg_idleCoverListWasInteractive;
 static BOOL sg_singHeld;                    // Sing's microphone is open, preparing or explaining itself
 static __weak UIView *sg_sing;              // the microphone, when Sing is on
 static __weak UIView *sg_host;              // SPTNowPlayingView
 static __weak UIViewController *sg_player;  // its controller
 static __weak UIViewController *sg_header, *sg_info, *sg_duration, *sg_controls, *sg_footer, *sg_floating;
 static __weak UIView *sg_titleElement;      // the arranged element view holding the title and the artist
+static __weak UIView *sg_queueContent;
 
 static void replace(void);
+static void setPlayerIdleChromeHidden(BOOL hidden, BOOL animated);
+static UIImage *currentArtwork(void);
 
 static BOOL playerIsLandscape(void) {
     UIView *host = sg_host;
@@ -122,7 +136,8 @@ static void syncLandscapeFooter(void) {
     if (!footer) return;
     // Lyrics in landscape use the lower edge for translation and meaning controls. Vinyl already has
     // its own transport row in portrait too, so Spotify's original footer must stay out of that view.
-    CGFloat alpha = sg_open && (playerIsLandscape() || SGFlag(SGRKeyPlayerVinyl, NO)) ? 0 : 1;
+    CGFloat alpha = (sg_open && (playerIsLandscape() || SGFlag(SGRKeyPlayerVinyl, NO))) ||
+        (sg_idleChromeHidden && !playerIsLandscape() && !sg_open && !sg_queueOpen) ? 0 : 1;
     if (fabs(footer.alpha - alpha) > 0.01) footer.alpha = alpha;
     footer.userInteractionEnabled = alpha > 0.01;
     footer.accessibilityElementsHidden = alpha < 0.01;
@@ -190,6 +205,7 @@ static void syncLandscapeFooter(void) {
 @property (nonatomic, readonly) UILabel *empty;      // Sing's "no lyrics"
 @property (nonatomic, readonly) SGRKaraokeView *lyrics;
 @property (nonatomic, readonly) SGRGlyphButton *rotate;
+- (void)setQueueContent:(UIView *)content;
 @end
 
 @implementation SGRPlayerLyricsOverlay {
@@ -227,6 +243,7 @@ static void syncLandscapeFooter(void) {
     _rotate.accessibilityLabel = @"Rotate screen";
     _rotate.onTap = ^{ SGRPlayerToggleOrientation(); };
     [self addSubview:_rotate];
+    _rotate.hidden = !SGFlag(SGRKeyPlayerAutoRotate, YES);
     return self;
 }
 
@@ -235,6 +252,11 @@ static void syncLandscapeFooter(void) {
 - (UIView *)stage { return _stage; }
 - (UILabel *)empty { return _empty; }
 - (SGRGlyphButton *)rotate { return _rotate; }
+
+- (void)setQueueContent:(UIView *)content {
+    _lyrics.hidden = content != nil;
+    _empty.hidden = content != nil;
+}
 
 // The lines seek when they are tapped and the thumbnail puts the cover back, so everywhere else the
 // overlay would only swallow touches: a view that takes touches does, even with nothing on it.
@@ -313,16 +335,53 @@ static CGRect untransformed(UIView *view, UIView *host) {
     return CGRectOffset(frame, -t.tx, -t.ty);
 }
 
+static BOOL titleIsAvailable(UIView *title, UIView *host) {
+    return !title || (title.window && title.window == host.window);
+}
+
 static SGRLyricsLayout layoutIn(UIView *host) {
     SGRLyricsLayout l = {0};
     UIView *info = sg_info.viewIfLoaded, *duration = sg_duration.viewIfLoaded, *title = sg_titleElement;
     if (!host || host.bounds.size.height < kLivingHeight || !info || !duration) return l;
+    if (!titleIsAvailable(title, host)) return l;
     CGRect area = SGRPlayerArtworkAreaIn(host), cover = SGRPlayerCoverFrameIn(host);
     BOOL landscape = host.bounds.size.width > host.bounds.size.height;
-    // Spotify's cover band can be a zero-sized/off-screen view after the player rotates. The player
-    // itself is the reliable canvas in that case; lyrics and the stand-in cover must still be usable.
-    if (landscape && (CGRectIsNull(area) || CGRectIsEmpty(area) || area.size.width < host.bounds.size.width * 0.6)) {
-        area = host.bounds;
+    if (landscape) {
+        CGRect visibleArea = CGRectIntersection(area, host.bounds);
+        // The artwork band can retain coordinates from before a rotation or player transition.
+        if (CGRectIsNull(area) || CGRectIsEmpty(area) || CGRectIsNull(visibleArea) || CGRectIsEmpty(visibleArea) ||
+            visibleArea.size.width < host.bounds.size.width * 0.6) {
+            area = host.bounds;
+        } else {
+            area = visibleArea;
+        }
+    }
+    if (!landscape && !CGRectIsNull(area) && !CGRectIsNull(cover)) {
+        // During a skip showingTilt() can return the neighbouring cell, whose band sits a page
+        // away horizontally. The band is always as wide as the player, so pin it to x = 0 and move
+        // the cover by the same amount to keep their relation.
+        CGFloat dx = CGRectGetMinX(area);
+        area.origin.x = 0;
+        area.size.width = host.bounds.size.width;
+        cover.origin.x -= dx;
+    }
+    if (!landscape && !CGRectIsNull(area) && !CGRectIsNull(cover)) {
+        // A cover cell rebuilt during a skip can briefly report its artwork band above the header.
+        UIView *header = sg_header.viewIfLoaded;
+        CGFloat headerEnd = header ? CGRectGetMaxY(SGFrameIn(header, host)) : host.window.safeAreaInsets.top;
+        CGFloat top = CGRectGetMinY(area);
+        BOOL sameHost = CGSizeEqualToSize(sg_goodAreaHost, host.bounds.size);
+        if (top >= headerEnd - 1) {
+            sg_goodAreaTop = top;
+            sg_goodAreaHost = host.bounds.size;
+        } else if (sameHost && sg_goodAreaTop > 0) {
+            CGFloat dy = top - sg_goodAreaTop;
+            area.origin.y = sg_goodAreaTop;
+            cover.origin.y -= dy;
+            SGLog(@"redesign player: area top %.0f above the header, kept %.0f", top, sg_goodAreaTop);
+        } else {
+            return l;
+        }
     }
     if (CGRectIsNull(area) || CGRectIsEmpty(area) || (!landscape && (CGRectIsNull(cover) || CGRectIsEmpty(cover)))) return l;
     CGRect row = untransformed(info, host), bar = untransformed(duration, host);
@@ -395,6 +454,19 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     l.room = CGRectMake(CGRectGetMinX(area), roomTop, area.size.width, roomBottom - roomTop);
     l.ok = l.stage.size.height > kLivingHeight / 2 && l.lift < 0;
     return l;
+}
+
+static CGRect queueStageIn(UIView *host, SGRLyricsLayout l) {
+    if (!host || host.bounds.size.width > host.bounds.size.height) return l.stage;
+    UIView *info = sg_info.viewIfLoaded, *duration = sg_duration.viewIfLoaded;
+    if (!info || !duration) return CGRectNull;
+    CGRect row = untransformed(info, host), bar = untransformed(duration, host);
+    CGFloat rowTop = CGRectGetMidY(l.thumb) - row.size.height / 2;
+    CGFloat contentTop = MAX(CGRectGetMaxY(l.thumb), rowTop + row.size.height) + 10;
+    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : kPortraitPlayerRowsLift;
+    CGFloat contentBottom = CGRectGetMinY(bar) - progressLift - kLyricsBottom;
+    if (contentBottom <= contentTop) return CGRectNull;
+    return CGRectMake(CGRectGetMinX(l.stage), contentTop, l.stage.size.width, contentBottom - contentTop);
 }
 
 // The lines' part of the stage: the band between the title row and the progress bar while the
@@ -606,6 +678,45 @@ static UIView *arrangedRowItemContaining(UIView *row, UIView *target) {
     return nil;
 }
 
+static BOOL isSongExclusionAction(UIView *view) {
+    NSString *identifier = view.accessibilityIdentifier.lowercaseString;
+    NSString *className = NSStringFromClass(view.class).lowercaseString;
+    NSString *label = view.accessibilityLabel.lowercaseString;
+    for (NSString *name in @[identifier ?: @"", className ?: @"", label ?: @""]) {
+        for (NSString *term in @[@"dislike", @"notinterested", @"not-interested", @"exclude",
+                                  @"hide song", @"hidesong", @"not for me", @"don't play",
+                                  @"removerecommendation", @"sptnowplayingdislikebutton",
+                                  @"dislikebuttonnowplayingview", @"rimuovi suggeriment",
+                                  @"escludi brano", @"non riprodurre", @"non mi interessa"]) {
+            if ([name containsString:term]) return YES;
+        }
+    }
+    return NO;
+}
+
+static void hideSongExclusionActions(UIView *info) {
+    if (!info) return;
+    UIView *row = sg_titleElement.superview;
+    __block NSMutableSet<UIView *> *targets = [NSMutableSet set];
+    SGForEachView(info, ^(UIView *view) {
+        if (!isSongExclusionAction(view)) return;
+        UIView *target = view;
+        for (UIView *ancestor = view; ancestor && ancestor != info; ancestor = ancestor.superview) {
+            if ([ancestor isKindOfClass:UIControl.class] || (ancestor.accessibilityTraits & UIAccessibilityTraitButton)) {
+                target = ancestor;
+            }
+            if (ancestor == row) break;
+        }
+        UIView *item = arrangedRowItemContaining(row, target);
+        [targets addObject:item ?: target];
+    });
+    for (UIView *target in targets) {
+        if (target.alpha != 0) target.alpha = 0;
+        target.userInteractionEnabled = NO;
+        target.accessibilityElementsHidden = YES;
+    }
+}
+
 static NSArray<UIView *> *landscapeTitleActionItems(UIView *info) {
     UIView *title = sg_titleElement;
     UIView *row = title.superview;
@@ -630,11 +741,54 @@ static NSArray<UIView *> *landscapeTitleActionItems(UIView *info) {
     for (NSString *identifier in @[@"SPTNowPlayingDislikeButton", @"SPTNowPlayingAddToButton",
                                     @"SPTNowPlayingAddToQueueButton", @"Components.UI.AddToButton",
                                     @"DislikeButtonNowPlayingView", @"RemoveRecommendationButton"]) {
+        if ([identifier isEqualToString:@"SPTNowPlayingDislikeButton"] ||
+            [identifier isEqualToString:@"DislikeButtonNowPlayingView"] ||
+            [identifier isEqualToString:@"RemoveRecommendationButton"]) continue;
         UIView *match = SGRFindByIdentifier(info, identifier, NULL);
         UIView *item = arrangedRowItemContaining(row, match);
         if (item && item != title && ![actions containsObject:item]) [actions addObject:item];
     }
     return actions;
+}
+
+static UIImageView *canvasInfoArtworkIn(UIView *info) {
+    UIImageView *image = objc_getAssociatedObject(info, &kCanvasInfoArtworkKey);
+    if (!image) {
+        image = [UIImageView new];
+        image.userInteractionEnabled = NO;
+        image.accessibilityElementsHidden = YES;
+        image.contentMode = UIViewContentModeScaleAspectFill;
+        image.clipsToBounds = YES;
+        image.layer.cornerRadius = 7;
+        image.layer.cornerCurve = kCACornerCurveContinuous;
+        objc_setAssociatedObject(info, &kCanvasInfoArtworkKey, image, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (image.superview != info) [info addSubview:image];
+    return image;
+}
+
+static BOOL placeCanvasInfoArtwork(UIView *info, UIView *title) {
+    UIImageView *image = canvasInfoArtworkIn(info);
+    BOOL show = !playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO) &&
+        SGFlag(SGRKeyPlayerCanvasInfoArtwork, YES) && SGRPlayerAnimatedTrackHasCanvas();
+    UIImage *artwork = show ? currentArtwork() : nil;
+    if (!artwork || !title) {
+        image.alpha = 0;
+        image.accessibilityElementsHidden = YES;
+        return NO;
+    }
+    CGRect titleFrame = untransformed(title, info);
+    if (CGRectGetHeight(titleFrame) <= 0) {
+        image.alpha = 0;
+        return NO;
+    }
+    image.image = artwork;
+    image.frame = CGRectMake(CGRectGetMinX(titleFrame),
+                             round(CGRectGetMidY(titleFrame) - kCanvasInfoArtworkSide / 2),
+                             kCanvasInfoArtworkSide, kCanvasInfoArtworkSide);
+    image.alpha = 1;
+    [info bringSubviewToFront:image];
+    return YES;
 }
 
 static CGFloat landscapeTitleTextWidth(UIView *info) {
@@ -654,6 +808,129 @@ static void restoreLandscapeTitleActions(UIView *info) {
     NSArray<UIView *> *actions = objc_getAssociatedObject(info, &kLandscapeTitleActionsKey);
     for (UIView *action in actions) restoreChildFrame(action, &kLandscapeTitleActionFrameKey);
     objc_setAssociatedObject(info, &kLandscapeTitleActionsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+// The star of the Music app: an outline star in a translucent circle that fills in with a bounce when
+// it is tapped. Spotify's own "+" glyph (and the circle it draws around it) is hidden, never removed:
+// the control keeps its native target and action, so the track still gets added.
+@interface SGRPlayerAddStarAnimator : NSObject
+@property (nonatomic, weak) UIImageView *star;
+@property (nonatomic) BOOL added;
+@property (nonatomic) BOOL spotifyAdded;   // the last state read from Spotify's control
+- (void)setAdded:(BOOL)added animated:(BOOL)animated;
+- (void)tapped:(UIControl *)sender;
+@end
+
+@implementation SGRPlayerAddStarAnimator
+
+- (void)setAdded:(BOOL)added animated:(BOOL)animated {
+    _added = added;
+    UIImageView *star = self.star;
+    if (!star) return;
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:14 weight:UIImageSymbolWeightSemibold];
+    UIImage *image = [[UIImage systemImageNamed:added ? @"star.fill" : @"star" withConfiguration:configuration]
+                      imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    if (animated && !SGRReduceMotion()) {
+        if (@available(iOS 17.0, *)) {
+            [star setSymbolImage:image withContentTransition:NSSymbolReplaceContentTransition.replaceDownUpTransition];
+        } else {
+            [UIView transitionWithView:star duration:0.2 options:UIViewAnimationOptionTransitionCrossDissolve
+                            animations:^{ star.image = image; } completion:nil];
+        }
+    } else {
+        star.image = image;
+    }
+}
+
+- (void)tapped:(UIControl *)sender {
+    (void)sender;
+    UIImageView *star = self.star;
+    if (!star) return;
+    [self setAdded:!self.added animated:YES];
+    if (SGRReduceMotion()) return;
+    star.transform = CGAffineTransformMakeScale(0.6, 0.6);
+    [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.55 initialSpringVelocity:0.4
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{ star.transform = CGAffineTransformIdentity; } completion:nil];
+}
+@end
+
+static BOOL playerAddStateOf(UIControl *control) {
+    if (control.isSelected) return YES;
+    NSString *text = [NSString stringWithFormat:@"%@ %@", control.accessibilityLabel ?: @"",
+                      control.accessibilityIdentifier ?: @""].lowercaseString;
+    for (NSString *term in @[@"remove", @"added", @"saved", @"rimuovi", @"aggiunt", @"salvat"]) {
+        if ([text containsString:term]) return YES;
+    }
+    return NO;
+}
+
+static void playerReplaceAddGlyph(UIView *info) {
+    if (!info) return;
+    UIView *source = SGRFindByIdentifier(info, @"SPTNowPlayingAddToButton", NULL);
+    if (!source) source = SGRFindByIdentifier(info, @"Components.UI.AddToButton", NULL);
+    if (!source) return;
+    __block UIControl *control = [source isKindOfClass:UIControl.class] ? (UIControl *)source : nil;
+    if (!control) SGForEachView(source, ^(UIView *view) {
+        if (!control && [view isKindOfClass:UIControl.class]) control = (UIControl *)view;
+    });
+    if (!control) return;
+
+    UIImageView *star = objc_getAssociatedObject(control, &kPlayerAddStarKey);
+    UIView *circle = objc_getAssociatedObject(control, &kPlayerAddCircleKey);
+    SGRPlayerAddStarAnimator *animator = objc_getAssociatedObject(control, &kPlayerAddStarAnimatorKey);
+    if (!star) {
+        circle = [UIView new];
+        circle.userInteractionEnabled = NO;
+        circle.backgroundColor = [UIColor colorWithWhite:1 alpha:0.18];
+        objc_setAssociatedObject(control, &kPlayerAddCircleKey, circle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        star = [UIImageView new];
+        star.tintColor = UIColor.whiteColor;
+        star.contentMode = UIViewContentModeCenter;
+        star.userInteractionEnabled = NO;
+        objc_setAssociatedObject(control, &kPlayerAddStarKey, star, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        animator = [SGRPlayerAddStarAnimator new];
+        animator.star = star;
+        objc_setAssociatedObject(control, &kPlayerAddStarAnimatorKey, animator, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        BOOL added = playerAddStateOf(control);
+        animator.spotifyAdded = added;
+        [animator setAdded:added animated:NO];
+
+        [control addSubview:circle];
+        [control addSubview:star];
+        [control addTarget:animator action:@selector(tapped:) forControlEvents:UIControlEventTouchUpInside];
+    }
+
+    // On every pass, not only at creation: Spotify rebuilds its circled "+" and puts its alpha back
+    // when the track or the state changes, and the circle can be drawn by the control's own layer.
+    for (UIView *view in control.subviews) {
+        if (view == star || view == circle) continue;
+        view.alpha = 0;
+    }
+    for (UIView *view in @[control, source]) {
+        view.layer.borderWidth = 0;
+        view.layer.backgroundColor = nil;
+    }
+
+    // If Spotify's own state really changes (another track, added from elsewhere), the star follows it.
+    BOOL spotifyAdded = playerAddStateOf(control);
+    if (spotifyAdded != animator.spotifyAdded) {
+        animator.spotifyAdded = spotifyAdded;
+        [animator setAdded:spotifyAdded animated:NO];
+    }
+
+    CGFloat side = MIN(30, MIN(control.bounds.size.width, control.bounds.size.height));
+    CGPoint center = CGPointMake(CGRectGetMidX(control.bounds), CGRectGetMidY(control.bounds));
+    circle.bounds = CGRectMake(0, 0, side, side);
+    circle.center = center;
+    circle.layer.cornerRadius = side / 2;
+    star.bounds = circle.bounds;
+    star.center = center;
+    [control bringSubviewToFront:circle];
+    [control bringSubviewToFront:star];
 }
 
 static void layoutLandscapeTitleActions(UIView *info, UIView *host, SGRLyricsLayout l) {
@@ -845,6 +1122,50 @@ static void restoreLandscapeChildren(UIView *duration, UIView *controls) {
     restoreChildFrame(repeat, &kLandscapeRepeatFrameKey);
 }
 
+static CGFloat idleProgressTop(UIView *host, UIView *duration) {
+    if (!host || !duration) return 0;
+    CGRect frame = untransformed(duration, host);
+    CGFloat safeBottom = host.window.safeAreaInsets.bottom;
+    CGFloat latest = host.bounds.size.height - safeBottom - kIdleBottomClearance - frame.size.height;
+    return MIN(host.bounds.size.height * kIdleProgressFraction, MAX(0, latest));
+}
+
+static void syncIdleCoverInteraction(BOOL hidden) {
+    UIView *coverList = SGRPlayerCoverList();
+    if (sg_idleCoverList && (!hidden || sg_idleCoverList != coverList)) {
+        sg_idleCoverList.userInteractionEnabled = sg_idleCoverListWasInteractive;
+        sg_idleCoverList = nil;
+    }
+    if (hidden && coverList && !sg_idleCoverList) {
+        sg_idleCoverList = coverList;
+        sg_idleCoverListWasInteractive = coverList.userInteractionEnabled;
+        coverList.userInteractionEnabled = NO;
+    }
+}
+
+static void syncIdleControls(void) {
+    BOOL hidden = sg_idleChromeHidden && !playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO) &&
+        !sg_open && !sg_queueOpen;
+    syncIdleCoverInteraction(hidden);
+    UIView *header = sg_header.viewIfLoaded;
+    if (header) {
+        BOOL headerHidden = hidden || sg_alone || sg_landscapeChromeHidden;
+        header.alpha = headerHidden ? 0 : 1;
+        header.accessibilityElementsHidden = headerHidden;
+    }
+    if (!playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO)) {
+        UIView *controls = sg_controls.viewIfLoaded;
+        if (controls) {
+            controls.alpha = hidden ? 0 : 1;
+            controls.userInteractionEnabled = !hidden;
+            controls.accessibilityElementsHidden = hidden;
+        }
+    }
+    UIView *info = sg_info.viewIfLoaded;
+    UIView *stack = info.superview;
+    if ([stack isKindOfClass:UIStackView.class]) SGRPlayerSetVolumeIdleHidden(stack, hidden);
+}
+
 static void placeTitleRow(SGRLyricsLayout l) {
     UIView *info = sg_info.viewIfLoaded;
     if (!info) return;
@@ -853,7 +1174,9 @@ static void placeTitleRow(SGRLyricsLayout l) {
     CGFloat portraitLift = (!landscape && !SGFlag(SGRKeyPlayerVinyl, NO)) ? kPortraitPlayerRowsLift : 0;
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
-    if (landscape && sg_open && duration && controls) {
+    BOOL expanded = sg_open || sg_queueOpen;
+    BOOL idle = sg_idleChromeHidden && !landscape && !SGFlag(SGRKeyPlayerVinyl, NO) && !expanded;
+    if (landscape && expanded && duration && controls) {
         moveUnit(duration, sg_host, l.duration.origin, &kLandscapeDurationFrameKey, &kLandscapeDurationMovedKey);
         moveUnit(controls, sg_host, l.controls.origin, &kLandscapeControlsFrameKey, &kLandscapeControlsMovedKey);
         layoutLandscapeControls(controls, sg_host, l);
@@ -869,28 +1192,42 @@ static void placeTitleRow(SGRLyricsLayout l) {
     SGRVinylSetLyricsTransportFrame(sg_host,
         sg_open && landscape && SGFlag(SGRKeyPlayerVinyl, NO) && l.ok ? l.controls : CGRectNull);
     [SGRowIn(info) layoutIfNeeded];
-    CGFloat lift = (sg_open ? l.lift : 0) - portraitLift;
-    CGFloat shift = sg_open ? l.shift : (landscape ? l.baseShift : 0);
+    CGRect baseInfo = untransformed(info, sg_host);
+    CGFloat lift = idle ? idleProgressTop(sg_host, duration) - baseInfo.size.height - kIdleInfoGap - CGRectGetMinY(baseInfo)
+                        : (expanded ? l.lift : 0) - portraitLift;
+    CGFloat shift = expanded ? l.shift : (landscape ? l.baseShift : 0);
     CGAffineTransform rise = CGAffineTransformMakeTranslation(0, round(lift));
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
     // Keep the progress slider and both time labels together. The information unit contains the
     // title, artist and any inline add/remove actions, so its matching offset moves that whole row.
     // Landscape lyrics and Vinyl keep their independently measured layouts.
     if (!SGFlag(SGRKeyPlayerVinyl, NO) && duration) {
-        CGAffineTransform progressOffset = CGAffineTransformMakeTranslation(0, landscape ? 0 : -portraitLift);
+        CGFloat progressLift = landscape ? 0 : -portraitLift;
+        if (idle) progressLift = idleProgressTop(sg_host, duration) - CGRectGetMinY(untransformed(duration, sg_host));
+        CGAffineTransform progressOffset = CGAffineTransformMakeTranslation(0, progressLift);
         if (!CGAffineTransformEqualToTransform(duration.transform, progressOffset)) duration.transform = progressOffset;
     }
     UIView *title = sg_titleElement;
     if (!title) return;
+    BOOL trackArtwork = placeCanvasInfoArtwork(info, title);
+    if (trackArtwork && !landscape) shift = 0;
+    if (expanded) {
+        SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
+        if (overlay) overlay.thumb.alpha = trackArtwork ? 0 : (currentArtwork() ? 1 : 0);
+    }
+    playerReplaceAddGlyph(info);
     CGAffineTransform slide = CGAffineTransformIdentity;
-    slide.tx = round(shift);
+    CGFloat artworkShift = trackArtwork ? kCanvasInfoArtworkSide + kCanvasInfoArtworkGap : 0;
+    slide.tx = round(shift + artworkShift);
     if (!CGAffineTransformEqualToTransform(title.transform, slide)) title.transform = slide;
     if (landscape && sg_open) layoutLandscapeTitleActions(info, sg_host, l);
     // Closed it reaches as far as Spotify meant it to; moved, only as far as the controls it moved towards.
     CGFloat room = CGFLOAT_MAX;
-    if (sg_open || landscape) room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift);
+    if (expanded || landscape || trackArtwork)
+        room = trailingEdgeIn(info) - kTitleGap - (CGRectGetMinX(untransformed(title, info)) + shift + artworkShift);
     if (sg_open && l.titleMaxWidth > 0) room = MIN(room, l.titleMaxWidth);
     clipTitle(title, room);
+    syncIdleControls();
 }
 
 #pragma mark - the lines alone
@@ -923,7 +1260,7 @@ static void setLandscapeChromeHidden(BOOL hidden, BOOL animated) {
     SGRPlayerLyricsOverlay *overlay = sg_host ? objc_getAssociatedObject(sg_host, &kOverlayKey) : nil;
     void (^updates)(void) = ^{
         header.alpha = hidden ? 0 : 1;
-        overlay.rotate.alpha = hidden ? 0 : 1;
+        overlay.rotate.alpha = hidden || !SGFlag(SGRKeyPlayerAutoRotate, YES) ? 0 : 1;
     };
     if (animated && !SGRReduceMotion()) {
         [UIView animateWithDuration:hidden ? kAloneOut : kAloneBack delay:0
@@ -937,7 +1274,8 @@ static void setLandscapeChromeHidden(BOOL hidden, BOOL animated) {
 static BOOL mayHideLandscapeChrome(void) {
     UIView *host = sg_host;
     SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
-    if (!sg_open || !playerIsLandscape() || sg_moving || sg_singHeld || !host.window || !overlay.superview || overlay.lyrics.hidden) return NO;
+    if (!sg_open || !playerIsLandscape() || sg_moving || sg_singHeld || !host.window ||
+        !overlay.superview || overlay.lyrics.hidden) return NO;
     SPTPlayerState *state = SGPlayerState();
     if (!state || state.isPaused) return NO;
     UIViewController *top = sg_player;
@@ -963,6 +1301,11 @@ static void scheduleAlone(void);
 // Sing's microphone in the corner of the band the lines have now. Held, it keeps the controls from going
 // and lets the count start over once it lets go.
 static void placeSing(SGRPlayerLyricsOverlay *overlay, SGRLyricsLayout l) {
+    if (!sg_open) {
+        SGRSingControlRemove(overlay);
+        sg_sing = nil;
+        return;
+    }
     CGRect band = [overlay convertRect:sg_alone ? l.room : l.stage fromView:sg_host];
     sg_sing = SGRSingControlForPage(overlay, band, sg_alone, ^(BOOL held) {
         sg_singHeld = held;
@@ -1016,6 +1359,79 @@ static BOOL mayGoAlone(void) {
         && UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
 }
 
+static void stopPlayerIdleTimer(void) {
+    [sg_idleChromeTimer invalidate];
+    sg_idleChromeTimer = nil;
+}
+
+static BOOL mayHidePlayerChrome(void) {
+    UIView *host = sg_host;
+    SPTPlayerState *state = SGPlayerState();
+    if (!SGFlag(SGRKeyPlayerIdleChrome, YES) || !host.window || playerIsLandscape() ||
+        SGFlag(SGRKeyPlayerVinyl, NO) || sg_open || sg_queueOpen || sg_moving ||
+        !state || state.isPaused || !SGRPlayerAnimatedTrackHasCanvas() || SGRPlayerIsTransitioning() ||
+        UIAccessibilityIsVoiceOverRunning() ||
+        UIApplication.sharedApplication.applicationState != UIApplicationStateActive) return NO;
+    UIViewController *top = sg_player;
+    while (top.parentViewController) top = top.parentViewController;
+    return !top.presentedViewController;
+}
+
+static void schedulePlayerIdleTimer(void) {
+    if (sg_idleChromeHidden || sg_idleChromeTimer || !mayHidePlayerChrome()) return;
+    sg_idleChromeTimer = [NSTimer scheduledTimerWithTimeInterval:kPlayerIdleAfter repeats:NO block:^(NSTimer *timer) {
+        sg_idleChromeTimer = nil;
+        if (mayHidePlayerChrome()) {
+            setPlayerIdleChromeHidden(YES, YES);
+        }
+    }];
+}
+
+static void resetPlayerIdleTimer(void) {
+    stopPlayerIdleTimer();
+    schedulePlayerIdleTimer();
+}
+
+static void setPlayerIdleChromeHidden(BOOL hidden, BOOL animated) {
+    UIView *host = sg_host;
+    if (!host) return;
+    if (hidden && !mayHidePlayerChrome()) return;
+    if (sg_idleChromeHidden == hidden) return;
+    sg_idleChromeHidden = hidden;
+    stopPlayerIdleTimer();
+    void (^updates)(void) = ^{
+        placeTitleRow(layoutIn(host));
+        SGRPlayerAnimatedSetIdleChromeHidden(hidden);
+        syncIdleControls();
+        syncLandscapeFooter();
+    };
+    if (animated && host.window) {
+        NSTimeInterval duration = SGRReduceMotion() ? 0.18 : (hidden ? kAloneOut : kAloneBack);
+        [UIView animateWithDuration:duration delay:0
+                            usingSpringWithDamping:SGRReduceMotion() ? 1 : 0.92
+                             initialSpringVelocity:0
+                           options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                        animations:updates completion:nil];
+    } else {
+        updates();
+    }
+    if (!hidden) schedulePlayerIdleTimer();
+}
+
+static BOOL idleKeptView(UIView *view) {
+    if (!view) return NO;
+    UIView *roots[] = {
+        sg_idleChromeHidden ? nil : sg_header.viewIfLoaded,
+        sg_info.viewIfLoaded,
+        sg_duration.viewIfLoaded,
+    };
+    for (NSUInteger i = 0; i < sizeof(roots) / sizeof(roots[0]); i++) {
+        UIView *root = roots[i];
+        if (root && (view == root || [view isDescendantOfView:root])) return YES;
+    }
+    return NO;
+}
+
 // Counts the time untouched from now. A timer that finds the lines not in (a track still bringing its
 // own) or a sheet over the player starts over. One that finds the song paused or the app away lets it
 // be, so a locked phone playing on is not woken for it: playing again starts it (SGRPlayerLyricsWatcher),
@@ -1039,6 +1455,10 @@ static void scheduleAlone(void) {
 
 // A touch has begun somewhere on the player, on `view`.
 static void touched(UIView *view) {
+    if (SGFlag(SGRKeyPlayerIdleChrome, YES) && !idleKeptView(view)) {
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, YES);
+        else resetPlayerIdleTimer();
+    }
     if (sg_alone && sg_sing && [view isDescendantOfView:sg_sing]) {
         sg_tapBroughtBack = NO;
         return;
@@ -1098,7 +1518,9 @@ BOOL SGRPlayerLyricsOpen(void) {
 // runs while it is up leaves it exactly where the eye has it: the two are worked out from one
 // measurement. Bounds and a centre, not a frame, since both views can be under a transform.
 static void place(SGRPlayerLyricsOverlay *overlay, UIView *host, SGRLyricsLayout l) {
-    overlay.frame = CGRectUnion(l.cover, CGRectUnion(l.thumb, l.room));
+    // Queue content lives in the lower stage, but its material must cover the same
+    // full player surface as Lyrics. Keep the stage geometry unchanged inside it.
+    overlay.frame = sg_queueOpen ? host.bounds : CGRectUnion(l.cover, CGRectUnion(l.thumb, l.room));
     CGRect cover = [overlay convertRect:l.cover fromView:host], stage = [overlay convertRect:l.room fromView:host];
     overlay.thumb.bounds = (CGRect){CGPointZero, cover.size};
     overlay.thumb.center = CGPointMake(CGRectGetMidX(cover), CGRectGetMidY(cover));
@@ -1139,11 +1561,23 @@ static CGFloat thumbRadius(SGRLyricsLayout l, BOOL open) {
     return scale > 0 ? SGRRadiusCover / scale : SGRRadiusArtwork;
 }
 
+static UIImage *currentArtwork(void) {
+    NSString *artworkURI = nil;
+    UIImage *artwork = SGRNowPlayingArtwork(&artworkURI, NULL);
+    return [artworkURI isEqualToString:SGURIString(SGPlayerState().track.URI)] ? artwork : nil;
+}
+
+static BOOL canvasInfoArtworkIsAvailable(void) {
+    return !playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO) &&
+        SGFlag(SGRKeyPlayerCanvasInfoArtwork, YES) &&
+        SGRPlayerAnimatedTrackHasCanvas() && currentArtwork() != nil;
+}
+
 // Keep a sharp, large cover at the left of the title while the landscape player is closed. The blurred
 // artwork field beneath it still fills the whole player when a track has no live Canvas.
 static void keepLandscapeCover(UIView *host, SGRLyricsLayout l) {
     if (!host || host.bounds.size.width <= host.bounds.size.height || !l.ok) return;
-    UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
+    UIImage *picture = currentArtwork();
     if (!picture) {
         SGRPlayerCoverList().alpha = 1;
         SGRPlayerSetCoverHidden(NO);
@@ -1188,14 +1622,26 @@ static void setOpen(BOOL open, BOOL animated) {
         SGLog(@"redesign player: the lyrics were asked for before the player laid out");
         return;
     }
+    if (open) {
+        stopPlayerIdleTimer();
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, animated);
+        stopPlayerIdleTimer();
+    }
     SGRLyricsLayout l = layoutIn(host);
     if (open && !l.ok) {
         SGLog(@"redesign player: the lyrics have nowhere to go (stage %.0fx%.0f, lift %.0f)", l.stage.size.width, l.stage.size.height, l.lift);
         return;
     }
+    BOOL switchingFromQueue = open && sg_queueOpen;
+    UIView *queueContent = switchingFromQueue ? sg_queueContent : nil;
+    if (switchingFromQueue) {
+        SGRPlayerQueueReleaseForLyrics();
+        sg_queueOpen = NO;
+        sg_queueContent = nil;
+    }
     // The thumbnail is the Kit's picture drawn again. If it has not loaded yet, leave Spotify's cover
     // visible and still open the lyrics; the artwork notification fills the thumbnail when it arrives.
-    UIImage *picture = SGRNowPlayingArtwork(NULL, NULL);
+    UIImage *picture = currentArtwork();
     BOOL landscape = host.bounds.size.width > host.bounds.size.height;
     // The controls come back first: the thumbnail flying back to the cover is one of them.
     if (!open) {
@@ -1212,6 +1658,8 @@ static void setOpen(BOOL open, BOOL animated) {
     if (!open) SGRSingControlDismiss(overlay);
     place(overlay, host, l);
     if (open) [overlay.lyrics setFontSize:landscape ? 24 : 30];
+    if (open) [overlay setQueueContent:nil];
+    if (queueContent) [queueContent removeFromSuperview];
     CGAffineTransform vinylClosingTransform = CGAffineTransformIdentity;
     BOOL vinylClosing = !open && SGRVinylLyricsClosingTransform(overlay.thumb, &vinylClosingTransform);
     CGAffineTransform away = thumbTransform(l);
@@ -1219,11 +1667,12 @@ static void setOpen(BOOL open, BOOL animated) {
     CGAffineTransform small = CGAffineTransformConcat(CGAffineTransformMakeScale(kThumbAppearScale, kThumbAppearScale), away);
     CGAffineTransform full = inPlace && !landscape ? small : CGAffineTransformIdentity;
     // The state it starts from, so the animation has both ends of every value and nothing jumps into it.
-    overlay.thumb.transform = open ? full : away;
-    overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || !open);
+    overlay.thumb.transform = open ? (switchingFromQueue ? away : full) : away;
+    overlay.cover.layer.cornerRadius = thumbRadius(l, switchingFromQueue || inPlace || !open);
     if (open) {
         SGRVinylLyricsControlsDidChange(1);
-        overlay.thumb.alpha = (inPlace && !landscape) || !picture ? 0 : 1;
+        overlay.thumb.alpha = canvasInfoArtworkIsAvailable() ? 0
+            : (switchingFromQueue ? (picture ? 1 : 0) : ((inPlace && !landscape) || !picture ? 0 : 1));
         overlay.cover.image = picture;
         // Vinyl mode: replace the cover thumbnail with a mini spinning vinyl disc.
         SGRVinylInstallMiniDisc(overlay.thumb.face, overlay.cover);
@@ -1245,7 +1694,8 @@ static void setOpen(BOOL open, BOOL animated) {
 
     void (^move)(void) = ^{
         overlay.thumb.transform = open ? away : (vinylClosing ? vinylClosingTransform : full);
-        if (picture && inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : (landscape ? 1 : 0);
+        if (canvasInfoArtworkIsAvailable()) overlay.thumb.alpha = 0;
+        else if (picture && inPlace && !vinylClosing) overlay.thumb.alpha = open ? 1 : (landscape ? 1 : 0);
         overlay.cover.layer.cornerRadius = thumbRadius(l, inPlace || open);
         SGRVinylLyricsDidChange(open, sg_info.viewIfLoaded);
         placeTitleRow(l);
@@ -1255,7 +1705,7 @@ static void setOpen(BOOL open, BOOL animated) {
         overlay.stage.alpha = open ? 1 : 0;
         overlay.stage.transform = open ? CGAffineTransformIdentity
                                        : CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
-        overlay.rotate.alpha = open ? 1 : 0;
+        overlay.rotate.alpha = open && SGFlag(SGRKeyPlayerAutoRotate, YES) ? 1 : 0;
         if (open && landscape && sg_landscapeChromeHidden) overlay.rotate.alpha = 0;
         sg_sing.alpha = open ? 1 : 0;
     };
@@ -1265,6 +1715,7 @@ static void setOpen(BOOL open, BOOL animated) {
             replace();         // a rotation during the opening flight changes the layout's geometry
             return;
         }
+        placeTitleRow(layoutIn(host));
         SGRVinylLyricsDidSettleClosed();
         // Vinyl mode: restore the cover thumbnail.
         SGRVinylRemoveMiniDisc();
@@ -1274,6 +1725,7 @@ static void setOpen(BOOL open, BOOL animated) {
         } else {
             restoreSpotifyCover(host);
         }
+        schedulePlayerIdleTimer();
         SGRPlayerFooterRefreshLayout();
     };
 
@@ -1304,11 +1756,163 @@ void SGRPlayerToggleLyrics(void) {
     setOpen(!sg_open, YES);
 }
 
+UIView *SGRPlayerContentHost(void) {
+    return sg_host;
+}
+
+void SGRPlayerLyricsUpdateArtwork(UIImage *artwork) {
+    UIView *host = sg_host;
+    SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
+    if (overlay) overlay.cover.image = artwork;
+}
+
+CGRect SGRPlayerControlsBlurFrameIn(UIView *host) {
+    UIView *info = sg_info.viewIfLoaded;
+    if (!host || !info || info.window != host.window) return CGRectNull;
+    CGRect row = sg_idleChromeHidden && !playerIsLandscape() ? SGFrameIn(info, host) : untransformed(info, host);
+    if (CGRectIsNull(row) || CGRectIsEmpty(row)) return CGRectNull;
+    return CGRectMake(0, CGRectGetMinY(row), host.bounds.size.width,
+                      MAX(0, host.bounds.size.height - CGRectGetMinY(row)));
+}
+
+BOOL SGRPlayerQueueSetInlineView(UIView *content, BOOL open, BOOL animated) {
+    UIView *host = sg_host;
+    if (!host) {
+        if (open) SGLog(@"redesign player: the queue was asked for before the player laid out");
+        return NO;
+    }
+    if (open == sg_queueOpen) {
+        if (open) sg_queueContent = content;
+        return YES;
+    }
+    if (open) {
+        stopPlayerIdleTimer();
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, animated);
+        stopPlayerIdleTimer();
+    }
+    BOOL switchingFromLyrics = open && sg_open;
+    SGRLyricsLayout l = layoutIn(host);
+    if (open && !l.ok) {
+        SGLog(@"redesign player: the queue has nowhere to go (stage %.0fx%.0f)", l.stage.size.width, l.stage.size.height);
+        return NO;
+    }
+    CGRect queueStage = open ? queueStageIn(host, l) : CGRectNull;
+    if (open && (CGRectIsNull(queueStage) || CGRectIsEmpty(queueStage))) {
+        SGLog(@"redesign player: the queue has no room below the track row");
+        return NO;
+    }
+    UIImage *picture = currentArtwork();
+    BOOL landscape = host.bounds.size.width > host.bounds.size.height;
+    SGRPlayerLyricsOverlay *overlay = overlayIn(host);
+    place(overlay, host, l);
+    if (open) {
+        if (switchingFromLyrics) {
+            stopAloneTimer();
+            stopLandscapeChromeTimer();
+            if (sg_alone) setAlone(NO, NO);
+            SGRSingControlDismiss(overlay);
+            SGRVinylLyricsControlsDidChange(1);
+            SGRVinylLyricsDidChange(NO, sg_info.viewIfLoaded);
+            sg_open = NO;
+            sg_floating.viewIfLoaded.alpha = 1;
+            SGRPlayerLyricsChanged();
+        }
+        sg_queueContent = content;
+        sg_queueOpen = YES;
+        SGRPlayerAnimatedFollowQueue(YES);
+        [overlay setQueueContent:content];
+        place(overlay, host, l);
+        overlay.cover.image = picture;
+        overlay.cover.layer.cornerRadius = thumbRadius(l, YES);
+        BOOL inPlace = SGRPlayerAnimatedShowing(NULL, NULL);
+        CGAffineTransform full = inPlace && !landscape
+            ? CGAffineTransformConcat(CGAffineTransformMakeScale(kThumbAppearScale, kThumbAppearScale), thumbTransform(l))
+            : CGAffineTransformIdentity;
+        overlay.thumb.transform = switchingFromLyrics ? thumbTransform(l) : full;
+        overlay.thumb.alpha = canvasInfoArtworkIsAvailable() ? 0 : (picture ? 1 : 0);
+        overlay.stage.alpha = 0;
+        overlay.stage.transform = CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
+        if (content.superview != overlay.stage) [overlay.stage addSubview:content];
+        SGRPlayerCoverList().alpha = 0;
+        SGRPlayerSetCoverHidden(landscape);
+        placeTitleRow(l);
+        content.frame = CGRectMake(CGRectGetMinX(queueStage) - CGRectGetMinX(l.room),
+                                   CGRectGetMinY(queueStage) - CGRectGetMinY(l.room),
+                                   queueStage.size.width, queueStage.size.height);
+        content.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        SGRPlayerAnimatedFollowLyrics(NO, animated);
+    } else {
+        UIView *closingContent = sg_queueContent;
+        sg_queueOpen = NO;
+        SGRPlayerAnimatedFollowQueue(NO);
+        sg_queueContent = nil;
+        CGAffineTransform full = SGRPlayerAnimatedShowing(NULL, NULL) && !landscape
+            ? CGAffineTransformConcat(CGAffineTransformMakeScale(kThumbAppearScale, kThumbAppearScale), thumbTransform(l))
+            : CGAffineTransformIdentity;
+        void (^move)(void) = ^{
+            overlay.thumb.transform = full;
+            overlay.thumb.alpha = canvasInfoArtworkIsAvailable() ? 0
+                : (picture ? (landscape ? 1 : (SGRPlayerAnimatedShowing(NULL, NULL) ? 0 : 1)) : 0);
+            overlay.stage.alpha = 0;
+            overlay.stage.transform = CGAffineTransformMakeScale(kLyricsEnterScale, kLyricsEnterScale);
+            placeTitleRow(l);
+        };
+        void (^settled)(BOOL) = ^(BOOL finished) {
+            sg_moving = NO;
+            [closingContent removeFromSuperview];
+            placeTitleRow(layoutIn(host));
+            if (!SGFlag(SGRKeyPlayerVinyl, NO) && landscape) keepLandscapeCover(host, layoutIn(host));
+            else restoreSpotifyCover(host);
+            schedulePlayerIdleTimer();
+            SGRPlayerFooterRefreshLayout();
+        };
+        if (animated) {
+            sg_moving = YES;
+            [UIView animateWithDuration:kLyricsOut delay:0
+                                options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState
+                             animations:move completion:settled];
+        } else {
+            move();
+            settled(YES);
+        }
+        SGRPlayerAnimatedFollowLyrics(NO, animated);
+        return YES;
+    }
+    void (^move)(void) = ^{
+        overlay.thumb.transform = thumbTransform(l);
+        placeTitleRow(l);
+    };
+    void (^show)(void) = ^{
+        overlay.stage.alpha = 1;
+        overlay.stage.transform = CGAffineTransformIdentity;
+    };
+    void (^settled)(BOOL) = ^(BOOL finished) {
+        sg_moving = NO;
+        if (sg_queueOpen) replace();
+    };
+    if (animated) {
+        sg_moving = YES;
+        SGRAnimate(SGRMotionLayout, move, settled);
+        [UIView animateWithDuration:kLyricsIn delay:kLyricsInDelay
+                            options:UIViewAnimationOptionCurveEaseInOut | UIViewAnimationOptionBeginFromCurrentState
+                         animations:show completion:nil];
+    } else {
+        move();
+        show();
+        settled(YES);
+    }
+    SGRPlayerFooterRefreshLayout();
+    return YES;
+}
+
 // A layout pass, a new track or a turn of the phone: the state is put back where it belongs without
 // animating, since the frames it is measured from have just changed.
 static void replace(void) {
     UIView *host = sg_host;
     if (!host || sg_moving) return;   // a pass in the middle of the transition would cut it short
+    UIView *title = sg_titleElement;
+    if (!titleIsAvailable(title, host)) return;
+    hideSongExclusionActions(sg_info.viewIfLoaded);
     if (playerIsLandscape()) {
         stopAloneTimer();
         if (sg_alone) setAlone(NO, NO);
@@ -1316,23 +1920,53 @@ static void replace(void) {
         stopLandscapeChromeTimer();
         if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, NO);
     }
+    if (playerIsLandscape() || SGFlag(SGRKeyPlayerVinyl, NO) || sg_open || sg_queueOpen) {
+        stopPlayerIdleTimer();
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, NO);
+    }
     SGRLyricsLayout l = layoutIn(host);
-    if (sg_open && !l.ok) {
+    if ((sg_open || sg_queueOpen) && !l.ok) {
         SGLog(@"redesign player: lyrics layout no longer fits %.0fx%.0f; restoring the player layout",
               host.bounds.size.width, host.bounds.size.height);
-        setOpen(NO, NO);
+        if (sg_queueOpen) SGRPlayerQueueSetInlineView(nil, NO, NO);
+        else setOpen(NO, NO);
         return;
     }
     placeTitleRow(l);
     sg_floating.viewIfLoaded.alpha = sg_open ? 0 : 1;
-    if (!sg_open) {
+    if (!sg_open && !sg_queueOpen) {
         if (!SGFlag(SGRKeyPlayerVinyl, NO) && host.bounds.size.width > host.bounds.size.height && l.ok) keepLandscapeCover(host, l);
         else restoreSpotifyCover(host);
+        schedulePlayerIdleTimer();
         return;
     }
     SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(host, &kOverlayKey);
     if (!overlay.superview) overlay = overlayIn(host);
     place(overlay, host, l);
+    if (sg_queueOpen) {
+        [overlay setQueueContent:sg_queueContent];
+        overlay.cover.image = currentArtwork();
+        overlay.thumb.transform = thumbTransform(l);
+        overlay.cover.layer.cornerRadius = thumbRadius(l, YES);
+        CGRect queueStage = queueStageIn(host, l);
+        if (CGRectIsNull(queueStage) || CGRectIsEmpty(queueStage)) {
+            SGRPlayerQueueSetInlineView(nil, NO, NO);
+            return;
+        }
+        sg_queueContent.frame = CGRectMake(CGRectGetMinX(queueStage) - CGRectGetMinX(l.room),
+                                           CGRectGetMinY(queueStage) - CGRectGetMinY(l.room),
+                                           queueStage.size.width, queueStage.size.height);
+        overlay.stage.alpha = 1;
+        overlay.rotate.alpha = 0;
+        if (playerIsLandscape()) {
+            SGRPlayerCoverList().alpha = 0;
+            SGRPlayerSetCoverHidden(YES);
+        } else {
+            SGRPlayerSetCoverHidden(NO);
+            SGRPlayerCoverList().alpha = 0;
+        }
+        return;
+    }
     [overlay.lyrics setFontSize:playerIsLandscape() ? 24 : 30];
     overlay.thumb.transform = thumbTransform(l);
     overlay.cover.layer.cornerRadius = thumbRadius(l, YES);
@@ -1349,6 +1983,19 @@ static void replace(void) {
     else {
         SGRPlayerSetCoverHidden(NO);
         SGRPlayerCoverList().alpha = 0;
+    }
+}
+
+void SGRPlayerCanvasInfoArtworkSettingChanged(void) {
+    replace();
+}
+
+void SGRPlayerIdleChromeSettingChanged(void) {
+    if (!SGFlag(SGRKeyPlayerIdleChrome, YES)) {
+        stopPlayerIdleTimer();
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, YES);
+    } else {
+        resetPlayerIdleTimer();
     }
 }
 
@@ -1373,6 +2020,8 @@ static void replace(void) {
     restoreLandscapeTitleActions(sg_info.viewIfLoaded);
     if (size.width > size.height) {
         stopAloneTimer();
+        stopPlayerIdleTimer();
+        if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, NO);
         if (sg_alone) setAlone(NO, NO);
     }
     restoreLandscapeChildren(duration, controls);
@@ -1412,12 +2061,16 @@ static void replace(void) {
     sg_player = (UIViewController *)self;
     watchTouches(host);
     replace();
+    SGRPlayerAnimatedPlayerLayoutChanged();
 }
 
 // The bar morphs back out of a full size cover as the player closes, so the thumbnail is put away first.
 - (void)viewWillDisappear:(BOOL)animated {
     SGRPlayerOrientationPlayerWillDisappear((UIViewController *)self);
+    SGRPlayerQueueCloseForTransition();
     if (sg_open) setOpen(NO, NO);
+    stopPlayerIdleTimer();
+    if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, NO);
     restoreSpotifyCover(sg_host);
     UIView *info = sg_info.viewIfLoaded, *title = sg_titleElement;
     info.transform = CGAffineTransformIdentity;
@@ -1434,7 +2087,11 @@ static void replace(void) {
 // The header row goes with the rest of the controls while the lines are alone.
 static void headerLaidOut(UIViewController *unit) {
     sg_header = unit;
-    sg_header.viewIfLoaded.alpha = (sg_alone || sg_landscapeChromeHidden) ? 0 : 1;
+    UIView *header = sg_header.viewIfLoaded;
+    BOOL hidden = sg_alone || sg_landscapeChromeHidden ||
+        (sg_idleChromeHidden && !playerIsLandscape() && !sg_open && !sg_queueOpen);
+    header.alpha = hidden ? 0 : 1;
+    header.accessibilityElementsHidden = hidden;
 }
 
 static void infoLaidOut(UIViewController *unit) {
@@ -1451,6 +2108,7 @@ static void infoLaidOut(UIViewController *unit) {
         static dispatch_once_t once;
         dispatch_once(&once, ^{ SGLog(@"redesign player: the title rides on %@ %@", NSStringFromClass(element.class), NSStringFromCGRect(element.frame)); });
     }
+    hideSongExclusionActions(host);
     replace();
 }
 
@@ -1463,6 +2121,7 @@ static void durationLaidOut(UIViewController *unit) {
 static void controlsLaidOut(UIViewController *unit) {
     sg_controls = unit;
     captureUnitFrame(unit.viewIfLoaded, sg_host, &kLandscapeControlsFrameKey);
+    syncIdleControls();
     if (sg_open) replace();
 }
 
@@ -1593,20 +2252,31 @@ static void singAvailabilityChanged(void) {
     if (state.isPaused != _paused) {
         _paused = state.isPaused;
         if (_paused) {
+            stopPlayerIdleTimer();
+            if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, YES);
             setAlone(NO, YES);
             stopAloneTimer();
             stopLandscapeChromeTimer();
             if (sg_landscapeChromeHidden) setLandscapeChromeHidden(NO, YES);
         } else {
             scheduleAlone();
+            resetPlayerIdleTimer();
         }
     }
     NSString *track = SGURIString(state.track.URI);
     if (!track || [track isEqualToString:_track]) return;
     _track = track;
+    stopPlayerIdleTimer();
+    if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, YES);
     SGKaraokeRequestLyrics(SGKaraokePlayingTrack());
     SGRPlayerLyricsChanged();
     awaitLyrics();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (![SGURIString(SGPlayerState().track.URI) isEqualToString:track]) return;
+        SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
+        overlay.cover.image = currentArtwork();
+        replace();
+    });
 }
 
 @end
@@ -1634,27 +2304,14 @@ static SGRPlayerLyricsWatcher *sg_watcher;
     [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification object:nil
                                                      queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
         if (!sg_aloneTimer) scheduleAlone();   // the wait gave up while the app was away
+        if (!sg_idleChromeHidden) schedulePlayerIdleTimer();
     }];
-    [NSNotificationCenter.defaultCenter addObserverForName:SGRNowPlayingArtworkDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
-        if (!sg_open) {
-            if (sg_host.bounds.size.width > sg_host.bounds.size.height) replace();
-            return;
-        }
+    [NSNotificationCenter.defaultCenter addObserverForName:SGRNowPlayingArtworkDidChangeNotification object:nil
+                                                     queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+        if (!sg_host) return;
         SGRPlayerLyricsOverlay *overlay = objc_getAssociatedObject(sg_host, &kOverlayKey);
-        UIImage *artwork = SGRNowPlayingArtwork(NULL, NULL);
-        if (!overlay || !artwork) return;
-        overlay.cover.image = artwork;
-        SGRAnimate(SGRMotionFade, ^{
-            overlay.thumb.alpha = 1;
-            if (sg_host.bounds.size.width > sg_host.bounds.size.height) {
-                SGRPlayerCoverList().alpha = 0;
-                SGRPlayerSetCoverHidden(YES);
-            }
-            else {
-                SGRPlayerSetCoverHidden(NO);
-                SGRPlayerCoverList().alpha = 0;
-            }
-        }, nil);
+        if (overlay) overlay.cover.image = currentArtwork();
+        replace();
     }];
     SGRequireClasses(@[
         @"_TtC19NowPlaying_ViewImpl24NowPlayingViewController",

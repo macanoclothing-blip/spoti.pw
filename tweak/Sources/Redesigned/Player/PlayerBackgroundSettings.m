@@ -43,6 +43,10 @@ static void migrate(void) {
         [store removeObjectForKey:key];
         SGLog(@"redesign player: %@ was %@, now Fluid artwork", key, was);
     }
+    if ([store objectForKey:@"spotifyglass.redesign.player.coverFallback"]) {
+        [store removeObjectForKey:@"spotifyglass.redesign.player.coverFallback"];
+        SGLog(@"redesign player: removed the obsolete still-cover fallback setting");
+    }
 }
 
 SGRPlayerBackground SGRPlayerBackgroundStyle(void) {
@@ -58,6 +62,16 @@ void SGRPlayerSetBackgroundStyle(SGRPlayerBackground style) {
     SGRPlayerHoldField();
     SGRPlayerVisualiserUpdate();
     SGRPlayerTextShadowsChanged();
+}
+
+BOOL SGRPlayerCanvasBlurEnabled(void) {
+    return SGFlag(SGRKeyPlayerCanvasBlur, NO);
+}
+
+void SGRPlayerSetCanvasBlurEnabled(BOOL enabled) {
+    if (enabled == SGRPlayerCanvasBlurEnabled()) return;
+    SGSetEnabled(SGRKeyPlayerCanvasBlur, enabled);
+    SGRPlayerAnimatedSetCanvasBlurEnabled(enabled);
 }
 
 SGRWarpLook SGRPlayerFluidLook(void) {
@@ -245,6 +259,13 @@ NSArray<SGModSection *> *SGRPlayerBackgroundSections(void) {
 
     SGModRow *sources = SGArtworkSourcesRow(SGRKeyPlayerArtworkSources,
         @"Asked top to bottom until one has a clip. Apple Music gets only the artist and album name.");
+    SGModRow *canvasArtwork = SGSwitchRow(@"Show album art beside track info",
+                                           @"Show the track's album art beside the song and artist when the track has a Canvas",
+                                           SGRKeyPlayerCanvasInfoArtwork);
+    canvasArtwork.changed = ^(BOOL enabled) {
+        (void)enabled;
+        SGRPlayerCanvasInfoArtworkSettingChanged();
+    };
 
     NSArray<SGModRow *> *mosaic = @[
         SGSliderRow(@"Dots across", nil, SGRMosaicDotsLeast, SGRMosaicDotsMost, 1,
@@ -264,8 +285,8 @@ NSArray<SGModSection *> *SGRPlayerBackgroundSections(void) {
         SGNotedSection(nil, shownFor(SGRPlayerBackgroundFluid, sliders),
                        @"The player follows these as they move. Brightness past 100% can make white text harder to read on a light cover."),
         SGSection(nil, shownFor(SGRPlayerBackgroundFluid, @[reset])),
-        SGNotedSection(nil, shownFor(SGRPlayerBackgroundAnimated, @[sources]),
-                       @"A track without a clip shows Fluid artwork, and so does every track in Low Power Mode or with Reduce Motion on."),
+        SGNotedSection(nil, shownFor(SGRPlayerBackgroundAnimated, @[sources, canvasArtwork]),
+                       @"A track without an available clip shows Fluid artwork."),
         SGNotedSection(nil, shownFor(SGRPlayerBackgroundMosaic, mosaic),
                        @"Adjust the grid density and light size. Text shadow improves contrast over bright dots."),
     ];

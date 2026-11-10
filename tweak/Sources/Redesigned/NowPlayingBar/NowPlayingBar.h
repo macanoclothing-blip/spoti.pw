@@ -36,3 +36,7 @@ BOOL SGROpenPlayerFromBar(void);
 UIView *SGRMakeMiniPlayer(void);
 CGRect SGRMiniPlayerFrameIn(UIView *host, CGFloat *radius);
 CGRect SGRMiniPlayerArtworkFrameIn(UIView *host);
+
+// Called once after the full-screen player has settled back into the mini player.
+void SGRNowPlayingBarBounce(void);
+void SGRBounceMiniPlayer(void);

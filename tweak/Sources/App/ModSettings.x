@@ -42,18 +42,13 @@ static UIViewController *modSettingsPage(void) {
     // Opening the page is the only thing that asks; the cache keeps it to once every six hours.
     SGCheckForUpdate(NO);
     NSMutableArray<SGModSection *> *sections = [NSMutableArray array];
-    // What no switch can put right leads the page, above the tweaks: a Spotify or a second mod it isn't
-    // made for, a build the lock screen cannot open.
-    NSMutableArray<SGModRow *> *warnings = [NSMutableArray arrayWithArray:SGCompatibilityWarningRows()];
+    // A build the lock screen cannot open leads the page, above the tweaks.
+    NSMutableArray<SGModRow *> *warnings = [NSMutableArray array];
     SGModRow *signing = SGSigningWarningRow();
     if (signing) [warnings addObject:signing];
     if (warnings.count) [sections addObject:SGSection(nil, warnings)];
-    SGModRow *discord = SGWithSymbol(SGLinkRow(@"Join the Discord", @"Release pings, help and previews", SGDiscordURL), @"bubble.left.and.bubble.right.fill");
-    discord.color = SGDiscordColor();
-    NSMutableArray<SGModRow *> *support = [NSMutableArray arrayWithObjects:SGDonateRow(), discord, nil];
     SGModRow *certificate = SGCertificateRow();
-    if (certificate) [support addObject:certificate];
-    [sections addObject:SGSection(nil, support)];
+    if (certificate) [sections addObject:SGSection(nil, @[certificate])];
     SGModRow *mod = pageRow(@"Mod", @"info.circle", ^UIViewController *{ return SGAboutPage(); });
     mod.value = ^NSString *{ return @(SG_VERSION); };
     // The audio effects work on the sound, so both looks have them, with what they are doing beside the chevron.
@@ -117,7 +112,7 @@ static UIViewController *modSettingsPage(void) {
     if (!(self = [super initWithFrame:frame])) return nil;
     _icon = SGSymbolView(@"slider.horizontal.3", 20, UIImageSymbolWeightRegular, 24);
     _title = [UILabel new];
-    _title.text = @"Mod Settings";
+    _title.text = self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings";
     _title.textColor = UIColor.whiteColor;
     _chevron = SGSymbolView(@"chevron.right", 11, UIImageSymbolWeightSemibold, 12);
     for (UIView *v in @[_icon, _title, _chevron]) [self addSubview:v];
@@ -128,11 +123,12 @@ static UIViewController *modSettingsPage(void) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     _title.font = SGTitleFont();
+    _title.text = self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings";
     CGFloat width = self.bounds.size.width, height = self.bounds.size.height, lead = self.drawer ? 4 : 0;
     _icon.frame = CGRectMake(12 + lead, (height - 24) / 2, 24, 24);
     _title.frame = CGRectMake(48 + lead, 0, width - 96, height);
     _chevron.frame = CGRectMake(width - 24, (height - 12) / 2, 12, 12);
-    _chevron.hidden = self.drawer;
+    _chevron.hidden = self.drawer && !SGRedesignedUI();
 }
 
 - (void)setHighlighted:(BOOL)highlighted {
@@ -285,7 +281,6 @@ static SGModSettingsRow *ensureDrawerRow(UICollectionView *list) {
     %init;
     SGRequireClasses(@[@"_TtC21Settings_PlatformImpl26SettingsListViewController", @"_TtC23SideDrawer_ListPageImpl18ListViewController"]);
     SGRegisterPages();
-    SGCheckCompatibilityOnce();
     SGCheckSigningOnce();
     SGWatchForUpdates();
     SGWatchForDonate();

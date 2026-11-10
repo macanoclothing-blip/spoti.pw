@@ -235,8 +235,6 @@ static void layoutHeader(UIViewController *page) {
         stack.semanticContentAttribute = UISemanticContentAttributeForceRightToLeft;
         [stack setNeedsLayout];
     }
-    [stack layoutIfNeeded];
-
     UILabel *title = titleIn(header);
     NSString *text = tabName(header.window);
     if (![title.text isEqualToString:text]) {
@@ -246,7 +244,7 @@ static void layoutHeader(UIViewController *page) {
     UIFont *font = SGRFont(UIFontTextStyleLargeTitle, UIFontWeightBold, UIContentSizeCategoryLarge);
     if (![title.font isEqual:font]) title.font = font;
 
-    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal", @"Filtri Home", NO);
+    SGRHomeHeaderButton *filters = headerButton(header, &kHomeFilterKey, @"line.3.horizontal.decrease", @"Filtri Home", NO);
     UIView *pill = homeProfilePill(header);
     filters.action = ^{ showHomeFilters(header, pill); };
     CGRect faceFrame = face ? [stack convertRect:face.frame toView:header]

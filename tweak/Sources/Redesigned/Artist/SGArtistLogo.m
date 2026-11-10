@@ -1,6 +1,7 @@
 #import "Core/SGCore.h"
 #import "SGArtistLogo.h"
 #import "Shared/LockScreenArtwork/SGAppleArtwork.h"
+#import <CommonCrypto/CommonDigest.h>
 #import <math.h>
 
 static NSString *const kKey = @"spotipw.fanart.artistLogo.key";
@@ -84,11 +85,38 @@ static NSString *cacheKey(NSString *artist) {
     return [trimmed stringByFoldingWithOptions:NSDiacriticInsensitiveSearch | NSCaseInsensitiveSearch locale:NSLocale.currentLocale];
 }
 
+static NSString *artistLogoFileName(NSString *artist) {
+    NSData *identity = [cacheKey(artist ?: @"") dataUsingEncoding:NSUTF8StringEncoding];
+    if (!identity.length) return nil;
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(identity.bytes, (CC_LONG)identity.length, digest);
+    NSMutableString *hex = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) [hex appendFormat:@"%02x", digest[i]];
+    return [hex stringByAppendingPathExtension:@"png"];
+}
+
+static NSString *artistLogoFilePath(NSString *artist) {
+    NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *name = artistLogoFileName(artist);
+    if (!support.length || !name.length) return nil;
+    return [[support stringByAppendingPathComponent:@"spoti.pw/ArtistLogos"] stringByAppendingPathComponent:name];
+}
+
+static NSString *artistLogoImageSelectionKey(NSString *artist) {
+    NSString *name = artistLogoFileName(artist);
+    return name.length ? [@"local:" stringByAppendingString:[name stringByDeletingPathExtension]] : nil;
+}
+
 NSString *SGRArtistLogoSelectedKeyForArtist(NSString *artist) {
     NSString *lookupKey = cacheKey(artist ?: @"");
     NSDictionary *selections = [NSUserDefaults.standardUserDefaults dictionaryForKey:kSelectionsKey];
     NSString *url = [selections[lookupKey] isKindOfClass:NSString.class] ? selections[lookupKey] : nil;
     return url.length ? url : nil;
+}
+
+UIImage *SGRArtistLogoCustomImageForArtist(NSString *artist) {
+    NSString *path = artistLogoFilePath(artist);
+    return path.length ? [UIImage imageWithContentsOfFile:path] : nil;
 }
 
 static void updateSelection(NSString *artist, NSString *url) {
@@ -108,16 +136,96 @@ static BOOL validLogoSelectionKey(NSString *selectionKey) {
     return [url.scheme.lowercaseString isEqualToString:@"https"] && host.length > 0;
 }
 
+static BOOL isCustomLogoSelectionKey(NSString *selectionKey, NSString *artist) {
+    return [selectionKey isEqualToString:artistLogoImageSelectionKey(artist)];
+}
+
+static void removeCustomLogoForArtist(NSString *artist) {
+    NSString *path = artistLogoFilePath(artist);
+    if (!path.length || ![NSFileManager.defaultManager fileExistsAtPath:path]) return;
+    NSError *error = nil;
+    if (![NSFileManager.defaultManager removeItemAtPath:path error:&error]) {
+        SGLog(@"artist logos: could not remove custom image for %@: %@", cacheKey(artist), error.localizedDescription);
+    }
+}
+
 void SGRArtistLogoSelectOption(NSString *artist, SGRArtistLogoOption *option) {
     if (!artist.length || !option.image || !validLogoSelectionKey(option.selectionKey)) return;
+    removeCustomLogoForArtist(artist);
     updateSelection(artist, option.selectionKey);
     invalidateArtistLogos();
     SGLog(@"artist logos: manually selected %@ logo for %@", option.source, cacheKey(artist));
     [NSNotificationCenter.defaultCenter postNotificationName:SGRArtistLogoKeyDidChangeNotification object:nil];
 }
 
+static UIImage *normalizedCustomLogo(UIImage *image) {
+    if (!image || !isfinite(image.size.width) || !isfinite(image.size.height)
+        || image.size.width <= 0 || image.size.height <= 0) return nil;
+    CGFloat factor = MIN(1, 2048 / MAX(image.size.width, image.size.height));
+    CGSize size = CGSizeMake(round(image.size.width * factor), round(image.size.height * factor));
+    UIGraphicsBeginImageContextWithOptions(size, NO, 1);
+    [image drawInRect:(CGRect){CGPointZero, size}];
+    UIImage *normalized = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return normalized;
+}
+
+void SGRArtistLogoSelectImage(NSString *artist, UIImage *image, void (^done)(NSError *)) {
+    NSString *cleanArtist = [artist stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!cleanArtist.length || !image || !done) {
+        if (done) dispatch_async(dispatch_get_main_queue(), ^{
+            done([NSError errorWithDomain:@"spoti.pw.artist-logo" code:2
+                userInfo:@{NSLocalizedDescriptionKey: @"Unable to use this image for the selected artist."}]);
+        });
+        return;
+    }
+    NSString *path = artistLogoFilePath(cleanArtist);
+    if (!path.length) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            done([NSError errorWithDomain:@"spoti.pw.artist-logo" code:9
+                userInfo:@{NSLocalizedDescriptionKey: @"Could not locate storage for the artist image."}]);
+        });
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        UIImage *normalized = normalizedCustomLogo(image);
+        NSData *data = normalized ? UIImagePNGRepresentation(normalized) : nil;
+        NSError *error = nil;
+        if (!data.length) {
+            error = [NSError errorWithDomain:@"spoti.pw.artist-logo" code:3
+                userInfo:@{NSLocalizedDescriptionKey: @"The selected image could not be encoded."}];
+        } else if (data.length > 24 * 1024 * 1024) {
+            error = [NSError errorWithDomain:@"spoti.pw.artist-logo" code:4
+                userInfo:@{NSLocalizedDescriptionKey: @"The selected image is too large to save."}];
+        } else {
+            NSString *directory = [path stringByDeletingLastPathComponent];
+            if (![NSFileManager.defaultManager createDirectoryAtPath:directory
+                                         withIntermediateDirectories:YES attributes:nil error:&error]) {
+                if (!error) error = [NSError errorWithDomain:@"spoti.pw.artist-logo" code:5
+                    userInfo:@{NSLocalizedDescriptionKey: @"Could not create storage for the artist image."}];
+            } else if (![data writeToFile:path options:NSDataWritingAtomic error:&error] && !error) {
+                error = [NSError errorWithDomain:@"spoti.pw.artist-logo" code:6
+                    userInfo:@{NSLocalizedDescriptionKey: @"Could not save the selected artist image."}];
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (error) {
+                SGLog(@"artist logos: could not save custom image for %@: %@", cacheKey(cleanArtist), error.localizedDescription);
+                done(error);
+                return;
+            }
+            updateSelection(cleanArtist, artistLogoImageSelectionKey(cleanArtist));
+            invalidateArtistLogos();
+            SGLog(@"artist logos: custom image selected for %@", cacheKey(cleanArtist));
+            [NSNotificationCenter.defaultCenter postNotificationName:SGRArtistLogoKeyDidChangeNotification object:nil];
+            done(nil);
+        });
+    });
+}
+
 void SGRArtistLogoUseAutomatic(NSString *artist) {
     if (!artist.length) return;
+    removeCustomLogoForArtist(artist);
     updateSelection(artist, nil);
     invalidateArtistLogos();
     SGLog(@"artist logos: automatic choice restored for %@", cacheKey(artist));
@@ -716,6 +824,21 @@ static void loadAutomaticLogo(NSString *artist, NSString *lookupKey, NSUInteger 
 }
 
 static void loadSelectedLogo(NSString *artist, NSString *lookupKey, NSString *selectionKey, NSUInteger generation) {
+    if ([selectionKey hasPrefix:@"local:"]) {
+        UIImage *image = isCustomLogoSelectionKey(selectionKey, artist) ? SGRArtistLogoCustomImageForArtist(artist) : nil;
+        if (image.CGImage) {
+            finishArtist(lookupKey, image, generation, kMissCacheTime);
+            return;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != sg_generation) return;
+            SGLog(@"artist logos: selected local image unavailable for %@, returning to automatic lookup", lookupKey);
+            removeCustomLogoForArtist(artist);
+            updateSelection(artist, nil);
+            loadAutomaticLogo(artist, lookupKey, generation);
+        });
+        return;
+    }
     NSURL *url = [NSURL URLWithString:selectionKey];
     if (!validLogoSelectionKey(selectionKey) || !url) {
         updateSelection(artist, nil);

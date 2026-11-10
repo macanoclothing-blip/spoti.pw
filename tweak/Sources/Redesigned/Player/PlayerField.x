@@ -95,7 +95,11 @@ static void keepOnTop(UIView *plane, NSArray<UIView *> *views) {
     SGRArtworkField *field = fieldIn(plane);
     sg_field = field;
     UIView *clip = SGRPlayerAnimatedViewIn(plane, field);
-    keepOnTop(plane, clip ? @[field, clip] : @[field]);
+    NSMutableArray<UIView *> *layers = [NSMutableArray arrayWithObject:field];
+    if (clip) [layers addObject:clip];
+    UIView *blur = SGRPlayerAnimatedBlurViewIn(plane);
+    if (blur) [layers addObject:blur];
+    keepOnTop(plane, layers);
     if (!CGRectEqualToRect(field.frame, plane.bounds)) field.frame = plane.bounds;
     SGRPlayerVisualiserUpdate();
     // The screen the plane starts with; the pull above it shows the field.

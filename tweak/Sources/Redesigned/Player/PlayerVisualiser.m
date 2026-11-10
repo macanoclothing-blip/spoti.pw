@@ -77,6 +77,8 @@ static const NSTimeInterval kTransitionSlack = 0.05;
 // an unlit dot glows, and how much the kick adds to that; how bright a falling bar's trail is.
 static const CGFloat kWallDark = 0.92, kReach = 0.5;
 static const float kUnlit = 0.12f, kUnlitPulse = 0.08f, kTrail = 0.35f;
+// A short reflection below the cover keeps the Mosaic wall alive at its lower edge.
+static const CGFloat kBelowCoverReflection = 0.22, kBelowCoverFalloff = 0.18;
 // The animated cover's corners, a share of its side, as Spotify rounds its square.
 static const CGFloat kClipCorner = 0.025;
 
@@ -742,6 +744,15 @@ static UIImage *lightImage(CGFloat pitch, CGFloat light) {
                 float lit = fminf(1, fmaxf(0, front - distance + 0.5f));
                 float trail = kTrail * fminf(1, fmaxf(0, back - distance + 0.5f));
                 level = fmaxf(lit, trail);
+                // Continue the light under the album cover as a soft reflection.
+                // This only affects the strip below the cover, never the artwork itself.
+                if (x >= CGRectGetMinX(cover) && x <= CGRectGetMaxX(cover) &&
+                    y > CGRectGetMaxY(cover)) {
+                    CGFloat below = (y - CGRectGetMaxY(cover)) / MAX(1, bounds.size.height);
+                    float reflection = (float)(kBelowCoverReflection *
+                                               fmax(0, 1 - below / kBelowCoverFalloff));
+                    level = fmaxf(level, reflection);
+                }
             }
             float brightness = glow + (1 - glow) * level;
             const float *color = _samples + i * 3;
@@ -850,4 +861,3 @@ void SGRPlayerVisualiserUpdate(void) {
         if (open != sg_view.blurred) [sg_view setBlurred:open animated:sg_view.window != nil];
     }
 }
-

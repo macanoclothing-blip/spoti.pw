@@ -3,11 +3,13 @@
 // between the selected tab and Search when the bar minimizes on scroll; the view only lays itself out
 // for the space it is given, by the tabAccessoryEnvironment trait.
 //
-// The first cut: artwork, title and artist, play/pause, a swipe to skip and a tap to open the player.
+// The bar: square artwork, title and artist, play/pause, and a swipe to skip to a queued track;
+// a tap outside the play control opens the player.
 // Title, artist and paused come from the player's state (Shared/Player/PlayerState.h). The artwork is the picture on
 // Spotify's own bar, which is still there under the tab bar, invisible, and keeps loading it; a tap is
 // passed on to that bar, so the player opens the way it always does.
 #import "Core/SGCore.h"
+#import <UIKit/UIAccessibility.h>
 #import "Headers/SPTPlayer.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/LocalTrackArtwork/LocalTrackArtwork.h"
@@ -19,6 +21,71 @@ static const CGFloat kCommitFraction = 0.25;
 static const CGFloat kCommitVelocity = 500;
 
 static char kImageContext;
+@interface SGRMiniMarqueeLabel : UIView
+@property (nonatomic, copy) NSString *text;
+@property (nonatomic, strong) UIFont *font;
+@property (nonatomic, strong) UIColor *textColor;
+@end
+
+@implementation SGRMiniMarqueeLabel {
+    UILabel *_label;
+    CGFloat _textWidth;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    self.clipsToBounds = YES;
+    self.isAccessibilityElement = YES;
+    _label = [UILabel new];
+    _label.numberOfLines = 1;
+    _label.lineBreakMode = NSLineBreakByClipping;
+    _label.textAlignment = NSTextAlignmentLeft;
+    [self addSubview:_label];
+    return self;
+}
+
+- (void)setText:(NSString *)text {
+    _text = [text copy];
+    _label.text = text;
+    self.accessibilityLabel = text;
+    [self setNeedsLayout];
+}
+
+- (void)setFont:(UIFont *)font {
+    _font = font;
+    _label.font = font;
+    [self setNeedsLayout];
+}
+
+- (void)setTextColor:(UIColor *)textColor {
+    _textColor = textColor;
+    _label.textColor = textColor;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat width = [self.text sizeWithAttributes:@{NSFontAttributeName: self.font ?: [UIFont systemFontOfSize:14]}].width;
+    if (fabs(width - _textWidth) > 0.5) {
+        _textWidth = width;
+        [_label.layer removeAnimationForKey:@"mini.marquee"];
+    }
+    BOOL scroll = width > self.bounds.size.width + 2 && !UIAccessibilityIsReduceMotionEnabled();
+    _label.frame = CGRectMake(0, 0, scroll ? width + 8 : self.bounds.size.width, self.bounds.size.height);
+    if (scroll && ![_label.layer animationForKey:@"mini.marquee"]) {
+        CGFloat distance = width + 8 - self.bounds.size.width;
+        CABasicAnimation *animation = [CABasicAnimation animationWithKeyPath:@"transform.translation.x"];
+        animation.fromValue = @0;
+        animation.toValue = @(-distance);
+        animation.duration = MAX(3, distance / 18.0);
+        animation.autoreverses = YES;
+        animation.repeatCount = HUGE_VALF;
+        animation.beginTime = CACurrentMediaTime() + 0.6;
+        animation.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear];
+        [_label.layer addAnimation:animation forKey:@"mini.marquee"];
+    }
+}
+
+@end
 
 @interface SGRMiniPlayer : UIView <SGPlayerStateObserver, UIGestureRecognizerDelegate>
 @property (nonatomic, readonly) UIView *artworkView;
@@ -26,13 +93,26 @@ static char kImageContext;
 
 static __weak SGRMiniPlayer *sg_miniPlayer;
 
+void SGRBounceMiniPlayer(void) {
+    SGRMiniPlayer *player = sg_miniPlayer;
+    if (!player.window) return;
+    [player.layer removeAnimationForKey:@"spotifyglass.player.closeBounce"];
+    player.transform = CGAffineTransformMakeTranslation(0, 4);
+    [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.84 initialSpringVelocity:0.08
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        player.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
 @implementation SGRMiniPlayer {
-    UIView *_content;         // what a swipe moves
+    UIView *_content;
     UIImageView *_artwork;
-    UILabel *_title, *_artist;
+    SGRMiniMarqueeLabel *_title, *_artist;
     UIButton *_play;
     __weak UIImageView *_source;   // the artwork on Spotify's bar, watched for its picture
     id _artworkObserver;
+    NSString *_pendingTrackURI;
     BOOL _swiping;
 }
 
@@ -51,13 +131,13 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     _artwork.backgroundColor = [UIColor colorWithWhite:1 alpha:0.12];
     [_content addSubview:_artwork];
 
-    _title = [UILabel new];
-    _title.font = [UIFont systemFontOfSize:15 weight:UIFontWeightSemibold];
+    _title = [SGRMiniMarqueeLabel new];
+    _title.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
     _title.textColor = UIColor.whiteColor;
     [_content addSubview:_title];
 
-    _artist = [UILabel new];
-    _artist.font = [UIFont systemFontOfSize:13];
+    _artist = [SGRMiniMarqueeLabel new];
+    _artist.font = [UIFont systemFontOfSize:11];
     _artist.textColor = [UIColor colorWithWhite:1 alpha:0.6];
     [_content addSubview:_artist];
 
@@ -103,7 +183,7 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     if (logged++ < 60) SGLog(@"mini player: %@", [self isInline] ? @"inline (bar minimized)" : @"expanded");
 }
 
-// Between the selected tab and Search the accessory is a short capsule, and only the title fits.
+// Between the selected tab and Search the accessory is short enough for compact title and artist lines.
 - (BOOL)isInline {
     if (@available(iOS 26.0, *)) return self.traitCollection.tabAccessoryEnvironment == UITabAccessoryEnvironmentInline;
     return NO;
@@ -118,12 +198,11 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     }
     CGFloat height = bounds.size.height;
     BOOL compact = [self isInline];
-    CGFloat side = MAX(0, MIN(height - (compact ? 10 : 12), 40));
+    CGFloat side = MAX(0, MIN(height - (compact ? 10 : 14), compact ? 30 : 36));
     CGFloat inset = (height - side) / 2;
-    // Concentric with the capsule's end: as far in from the side as from the top and bottom, and round,
-    // which is the capsule's radius less that inset.
+    // Keep the square cover distinct from the mini player's capsule.
     _artwork.frame = CGRectMake(inset, inset, side, side);
-    _artwork.layer.cornerRadius = side / 2;
+    _artwork.layer.cornerRadius = MIN(8, side * 0.22);
 
     CGFloat button = MIN(height, 44);
     // Bounds and centre, not frame: the press animation scales it.
@@ -134,7 +213,11 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
 
     CGFloat x = CGRectGetMaxX(_artwork.frame) + 10;
     CGFloat width = MAX(0, _play.center.x - button / 2 - x - 4);
-    _artist.hidden = compact || !_artist.text.length;
+    UIFont *titleFont = [UIFont systemFontOfSize:compact ? 13 : 14 weight:UIFontWeightSemibold];
+    UIFont *artistFont = [UIFont systemFontOfSize:compact ? 10 : 11];
+    if (![_title.font isEqual:titleFont]) _title.font = titleFont;
+    if (![_artist.font isEqual:artistFont]) _artist.font = artistFont;
+    _artist.hidden = !_artist.text.length;
     if (_artist.hidden) {
         _title.frame = CGRectMake(x, 0, width, height);
     } else {
@@ -155,6 +238,9 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     SPTPlayerTrack *track = state.track;
     NSString *title = [track respondsToSelector:@selector(trackTitle)] ? track.trackTitle : nil;
     NSString *artist = [track respondsToSelector:@selector(artistName)] ? track.artistName : nil;
+    NSString *uri = SGURIString(track.URI);
+    if (_pendingTrackURI.length && ![_pendingTrackURI isEqualToString:uri]) return;
+    if (_pendingTrackURI.length) _pendingTrackURI = nil;
     BOOL paused = [state respondsToSelector:@selector(isPaused)] ? state.isPaused : NO;
     [self showPaused:paused];
     if (![_title.text isEqualToString:title] || ![_artist.text isEqualToString:artist]) {
@@ -258,6 +344,18 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     return fabs(velocity.x) > fabs(velocity.y);
 }
 
+- (SPTPlayerTrack *)queuedTrackForNext:(BOOL)next {
+    SPTPlayerState *state = SGPlayerState();
+    id queued = next ? state.future : state.reverse;
+    if (![queued isKindOfClass:NSArray.class]) return nil;
+    for (id track in (NSArray *)queued) {
+        if (![track isKindOfClass:objc_getClass("SPTPlayerTrack")]) continue;
+        if (![track trackTitle].length) continue;
+        return track;
+    }
+    return nil;
+}
+
 - (void)panned:(UIPanGestureRecognizer *)pan {
     CGFloat width = self.bounds.size.width;
     CGFloat dx = [pan translationInView:self].x;
@@ -265,14 +363,18 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
         case UIGestureRecognizerStateBegan:
             _swiping = YES;
             break;
-        case UIGestureRecognizerStateChanged:
-            _content.transform = CGAffineTransformMakeTranslation(dx, 0);
-            _content.alpha = 1 - MIN(0.6, fabs(dx) / MAX(width, 1));
+        case UIGestureRecognizerStateChanged: {
+            BOOL hasTarget = [self queuedTrackForNext:dx < 0] != nil;
+            CGFloat movement = hasTarget ? dx : copysign(MIN(14, fabs(dx) * 0.12), dx);
+            _content.transform = CGAffineTransformMakeTranslation(movement, 0);
             break;
+        }
         case UIGestureRecognizerStateEnded: {
             CGFloat vx = [pan velocityInView:self].x;
             BOOL far = fabs(dx) > width * kCommitFraction, flung = fabs(vx) > kCommitVelocity && dx * vx > 0;
-            if (dx != 0 && (far || flung)) [self skip:dx < 0];
+            BOOL next = dx < 0;
+            SPTPlayerTrack *target = [self queuedTrackForNext:next];
+            if (dx != 0 && (far || flung) && target) [self skip:next track:target];
             else [self settle];
             break;
         }
@@ -282,17 +384,29 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
 }
 
 // Out the side it was swiped to, the player told, and in from the other side.
-- (void)skip:(BOOL)next {
+- (void)skip:(BOOL)next track:(SPTPlayerTrack *)target {
     CGFloat width = self.bounds.size.width;
     CGFloat out = next ? -width : width;
     [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseIn | UIViewAnimationOptionBeginFromCurrentState animations:^{
         self->_content.transform = CGAffineTransformMakeTranslation(out, 0);
-        self->_content.alpha = 0;
     } completion:^(BOOL finished) {
         id<SPTPlayer> player = SGKaraokePlayer();
         SEL command = next ? @selector(skipToNextTrackWithOptions:) : @selector(skipToPreviousTrackWithOptions:);
-        id result = [player respondsToSelector:command] ? (next ? [player skipToNextTrackWithOptions:nil] : [player skipToPreviousTrackWithOptions:nil]) : nil;
+        SEL targetedNext = @selector(skipToNextTrackWithOptions:track:);
+        id result = nil;
+        self->_pendingTrackURI = SGURIString(target.URI);
+        if (next && target && [player respondsToSelector:targetedNext])
+            result = [player skipToNextTrackWithOptions:nil track:target];
+        else if ([player respondsToSelector:command])
+            result = next ? [player skipToNextTrackWithOptions:nil] : [player skipToPreviousTrackWithOptions:nil];
         SGLog(@"mini player: swipe %@ -> %@ (player %@)", next ? @"next" : @"previous", result, player ? NSStringFromClass([(id)player class]) : @"nil");
+        NSString *expectedURI = self->_pendingTrackURI;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if ([self->_pendingTrackURI isEqualToString:expectedURI]) {
+                self->_pendingTrackURI = nil;
+                [self showState:SGPlayerState()];
+            }
+        });
         self->_content.transform = CGAffineTransformMakeTranslation(-out * 0.4, 0);
         [self settle];
     }];
@@ -302,9 +416,11 @@ static __weak SGRMiniPlayer *sg_miniPlayer;
     [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0
                         options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction animations:^{
         self->_content.transform = CGAffineTransformIdentity;
-        self->_content.alpha = 1;
     } completion:^(BOOL finished) {
-        if (finished) self->_swiping = NO;
+        if (finished) {
+            self->_swiping = NO;
+            [self showState:SGPlayerState()];
+        }
     }];
 }
 

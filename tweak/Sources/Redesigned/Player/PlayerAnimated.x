@@ -18,6 +18,8 @@ static const float kCeiling = 0.18f, kCeilingContrast = 0.09f, kUnknownLight = 0
 static const float kDimLeast = 0.1f, kDimLyrics = 0.15f, kDimMost = 0.8f;
 static const float kShadeMiddle = 0.18f, kShadeBottom = 0.4f;
 static const NSTimeInterval kReadyWithin = 5;
+// The controls blur starts this far above the band and fades in over it, so it has no hard edge.
+static const CGFloat kBlurFeather = 90;
 
 static char kReadyContext, kViewKey;
 
@@ -82,6 +84,7 @@ static void readLight(NSURL *file, void (^done)(float light)) {
 @implementation SGRPlayerClip {
     AVQueuePlayer *_player;
     AVPlayerLooper *_looper;
+    AVAsset *_asset;
     BOOL _observing;
 }
 
@@ -93,7 +96,9 @@ static void readLight(NSURL *file, void (^done)(float light)) {
     player.muted = YES;
     player.allowsExternalPlayback = NO;
     player.preventsDisplaySleepDuringVideoPlayback = NO;
-    _looper = [AVPlayerLooper playerLooperWithPlayer:player templateItem:[AVPlayerItem playerItemWithURL:file]];
+    _asset = [AVURLAsset URLAssetWithURL:file options:nil];
+    AVPlayerItem *templateItem = [AVPlayerItem playerItemWithAsset:_asset];
+    _looper = [AVPlayerLooper playerLooperWithPlayer:player templateItem:templateItem];
     _player = player;
     _layer = [AVPlayerLayer playerLayerWithPlayer:player];
     _layer.videoGravity = AVLayerVideoGravityResizeAspectFill;
@@ -148,10 +153,65 @@ static void readLight(NSURL *file, void (^done)(float light)) {
 
 @end
 
+#pragma mark - the blur's mask
+
+// A vertical alpha ramp used as the blur's maskView: transparent at the top, opaque from `feather` (a
+// fraction of the height) down, eased so the blur has no visible edge. With a feather of 0 it is opaque.
+@interface SGRBlurMaskView : UIView
+- (void)setFeather:(CGFloat)feather;
+@end
+
+@implementation SGRBlurMaskView
+
++ (Class)layerClass {
+    return CAGradientLayer.class;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    self.userInteractionEnabled = NO;
+    self.backgroundColor = UIColor.clearColor;
+    self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    CAGradientLayer *gradient = (CAGradientLayer *)self.layer;
+    gradient.startPoint = CGPointMake(0.5, 0);
+    gradient.endPoint = CGPointMake(0.5, 1);
+    NSNull *off = NSNull.null;
+    gradient.actions = @{@"colors": off, @"locations": off, @"bounds": off, @"position": off};
+    [self setFeather:0];
+    return self;
+}
+
+- (void)setFeather:(CGFloat)feather {
+    feather = MIN(MAX(feather, 0), 0.9);
+    CAGradientLayer *gradient = (CAGradientLayer *)self.layer;
+    NSMutableArray *colors = [NSMutableArray array];
+    if (feather < 0.001) {
+        UIColor *opaque = UIColor.blackColor;
+        gradient.colors = @[(id)opaque.CGColor, (id)opaque.CGColor];
+        gradient.locations = @[@0, @1];
+        return;
+    }
+    static const CGFloat steps[] = {0, 0.25, 0.5, 0.75, 1};
+    static const CGFloat alphas[] = {0, 0.1, 0.38, 0.78, 1};
+    NSMutableArray *locations = [NSMutableArray array];
+    for (int i = 0; i < 5; i++) {
+        [colors addObject:(id)[UIColor.blackColor colorWithAlphaComponent:alphas[i]].CGColor];
+        [locations addObject:@(feather * steps[i])];
+    }
+    [colors addObject:(id)UIColor.blackColor.CGColor];
+    [locations addObject:@1];
+    gradient.colors = colors;
+    gradient.locations = locations;
+}
+
+@end
+
 #pragma mark - the view
 
-// The clip over the field, with the dim and the shade that keep the player's text readable on it. The
-// view fades as a whole between the field and a clip; one clip replacing another fades in over it.
+// The clip over the field, with the dim and the shade that keep the player's text readable on it. When
+// enabled, a material blur covers the controls band (fading in over its top) and expands to the full
+// player while lyrics are open.
+// The view fades as a whole between the field and a clip; one clip replacing another fades in over it.
 @interface SGRPlayerAnimatedView : UIView
 @property (nonatomic, readonly) SGRPlayerClip *clip;   // shown or coming in
 @property (nonatomic, readonly) BOOL covers;           // a clip lies opaque over the whole field
@@ -161,18 +221,29 @@ static void readLight(NSURL *file, void (^done)(float light)) {
 @property (nonatomic, copy) void (^shownChanged)(BOOL shown, NSTimeInterval duration);
 @property (nonatomic, copy) void (^windowChanged)(void);
 @property (nonatomic, copy) void (^neverReady)(SGRPlayerClip *clip);
+- (void)setBlurred:(BOOL)blurred;
+- (void)setIdleChromeHidden:(BOOL)hidden;
 - (void)showClip:(SGRPlayerClip *)clip;
 - (void)clear:(BOOL)animated;
 - (void)setPlaying:(BOOL)playing;
 - (void)setLyricsUp:(BOOL)up animated:(BOOL)animated;
+- (void)updateBlur;
+- (UIView *)blurView;
+- (void)refreshBlurAfterLayout;
 @end
+
+static float shownOpacity(CALayer *layer);
+static BOOL sg_queueOpen;
 
 @implementation SGRPlayerAnimatedView {
     CALayer *_clips;
     CALayer *_dim;
     CAGradientLayer *_shade;
+    UIVisualEffectView *_blur;
+    SGRBlurMaskView *_blurMask;
+    CGFloat _feather;   // how far the blur's frame reaches above the controls band, in points
     NSMutableArray<SGRPlayerClip *> *_leaving;   // under the one coming in until it is in
-    BOOL _playing, _lyricsUp;
+    BOOL _playing, _lyricsUp, _blurred, _idleChromeHidden;
     float _light;   // the shown clip's
     NSUInteger _generation;
 }
@@ -196,6 +267,13 @@ static float dimFor(float light, BOOL lyricsUp) {
     _clips = [CALayer layer];
     _clips.actions = still;
     [self.layer addSublayer:_clips];
+    // A thin material keeps the clip's colours; the thick one laid a grey veil over them.
+    _blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+    _blur.userInteractionEnabled = NO;
+    _blur.clipsToBounds = YES;
+    _blur.hidden = YES;
+    _blurMask = [[SGRBlurMaskView alloc] initWithFrame:_blur.bounds];
+    _blur.maskView = _blurMask;
     _dim = [CALayer layer];
     _dim.actions = still;
     _dim.backgroundColor = UIColor.blackColor.CGColor;
@@ -221,14 +299,65 @@ static float dimFor(float light, BOOL lyricsUp) {
     [super layoutSubviews];
     CGRect bounds = self.bounds;
     _clips.frame = bounds;
+    [self updateBlur];
     _dim.frame = bounds;
     _shade.frame = bounds;
     _clip.layer.frame = bounds;
     for (SGRPlayerClip *clip in _leaving) clip.layer.frame = bounds;
 }
 
+// The blur's frame in this view's coordinates. Over the controls it reaches kBlurFeather above the band
+// (never past the top), and `_feather` says how far, for the mask to fade it in over that stretch.
+- (CGRect)blurFrame {
+    _feather = 0;
+    if (!_blurred || !_clip || shownOpacity(self.layer) < 0.01f) return CGRectZero;
+    if (_lyricsUp || sg_queueOpen) return self.bounds;
+    UIView *host = SGRPlayerContentHost();
+    CGRect frame = SGRPlayerControlsBlurFrameIn(host);
+    if (CGRectIsNull(frame) || CGRectIsEmpty(frame) || !host || !self.window) return CGRectZero;
+    CGRect frameInView = [host convertRect:frame toView:self];
+    CGFloat top = MAX(0, CGRectGetMinY(frameInView) - kBlurFeather);
+    _feather = CGRectGetMinY(frameInView) - top;
+    frameInView.origin.y = top;
+    frameInView.size.height += _feather;
+    // The band runs to the bottom of the player.
+    CGFloat bottom = CGRectGetMaxY(self.bounds);
+    if (CGRectGetMaxY(frameInView) < bottom) frameInView.size.height = bottom - top;
+    return frameInView;
+}
+
+- (void)updateBlur {
+    UIView *plane = self.superview;
+    if (!plane) {
+        _blur.hidden = YES;
+        return;
+    }
+    if (_blur.superview != plane) [plane addSubview:_blur];
+    CGRect frameInView = [self blurFrame];
+    CGRect frame = CGRectIsEmpty(frameInView) ? CGRectZero : [self convertRect:frameInView toView:plane];
+    _blur.frame = frame;
+    _blur.hidden = CGRectIsEmpty(frame);
+    if (!_blur.hidden) {
+        _blurMask.frame = _blur.bounds;
+        [_blurMask setFeather:frame.size.height > 1 ? _feather / frame.size.height : 0];
+        [plane bringSubviewToFront:_blur];
+    }
+}
+
+- (void)refreshBlurAfterLayout {
+    if (!self.window || !_clip) return;
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    [self updateBlur];
+}
+
+- (UIView *)blurView {
+    return _blur;
+}
+
 - (void)didMoveToWindow {
     [super didMoveToWindow];
+    [self updateBlur];
     if (_windowChanged) _windowChanged();
 }
 
@@ -278,6 +407,9 @@ static void fade(CALayer *layer, float to, NSTimeInterval duration) {
     clip.layer.opacity = 0;
     [_clips addSublayer:clip.layer];
     [clip setPlaying:_playing];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    [self updateBlur];
     __weak SGRPlayerAnimatedView *weakSelf = self;
     clip.ready = ^(SGRPlayerClip *ready) { [weakSelf fadeIn:ready generation:generation]; };
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kReadyWithin * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -314,6 +446,16 @@ static void fade(CALayer *layer, float to, NSTimeInterval duration) {
         [self dropLeaving];
     }
     [self fadeTo:YES duration:kFadeIn];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    [self updateBlur];
+    __weak SGRPlayerAnimatedView *refreshSelf = self;
+    for (NSNumber *delay in @[@0.05, @0.18, @0.4]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [refreshSelf refreshBlurAfterLayout];
+        });
+    }
     [CATransaction commit];
 }
 
@@ -331,6 +473,9 @@ static void fade(CALayer *layer, float to, NSTimeInterval duration) {
         if (view && generation == view->_generation) [view dropLeaving];
     }];
     [self fadeTo:NO duration:animated && self.window ? kFadeOut : 0];
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    [self updateBlur];
     [CATransaction commit];
 }
 
@@ -343,6 +488,21 @@ static void fade(CALayer *layer, float to, NSTimeInterval duration) {
 - (void)setLyricsUp:(BOOL)up animated:(BOOL)animated {
     _lyricsUp = up;
     fade(_dim, dimFor(_light, up), animated && self.window ? kDimChange : 0);
+    [self setNeedsLayout];
+    [self layoutIfNeeded];
+    [self updateBlur];
+}
+
+- (void)setBlurred:(BOOL)blurred {
+    if (_blurred == blurred) return;
+    _blurred = blurred;
+    [self updateBlur];
+}
+
+- (void)setIdleChromeHidden:(BOOL)hidden {
+    if (_idleChromeHidden == hidden) return;
+    _idleChromeHidden = hidden;
+    [self updateBlur];
 }
 
 @end
@@ -363,15 +523,18 @@ static __weak SGRPlayerAnimatedView *sg_view;
 static __weak SGRArtworkField *sg_field;
 static NSString *sg_wanted;   // the playing track, once its clip is asked for
 static NSString *sg_next;     // the track up next, once its clip is fetched ahead
+static BOOL sg_wantedHadCanvas;
 static NSMutableDictionary<NSString *, SGRPlayerFound *> *sg_found;
 static NSMutableSet<NSString *> *sg_looking;
 static NSMutableDictionary<NSString *, NSNumber *> *sg_lookupVersions;
 static NSHashTable *sg_videos;   // Spotify's own video views with a video on them
 static BOOL sg_lyricsUp;
+static BOOL sg_idleChromeHidden;
 // Read at launch and when the choice changes, not on each of the plane's layout passes.
 static BOOL sg_picked;
 
 static void update(void);
+static NSString *heldBack(void);
 
 static NSUInteger advanceLookupVersion(NSString *uri) {
     if (!uri.length || !sg_lookupVersions) return 0;
@@ -511,7 +674,8 @@ static void arrived(NSString *uri) {
         say(@"%@ goes on with the same clip", uri);
     } else {
         say(@"%@ for %@ (%@), %@", nameOf(found.source), uri, found.note, view.clip ? @"crosses over from the last clip" : @"fades in over Fluid artwork");
-        [view showClip:[[SGRPlayerClip alloc] initWithFile:found.file]];
+        SGRPlayerClip *clip = [[SGRPlayerClip alloc] initWithFile:found.file];
+        [view showClip:clip];
         playOrHold();
     }
     prefetchNext();
@@ -547,11 +711,18 @@ static void resolve(SPTPlayerState *state) {
     if (!uri) return;
     SGCanvas *canvas = canvasOf(track);
     if ([uri isEqualToString:sg_wanted]) {
+        BOOL hasCanvas = canvas != nil || sg_found[uri].hadCanvas;
+        if (hasCanvas != sg_wantedHadCanvas) {
+            sg_wantedHadCanvas = hasCanvas;
+            SGRPlayerCanvasInfoArtworkSettingChanged();
+        }
         canvasLanded(uri, track, canvas);
         prefetchNext();
         return;
     }
     sg_wanted = uri;
+    sg_wantedHadCanvas = canvas != nil || sg_found[uri].hadCanvas;
+    SGRPlayerCanvasInfoArtworkSettingChanged();
     for (NSString *kept in sg_found.allKeys) {
         if (![kept isEqualToString:uri] && ![kept isEqualToString:sg_next]) [sg_found removeObjectForKey:kept];
     }
@@ -627,13 +798,14 @@ static void localArtworkMatchChanged(NSNotification *notification) {
 static void covered(BOOL covers) {
     SGRArtworkField *field = sg_field;
     field.covered = covers;
-    say(@"Fluid artwork %@", covers ? @"stops under the clip" : @"draws again");
+    say(@"Fluid artwork %@", covers ? @"stops under the artwork" : @"draws again");
 }
 
 // The cover goes as a clip fades in and comes back as it fades out, over the same time (PlayerArtwork.x).
 static void shownChanged(BOOL shown, NSTimeInterval duration) {
     say(@"the cover %@ over %.2f s", shown ? @"goes as the clip fades in" : @"comes back as the clip fades out", duration);
     SGRPlayerCoversFollowClip(duration);
+    SGRPlayerCanvasInfoArtworkSettingChanged();
 }
 
 BOOL SGRPlayerAnimatedShowing(CGFloat *shown, NSTimeInterval *left) {
@@ -643,12 +815,20 @@ BOOL SGRPlayerAnimatedShowing(CGFloat *shown, NSTimeInterval *left) {
     return view.shown;
 }
 
+BOOL SGRPlayerAnimatedTrackHasCanvas(void) {
+    SPTPlayerTrack *track = SGPlayerState().track;
+    if (!track) return NO;
+    NSString *uri = SGURIString(track.URI);
+    return canvasOf(track) != nil || (uri && sg_found[uri].hadCanvas);
+}
+
 UIView *SGRPlayerAnimatedViewIn(UIView *plane, SGRArtworkField *field) {
     SGRPlayerAnimatedView *view = objc_getAssociatedObject(plane, &kViewKey);
     if (!sg_picked) {
         // Kept until it has faded out to the field.
         if (view && !view.clip && shownOpacity(view.layer) < 0.01f) {
             [view removeFromSuperview];
+            [[view blurView] removeFromSuperview];
             objc_setAssociatedObject(plane, &kViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             field.covered = NO;
             return nil;
@@ -668,8 +848,13 @@ UIView *SGRPlayerAnimatedViewIn(UIView *plane, SGRArtworkField *field) {
             [sg_view clear:YES];
         };
         [view setLyricsUp:sg_lyricsUp animated:NO];
+        [view setIdleChromeHidden:sg_idleChromeHidden];
+        [view setBlurred:SGRPlayerCanvasBlurEnabled()];
         say(@"view made in the background plane");
     }
+    // A clip can disappear while a track without Canvas is active. Re-apply the preference on every
+    // plane layout so the next Canvas clip cannot inherit a stale disabled state.
+    [view setBlurred:SGRPlayerCanvasBlurEnabled()];
     sg_field = field;
     if (field.covered != view.covers) field.covered = view.covers;
     // Another player's plane: the covers follow its clip instead.
@@ -680,9 +865,36 @@ UIView *SGRPlayerAnimatedViewIn(UIView *plane, SGRArtworkField *field) {
     return view;
 }
 
+UIView *SGRPlayerAnimatedBlurViewIn(UIView *plane) {
+    SGRPlayerAnimatedView *view = objc_getAssociatedObject(plane, &kViewKey);
+    [view updateBlur];
+    return [view blurView];
+}
+
+void SGRPlayerAnimatedSetCanvasBlurEnabled(BOOL enabled) {
+    [sg_view setBlurred:enabled];
+}
+
+void SGRPlayerAnimatedSetIdleChromeHidden(BOOL hidden) {
+    sg_idleChromeHidden = hidden;
+    [sg_view setIdleChromeHidden:hidden];
+}
+
 void SGRPlayerAnimatedFollowLyrics(BOOL open, BOOL animated) {
     sg_lyricsUp = open;
     [sg_view setLyricsUp:open animated:animated];
+}
+
+void SGRPlayerAnimatedFollowQueue(BOOL open) {
+    sg_queueOpen = open;
+    SGRPlayerAnimatedView *view = sg_view;
+    if (!view) return;
+    [view refreshBlurAfterLayout];
+}
+
+void SGRPlayerAnimatedPlayerLayoutChanged(void) {
+    [sg_view setNeedsLayout];
+    [sg_view layoutIfNeeded];
 }
 
 #pragma mark - the player

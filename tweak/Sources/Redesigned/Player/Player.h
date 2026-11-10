@@ -7,8 +7,11 @@
 // have it to themselves while they play untouched, until a touch brings the controls back.
 //
 //     PlayerField.x      the switch's flags and rows, the field in the background plane, the cover it reads
-//     PlayerAnimated.x   Animated artwork: the Canvas or Apple Music's cover looping over the field
+//     PlayerAnimated.x   Animated artwork: the Canvas or Apple Music's cover looping over the field,
+//                        and Canvas blur
 //     PlayerBackgroundSettings.m  what moves behind the player, and Fluid artwork's sliders under a preview
+//     PlayerQueue.x      the transparent queue in the player's shared lyrics stage, built from the full
+//                        queue snapshot and reported future tracks
 //     PlayerArtwork.x    the cover's corners, shadow and paused shrink, the lyric preview under it hidden,
 //                        and every cover gone while an Animated artwork clip shows
 //     PlayerHeader.x     glass behind the close and more buttons
@@ -56,6 +59,7 @@ SGRPlayerBackground SGRPlayerBackgroundStyle(void);
 #define SGRKeyMosaicDots @"spotifyglass.redesign.player.mosaic.dots"
 #define SGRKeyMosaicSize @"spotifyglass.redesign.player.mosaic.size"
 #define SGRKeyMosaicTextShadow @"spotifyglass.redesign.player.mosaic.textShadow"
+#define SGRKeyPlayerAutoRotate @"spotifyglass.redesign.player.autoRotate"
 enum { SGRMosaicDotsLeast = 12, SGRMosaicDotsMost = 64, SGRMosaicDotsDefault = 30 };
 enum { SGRMosaicSizeLeast = 30, SGRMosaicSizeMost = 100, SGRMosaicSizeDefault = 78 };
 NSInteger SGRMosaicDots(void);
@@ -72,6 +76,15 @@ extern NSNotificationName const SGRPlayerBackgroundDidChangeNotification;
 // Animated artwork's sources in the order they are asked (Shared/LockScreenArtwork's, apart from the
 // lock screen's own order): Spotify, then Apple Music until set.
 #define SGRKeyPlayerArtworkSources @"spotifyglass.redesign.player.artworksources"
+#define SGRKeyPlayerCanvasBlur @"spotifyglass.redesign.player.canvasBlur"
+#define SGRKeyPlayerCanvasInfoArtwork @"spotifyglass.redesign.player.canvasInfoArtwork"
+#define SGRKeyPlayerIdleChrome @"spotifyglass.redesign.player.idleChrome"
+BOOL SGRPlayerCanvasBlurEnabled(void);
+void SGRPlayerSetCanvasBlurEnabled(BOOL enabled);
+void SGRPlayerAnimatedSetCanvasBlurEnabled(BOOL enabled);
+void SGRPlayerCanvasInfoArtworkSettingChanged(void);
+void SGRPlayerIdleChromeSettingChanged(void);
+void SGRPlayerAnimatedSetIdleChromeHidden(BOOL hidden);
 // Fluid artwork's sliders, whole numbers: speed, warp, saturation and brightness in percent, blur in passes.
 #define SGRKeyFluidSpeed @"spotifyglass.redesign.player.fluid.speed"
 #define SGRKeyFluidWarp @"spotifyglass.redesign.player.fluid.warp"
@@ -89,6 +102,14 @@ NSArray<SGModSection *> *SGRPlayerBackgroundSections(void);
 // Marks a sheet opened soon after a tap on `button`, the player's ⋯, as the one the menu takes over, and
 // the button as where the menu grows from (watching it twice does nothing).
 void SGRPlayerMenuWatchMoreButton(UIView *button);
+void SGRPlayerQueuePresentFrom(UIView *source);
+BOOL SGRPlayerQueueIsOpen(void);
+void SGRPlayerQueueClose(void);
+void SGRPlayerQueueCloseForTransition(void);
+void SGRPlayerQueueReleaseForLyrics(void);
+void SGRPlayerQueueSelectionDidBegin(void);
+// Places the queue inside the same in-player stage used by the lyrics layout.
+BOOL SGRPlayerQueueSetInlineView(UIView *content, BOOL open, BOOL animated);
 
 // The field behind the player, nil until the player has laid out once (PlayerField.x).
 SGRArtworkField *SGRPlayerField(void);
@@ -98,11 +119,15 @@ SGRArtworkField *SGRPlayerField(void);
 // The view the clip plays in, for PlayerField.x to keep over `field` in the background plane; nil while
 // the background is Fluid artwork.
 UIView *SGRPlayerAnimatedViewIn(UIView *plane, SGRArtworkField *field);
+UIView *SGRPlayerAnimatedBlurViewIn(UIView *plane);
 // The lyrics coming up in the player or going: a clip behind them is dimmed a little more.
 void SGRPlayerAnimatedFollowLyrics(BOOL open, BOOL animated);
+void SGRPlayerAnimatedFollowQueue(BOOL open);
+void SGRPlayerAnimatedPlayerLayoutChanged(void);
 // Whether a clip is on screen or fading in, which takes the cover away; `shown` gets how much of the clip
 // is drawn now (0 to 1) and `left` how long its fade still runs. Either may be NULL.
 BOOL SGRPlayerAnimatedShowing(CGFloat *shown, NSTimeInterval *left);
+BOOL SGRPlayerAnimatedTrackHasCanvas(void);
 
 #pragma mark - the cover (PlayerArtwork.x)
 
@@ -127,6 +152,12 @@ BOOL SGRPlayerLyricsAvailable(void);
 BOOL SGRPlayerLyricsCanOpen(void);
 // Whether the player is showing them.
 BOOL SGRPlayerLyricsOpen(void);
+// The full-screen player's view, used by in-player surfaces such as the queue.
+UIView *SGRPlayerContentHost(void);
+// The lower player band, beginning at the title/artist row, in the host's coordinates.
+CGRect SGRPlayerControlsBlurFrameIn(UIView *host);
+// Updates the shared thumbnail when Spotify reports a new now-playing artwork.
+void SGRPlayerLyricsUpdateArtwork(UIImage *artwork);
 // Re-measures the footer controls and volume lane after a lyrics transition settles.
 void SGRPlayerFooterRefreshLayout(void);
 // Shows them, or puts the cover back; does nothing when there are none to show.
@@ -141,5 +172,6 @@ void SGRPlayerVanish(UIView *view);
 
 // Positions the system output-volume control in the gap between the transport controls and footer.
 BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer);
+void SGRPlayerSetVolumeIdleHidden(UIView *stack, BOOL hidden);
 // Vinyl mode: align the injected volume row to the gap above the Vinyl transport controls.
 BOOL SGRPlayerLayoutVinylVolume(UIView *stack);

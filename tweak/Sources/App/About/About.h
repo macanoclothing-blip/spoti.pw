@@ -59,11 +59,6 @@ SGModRow *SGSigningWarningRow(void);          // nil while the signature is soun
 void SGCheckSigningOnce(void);
 void SGShowSigningFixIfPending(void);   // the sheet the tour held back, if any
 
-// Compatibility.m: a Spotify other than SGSupportedSpotifyVersion, or EeveeSpotify injected alongside.
-// Each gets an alert once and a red row at the top of Mod Settings.
-NSArray<SGModRow *> *SGCompatibilityWarningRows(void);   // empty when neither
-void SGCheckCompatibilityOnce(void);
-
 // Certificate.m: how this copy is signed, from the provisioning profile inside the app, and for a free
 // Apple ID's 7-day signature a sheet now and then offering a certificate, worded by spoti.pw.
 NSString *SGCertificateKind(void);   // "free", "paid", "enterprise", "none" (no profile), nil if unreadable

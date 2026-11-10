@@ -3,6 +3,7 @@
 #include "SGSingLevel.h"
 @class SPTPlayerState;
 #define SGKeySingSpatial @"spotifyglass.sing.spatial"
+#define SGKeySingIgnoreThermal @"spotifyglass.sing.ignoreThermal"
 extern NSString *const SGSingDidChangeNotification;
 typedef NS_ENUM(NSUInteger, SGSingState) {
     SGSingUnavailable, SGSingIdle, SGSingPreparing, SGSingActive, SGSingDraining, SGSingFailed,

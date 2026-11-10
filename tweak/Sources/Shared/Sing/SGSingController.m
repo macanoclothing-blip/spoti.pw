@@ -27,6 +27,7 @@ static NSString *trackOf(SPTPlayerState *state) { return SGURIString(state.track
 static BOOL isSong(NSString *uri) { return [uri hasPrefix:@"spotify:track:"]; }
 static BOOL notPlaying(SPTPlayerState *state) { return state.isPaused || !state.isPlaying; }
 static BOOL overheated(void) { return NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious; }
+static BOOL thermalOverride(void) { return SGFlag(SGKeySingIgnoreThermal, NO); }
 static dispatch_queue_t spatialPreparationQueue(void) {
     static dispatch_queue_t queue;
     static dispatch_once_t once;
@@ -164,7 +165,7 @@ static void workerStatus(void *context, int32_t status) {
 }
 - (NSString *)restriction {
     if (_interrupted) return @"Sing will be ready when the audio interruption ends.";
-    if (overheated()) return @"Let your iPhone cool down before using Sing again.";
+    if (overheated() && !thermalOverride()) return @"Let your iPhone cool down before using Sing again.";
     for (AVAudioSessionPortDescription *port in AVAudioSession.sharedInstance.currentRoute.outputs)
         if ([port.portType isEqualToString:AVAudioSessionPortAirPlay]) return @"Sing is unavailable over AirPlay.";
     if (!isSong(trackOf(SGPlayerState()))) return @"Play a song on this iPhone to use Sing.";

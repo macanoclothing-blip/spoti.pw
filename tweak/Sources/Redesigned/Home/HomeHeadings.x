@@ -69,8 +69,11 @@ static void restyle(UIView *button) {
     UIView *heading = headingAround(button);
     if (!heading) return;
     UILabel *mine = objc_getAssociatedObject(button, &kTitleKey);
-    UILabel *theirs = titleLabelIn(button, mine);
     SGRHeadingHold *held = objc_getAssociatedObject(button, &kHeldKey);
+    UILabel *theirs = held.label;
+    if (!theirs || ![theirs isDescendantOfView:button] || !shown(theirs, button) || !theirs.text.length) {
+        theirs = titleLabelIn(button, mine);
+    }
     if (!theirs) {
         // A heading between two shelves: nothing to hold the title on until its label has text again.
         mine.hidden = YES;

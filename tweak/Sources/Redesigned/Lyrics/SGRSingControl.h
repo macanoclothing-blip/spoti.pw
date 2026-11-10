@@ -7,3 +7,4 @@
 // away, its hold let go, and this answers nil.
 UIView *SGRSingControlForPage(UIView *page, CGRect lyrics, BOOL immersive, void (^hold)(BOOL));
 void SGRSingControlDismiss(UIView *page);
+void SGRSingControlRemove(UIView *page);

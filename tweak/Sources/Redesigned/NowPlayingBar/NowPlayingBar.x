@@ -22,6 +22,22 @@ static __weak UIVisualEffectView *sg_cardGlass;
 static __weak UIView *sg_cardArtwork;
 static __weak UIView *sg_barContainer;
 
+void SGRNowPlayingBarBounce(void) {
+    if (SGRInlinePlayer()) {
+        SGRBounceMiniPlayer();
+        return;
+    }
+    UIView *card = sg_cardGlass;
+    if (!card.window) return;
+    [card.layer removeAnimationForKey:@"spotifyglass.player.closeBounce"];
+    card.transform = CGAffineTransformMakeTranslation(0, 4);
+    [UIView animateWithDuration:0.62 delay:0 usingSpringWithDamping:0.84 initialSpringVelocity:0.08
+                        options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        card.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
 BOOL SGRInlinePlayer(void) {
     static BOOL on;
     static dispatch_once_t once;

@@ -13,6 +13,7 @@ static const CGFloat kVolumeControlClearance = 12;
 static char kVolumeRowKey;
 static char kPreviousButtonKey, kPlayButtonKey, kNextButtonKey;
 static char kVolumeProgressSliderKey;
+static BOOL sg_idleHidden;
 
 static UIImage *volumeTrackImage(UIColor *color) {
     CGSize size = CGSizeMake(6, 4);
@@ -227,8 +228,8 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         return NO;
     }
     volume.hidden = NO;
-    volume.userInteractionEnabled = YES;
-    volume.accessibilityElementsHidden = NO;
+    volume.userInteractionEnabled = !sg_idleHidden;
+    volume.accessibilityElementsHidden = sg_idleHidden;
     if (!controls || !footer || !stack.window) {
         volume.alpha = 0;
         SGLog(@"redesign player: volume row has no window, controls or footer");
@@ -275,6 +276,20 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
     }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;
     [stack bringSubviewToFront:volume];
-    if (volume.alpha != 1) volume.alpha = 1;
+    CGFloat alpha = sg_idleHidden ? 0 : 1;
+    if (volume.alpha != alpha) volume.alpha = alpha;
     return YES;
+}
+
+void SGRPlayerSetVolumeIdleHidden(UIView *stack, BOOL hidden) {
+    sg_idleHidden = hidden;
+    SGRVolumeRow *volume = stack ? objc_getAssociatedObject(stack, &kVolumeRowKey) : nil;
+    if (!volume || SGFlag(SGRKeyPlayerVinyl, NO)) return;
+    UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
+    BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
+        (!UIInterfaceOrientationIsPortrait(orientation) && stack.window.bounds.size.width > stack.window.bounds.size.height);
+    if (landscape) return;
+    volume.userInteractionEnabled = !hidden;
+    volume.accessibilityElementsHidden = hidden;
+    volume.alpha = hidden ? 0 : 1;
 }

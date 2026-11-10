@@ -232,12 +232,30 @@ Redesigned:
                   Spotify is made to leave the glass bar its height where its own bar is shorter (a phone with a home button,
                   Offline or Private Session under the bar), so the now playing bar and the pages move up with it. Laid out on
                   the Mac against harness/tabbar/
-    NowPlayingBar/ the glass now playing bar (NowPlayingBar.x), with Spotify's device button on it hidden on request
-                  (BarConnect.x, its own key and its own row on the Player page, apart from the native look's)
-    Player/       the redesigned full screen player (Player.h lists its files), on Spotify Free's units too (a Free
-                  account with pick and shuffle gets NowPlayingReinventFreeMode, whose units are classes of their own
-                  around the same elements, and each unit hook covers both); its ⋯ opens a menu the way the
-                  Music app draws one (PlayerMenu.x, SGRPlayerMenu.m): a pane of glass grown out of the button,
+    NowPlayingBar/ the glass now playing bar (NowPlayingBar.x), with Spotify's device button on it hidden on request;
+                  the optional Apple Music-style tab mini player has a smaller square cover, title and artist, scrolls
+                  long labels, and skips to the previous or next queued track on a horizontal swipe; tapping its
+                  card opens Spotify's full screen player (MiniPlayer.m)
+    Player/       the redesigned full screen player (Player.h lists its files), including its transparent
+                  queue in the shared lyrics stage, with the cover reduced to a thumbnail,
+                  upcoming tracks from Spotify's full queue snapshot and queue controls (PlayerQueue.x);
+                  the queue leaves the Canvas background or cover-colour Fluid field unobscured, and its
+                  compact track list scrolls vertically when needed, with no Canvas blur while the queue is
+                  open. Its thumbnail follows the current track's artwork, and switching between queue and
+                  lyrics keeps the thumbnail anchored in place. The center output button opens iOS's native
+                  route picker, with the AirPlay glyph by default and the matching AirPods/headphones/AirPlay
+                  glyph when the active output changes; available speakers/headphones/TVs are presented by the
+                  system. Canvas blur is a separate overlay above the Canvas, is re-applied when switching
+                  from a track without Canvas to one with Canvas, and covers the complete player while the
+                  queue is open. Queue state is tracked independently from lyrics, so selecting a Canvas
+                  track from the already-open queue immediately restores the full blur; it is
+                  Canvas so its material samples the image rather than appearing as a gray panel; it is
+                  limited to the controls band in the normal player and expands over the full player while
+                  lyrics are open.
+                  It works on Spotify Free too: accounts with pick and shuffle get NowPlayingReinventFreeMode
+                  (its own unit classes around the same elements; each hook covers both). The ⋯ opens a menu
+                  the way the Music app draws one (PlayerMenu.x, SGRPlayerMenu.m): a pane of glass grown out
+                  of the button,
                   Add to playlist, Add to Queue and Share as three tiles across its top, groups of rows under
                   them, Speed and pitch opening onto Shared/Player's sliders in place, everything else Spotify
                   offers under More, and Remove from this playlist last in red. What is in it and what each row
@@ -271,7 +289,9 @@ Redesigned:
                   that breathe and fill over its length on a Core Animation timeline laid against the song's clock; and
                   a line's pronunciation (under the words it spells) and translation, switched on from a glass button in
                   the lyrics' corner that shows only for a song that has them, in the order of sizes the Lyrics page sets
-                  (LyricsText.h). Laid out on the Mac against harness/lyrics/
+                  (LyricsText.h). A view-fixed mask clips prefetched lines to their reading band while the scroll mask
+                  follows active scrolling; height-only layout changes reposition the stack. Laid out on the Mac against
+                  harness/lyrics/
                   The player follows device rotation: plist/liquid-glass.plist permits landscape, and the player
                   controller and the app delegate's orientation policy opt into rotation only while it is visible;
                   scripts/merge-local-network-plist.py also adds landscape to Spotify's device-specific orientation
@@ -306,19 +326,39 @@ Redesigned:
                   documented public artist-logo endpoint).
                   A missing logo is retried on a later visit. The Fanart.tv key stays in local preferences and is shown
                   partially in Mod Settings; Apple Music lookup is an opt-in Redesigned setting and sends only the artist name.
+                  The artist's logo picker also accepts a photo chosen with PHPicker, stored locally per artist in
+                  Application Support; choosing Automatic or a remote logo removes that custom image.
+    Profile/      profiles use their artwork as a square, full-width artist-style hero, with compact name and
+                  interactive following/follower counts and playlists in place of Popular. The hero and details
+                  scroll with the playlist collection; the action row stays reachable as the header scrolls away.
+                  The owner's profile has Edit, while
+                  another person's has Message and a stateful Follow glyph matching the artist page. Share and More
+                  remain Spotify actions, and the duplicate playlist-heading edit action is hidden. The
+                  action row stays attached to the profile root while scrolling, avoiding repeated
+                  reparenting during layout (Profile/ProfileHeader.x)
+    Sidebar/      Spotify's account drawer has an Account title and close button, a grouped profile/Add account card, and
+                  a grouped Chroma Settings, plan and navigation card; the original actions, listening carousel and
+                  messages retain their order and spacing. Rows stay within the collection's scrollable bounds
+                  (Sidebar/Sidebar.x)
     Home/         Home decluttered to music on black (an allow list of its sections: shortcuts, the DJ without its heading and
                   transcript, the shelves of cards), a large title where the filter pills were with the avatar at the trailing
-                  edge, the shelves' headings at the Music app's size, each shortcut tile's cover run across it blurred
-                  (SGRPalette's extension), continuous corners on the covers, and in FLEX builds a meter of each scroll's
-                  frames and the hooks' time (Home.h lists its files)
+                  edge, the Records filter glyph in the header, the shelves' headings at the Music app's size, tinted glass
+                  on shortcut and artwork cards with a restrained press response, each shortcut tile's cover run across it
+                  blurred (SGRPalette's extension), continuous corners on the covers, and in FLEX builds a meter of each
+                  scroll's frames and the hooks' time (Home.h lists its files)
     Search/       the Browse page decluttered to its category cards (an allow list of the list's cells: the watch feed
                   carousels and promos collapse, and the cards move up by the spacing they leave), the header the way Home
                   has it without the camera, and each card as Liquid Glass tinted by its own colour, read off the Box's
                   shape layer (Search.h lists its files)
     Library/      Your Library the way Home and Search have their headers: a large title at the leading edge, the avatar
-                  at the trailing edge with the search and create buttons before it, the header's scrim gone, each row's
+                  at the trailing edge with one Liquid Glass capsule for Spotify's search and create actions and the
+                  redesigned section editor, the header's scrim gone, each row's
                   artwork at the Kit's radius with a circular one left round, a hairline between the rows, and the search
-                  inside the library on glass capsules (Library.h lists its files). Music Universe imports Spotify's
+                  inside the library on glass capsules. The section editor toggles and reorders Library shortcuts
+                  (Library.h lists its files). Records reads playlist artwork
+                  from Spotify's rootlist, then falls back through the playlist image and the album art of its tracks,
+                  including tracks read from private playlists.
+                  Music Universe imports Spotify's
                   extended streaming-history JSON, then records future playback locally from player state; it draws an
                   explorable artist map with circular artist artwork, listening-sequence connections, time-of-day filters,
                   a timeline, top-artist and
@@ -355,7 +395,8 @@ App:
     About/         the update check against the repo's GitHub Releases, the Updates page it fills (the state, and
                    the changelog of every release newer than the build, a line per commit) and the sheet a newer
                    release brings up on its own a few seconds after Spotify opens, once per release; backup, the
-                   signing warning and the Mod page with the reset; how the app is signed (Certificate.m: free,
+                   signing warning, the Mod page with the reset, and the bundled alternate app icon picker
+                   (including three Dellify designs); how the app is signed (Certificate.m: free,
                    paid, enterprise or no profile, sent with the usage ping), and for a free Apple ID a row with
                    the day it runs out and, at most monthly, a certificate sheet worded by spoti.pw/api/certificate
     Onboarding/    the welcome page over Home on the first launch, with Redesigned UI, offered again from the Mod page
@@ -431,11 +472,15 @@ header, slider and sticky header flags, the cards under the player and the lyric
 buttons to hide); in the redesign instead, right on the Player page, its device button and the Background behind the player: Fluid
 artwork, the default, the cover itself Kawase blurred and warped on Metal, ported from kawarp (Redesigned/Kit/SGRWarp.m), or Animated
 artwork, the track's Canvas or the album's Apple Music 3:4 cover looping muted over it (Redesigned/Player/PlayerAnimated.x), the square cover fading out as it fades in and back as it goes, found
-the lock screen's way in an order of its own (a Sources page) and falling back to Fluid artwork for a track
-without a clip, while one is fetched, while Spotify shows its own music video, and in Low Power Mode or with Reduce Motion on; the
+the lock screen's way in an order of its own (a Sources page) and falling back to Fluid artwork for a track without a clip, while one is fetched, while Spotify shows its own music
+video, and in Low Power Mode or with Reduce Motion on; Blur Canvas in the ⋯ menu applies a full-screen blur to the
+animated frames, including behind open lyrics. The player’s ⋯ menu also sets lyrics alignment (left, centered or
+right); wrapped rows stay within the screen bounds. When Canvas info artwork is enabled, the small cover beside
+the track details moves upward with the title and artist as lyrics or the queue opens, then returns with them
+when it closes. It is shown only for tracks with a Canvas. The
 choice is picked in place, applies at once and brings its own settings up under it: for Fluid artwork a live preview over Speed,
 Warp, Blur, Saturation and Brightness, which the player follows as they move, and Reset; for Animated artwork its Sources; laid out against harness/kawarp/, the player's side against harness/player/ (its fluid and
-animated scenarios). Then Vibrations under either look, a card for
+animated scenarios). In the normal player, Hide player controls when idle is on by default: while playing in portrait, three seconds without a touch fades the top navigation, transport, volume and footer away and moves the track details and progress bar down near the bottom safe area, with the progress bar stopping 8 pt above its edge; this happens only for tracks with Canvas, and a tap on the Canvas or outside the remaining controls brings them back. It leaves landscape and Vinyl alone. With Show album art beside track info enabled, the existing cover beside the title is 72 pt square, the same size as the lyrics thumbnail, and appears only for tracks with Canvas. Then Vibrations under either look, a card for
 Controls (on until switched off) and one for Music Haptics. From iOS 18, Use iOS Music Haptics
 is an optional, experimental source: its live status follows Control Center/Accessibility, and iOS owns
 the native effects. Background output is not yet reliably verified in Spotify. Leaving this option off preserves

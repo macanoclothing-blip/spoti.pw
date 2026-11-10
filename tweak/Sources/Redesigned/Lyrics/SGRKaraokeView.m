@@ -13,8 +13,12 @@
 #import "MeaningSheet.h"
 #import "Shared/LyricsSources/LyricsSources.h"
 #import "Shared/Player/PlayerEvents.h"
+#import "Shared/Player/PlayerState.h"
 #import "Shared/Haptics/Haptics.h"
 #import "Redesigned/Kit/SGRTokens.h"
+#import "Redesigned/Kit/SGRBridges.h"
+#import "Headers/SPTPlayer.h"
+#import <CoreImage/CoreImage.h>
 
 static const CGFloat kFontSize = 30, kMargin = 24, kLineGap = 24, kRowTighten = 2;
 static const CGFloat kDimAlpha = 0.3, kFillEdge = 22, kLift = 2.5, kDimScale = 0.97;
@@ -23,10 +27,8 @@ static const CGFloat kEdgeFade = 0.1;  // the lines fade out over this share at 
 static const CGFloat kBlurPerLine = 1.4, kMaxBlur = 6;
 // The (oh, aye) hanging under a line: smaller, a little dimmer, and just clear of it.
 static const CGFloat kBackingScale = 0.62, kBackingAlpha = 0.8, kBackingGap = 4;
-// The mark of a line Genius explains: a bubble after it for the artist's own word, a dotted underline
-// for anyone else's.
-static const CGFloat kBubbleSide = 22, kBubbleGap = 8, kBubbleGlyph = 11, kBubbleAlpha = 0.75, kBubbleReach = 14;
-static const CGFloat kUnderlineDrop = 1, kUnderlineWidth = 2, kUnderlineAlpha = 0.35;
+// The quote mark next to a line Genius explains.
+static const CGFloat kBubbleSide = 22, kBubbleGap = 8, kBubbleGlyph = 15, kBubbleAlpha = 0.8, kBubbleReach = 14;
 // The line naming the source, under the lyrics and outside the fade so it does not dim with them.
 static const CGFloat kCreditSize = 12, kCreditAlpha = 0.4, kCreditBottom = 10;
 // The button for the pronunciation and the translation, in the bottom leading corner as Apple Music
@@ -34,6 +36,7 @@ static const CGFloat kCreditSize = 12, kCreditAlpha = 0.4, kCreditBottom = 10;
 static const CGFloat kExtrasSide = 44, kExtrasBottom = 12, kExtrasGlyph = 17, kExtrasCreditGap = 12;
 static const NSTimeInterval kRestyleFade = 0.3;   // the lines crossfading to a new style
 static const NSTimeInterval kBrowseHold = 3;   // after scrolling by hand, how long until it follows the song again
+static const NSTimeInterval kQuoteHold = 0.65; // long enough to avoid starting while the user is scrolling
 static const double kFloatMinMs = 700, kFloatLeadMs = 80;   // a short word still floats up this slowly
 // A line lit whole: how long its words take to come up to full white, and to float up together.
 static const NSTimeInterval kWholeFade = 0.35;
@@ -93,16 +96,14 @@ static BOOL readsRightToLeft(NSString *text) {
     return first != NSNotFound && first < [text rangeOfCharacterFromSet:leftToRight].location;
 }
 
-// Laid against the right edge: a line written right to left, or a second voice's written left to right.
-static BOOL alignsRight(SGKaraokeLine *line) {
-    return (line.align == SGKaraokeAlignTrailing) != readsRightToLeft(SGKaraokeLineText(line));
-}
-
 static UILabel *wordLabel(NSString *text, UIFont *font, UIColor *color, CGRect frame, BOOL rightToLeft) {
     UILabel *label = [[UILabel alloc] initWithFrame:frame];
     label.text = text;
     label.font = font;
     label.textColor = color;
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.5;
+    label.clipsToBounds = YES;
     if (!rightToLeft) return label;
     // A word of a line written right to left is set in the line's direction, so the punctuation at its
     // ends falls where the whole line would put it, a word of a left to right script among them too.
@@ -125,6 +126,7 @@ static UILabel *wordLabel(NSString *text, UIFont *font, UIColor *color, CGRect f
 // riseEnd, which are the word's own times until the sweep says otherwise.
 @property (nonatomic) BOOL whole;
 @property (nonatomic) double riseStart, riseEnd;
+- (instancetype)initWithWord:(SGKaraokeWord *)word font:(UIFont *)font rightToLeft:(BOOL)rightToLeft width:(CGFloat)width;
 - (void)fillTo:(CGFloat)cursor;
 - (void)floatAt:(double)ms;
 - (void)settle;
@@ -136,14 +138,16 @@ static UILabel *wordLabel(NSString *text, UIFont *font, UIColor *color, CGRect f
     BOOL _rightToLeft;
 }
 
-- (instancetype)initWithWord:(SGKaraokeWord *)word font:(UIFont *)font rightToLeft:(BOOL)rightToLeft {
+- (instancetype)initWithWord:(SGKaraokeWord *)word font:(UIFont *)font rightToLeft:(BOOL)rightToLeft width:(CGFloat)width {
     CGSize size = [word.text sizeWithAttributes:@{NSFontAttributeName: font}];
-    self = [super initWithFrame:CGRectMake(0, 0, ceil(size.width), ceil(font.lineHeight))];
+    CGFloat displayWidth = MIN(MAX(1, width), ceil(size.width));
+    self = [super initWithFrame:CGRectMake(0, 0, displayWidth, ceil(font.lineHeight))];
     if (!self) return nil;
     _word = word;
     _riseStart = word.start;
     _riseEnd = word.end;
     _rightToLeft = rightToLeft;
+    self.clipsToBounds = YES;
     [self addSubview:wordLabel(word.text, font, [UIColor colorWithWhite:1 alpha:kDimAlpha], self.bounds, rightToLeft)];
     _lit = wordLabel(word.text, font, UIColor.whiteColor, self.bounds, rightToLeft);
     // Hidden until the line is sung: a masked layer is drawn offscreen every frame even when the
@@ -151,10 +155,10 @@ static UILabel *wordLabel(NSString *text, UIFont *font, UIColor *color, CGRect f
     _lit.hidden = YES;
     [self addSubview:_lit];
 
-    CGFloat width = self.bounds.size.width + kFillEdge;
+    CGFloat maskWidth = self.bounds.size.width + kFillEdge;
     _fill = [CAGradientLayer layer];
     _fill.colors = @[(id)UIColor.whiteColor.CGColor, (id)UIColor.whiteColor.CGColor, (id)UIColor.clearColor.CGColor];
-    _fill.locations = @[@0, @((width - kFillEdge) / width), @1];
+    _fill.locations = @[@0, @((maskWidth - kFillEdge) / maskWidth), @1];
     _fill.startPoint = CGPointMake(rightToLeft ? 1 : 0, 0.5);
     _fill.endPoint = CGPointMake(rightToLeft ? 0 : 1, 0.5);
     _lit.layer.mask = _fill;
@@ -205,6 +209,7 @@ static UILabel *wordLabel(NSString *text, UIFont *font, UIColor *color, CGRect f
 @property (nonatomic, readonly) NSArray<NSNumber *> *order;   // SGRLyricsText, largest first, shown ones only
 @property (nonatomic, readonly) UIFont *lyrics, *pronunciation, *translation;   // nil for a text not shown
 @property (nonatomic, readonly) SGRKaraokeStyle *backing;   // the backing row's: smaller, its translation read with the line's
+@property (nonatomic, readonly) SGRLyricsAlignment alignment;
 - (instancetype)initWithSize:(CGFloat)size order:(NSArray<NSNumber *> *)order pronunciation:(BOOL)pronunciation translation:(BOOL)translation;
 @end
 
@@ -232,6 +237,7 @@ static const CGFloat kSecondShare = 0.67, kThirdShare = 0.54;
         [shown insertObject:@(SGRLyricsTextLyrics) atIndex:0];
     }
     _order = shown;
+    _alignment = SGRLyricsTextAlignment();
     return self;
 }
 
@@ -242,6 +248,7 @@ static const CGFloat kSecondShare = 0.67, kThirdShare = 0.54;
     NSMutableArray<NSNumber *> *order = [_order mutableCopy];
     [order removeObject:@(SGRLyricsTextTranslation)];
     backing->_order = order;
+    backing->_alignment = _alignment;
     return backing;
 }
 
@@ -258,7 +265,6 @@ static const CGFloat kPairTighten = 2, kPairGap = 4, kPartGap = 6;
 // it off the main thread to stack them, and a line view lays itself out by it when it is made, so the
 // two can never disagree about a height.
 @interface SGRKaraokeLayout : NSObject
-@property (nonatomic) BOOL right;
 @property (nonatomic) CGFloat height;
 @property (nonatomic, copy) NSArray<NSValue *> *lyricFrames, *spokenFrames;
 @property (nonatomic, copy) NSArray<NSNumber *> *lyricOffsets, *spokenOffsets;
@@ -278,10 +284,11 @@ typedef struct {
 } SGRPlace;
 
 static NSUInteger flow(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat width, SGRPlace *places) {
+    width = MAX(1, width);
     CGFloat space = ceil([@" " sizeWithAttributes:@{NSFontAttributeName: font}].width), x = 0, offset = 0;
     NSUInteger row = 0;
     for (NSUInteger i = 0; i < words.count; i++) {
-        CGFloat wide = ceil([words[i].text sizeWithAttributes:@{NSFontAttributeName: font}].width);
+        CGFloat wide = MIN(width, ceil([words[i].text sizeWithAttributes:@{NSFontAttributeName: font}].width));
         CGFloat lead = x > 0 && !words[i].joined ? space : 0;
         if (x > 0 && x + lead + wide > width) {
             x = lead = 0;
@@ -296,13 +303,14 @@ static NSUInteger flow(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat wi
     return words.count ? row + 1 : 0;
 }
 
-// Written right to left, rows are laid out left to right and turned around, so the first word is at
-// the right edge and each row runs leftwards from it. Then each group of rows goes against the line's
-// edge, a second voice's against the far one, as Apple Music sets the two sides of a duet apart; a
-// group too wide to fit stays where its first word put it.
-static void settle(CGRect *frames, NSUInteger *groups, NSUInteger count, NSUInteger groupCount, CGFloat width, BOOL rightToLeft, BOOL right) {
+static void settle(CGRect *frames, NSUInteger *groups, NSUInteger count, NSUInteger groupCount, CGFloat width,
+                   BOOL rightToLeft, SGRLyricsAlignment alignment) {
+    width = MAX(0, width);
     if (rightToLeft) {
-        for (NSUInteger i = 0; i < count; i++) frames[i].origin.x = width - CGRectGetMaxX(frames[i]);
+        for (NSUInteger i = 0; i < count; i++) {
+            frames[i].size.width = MIN(width, MAX(0, frames[i].size.width));
+            frames[i].origin.x = width - CGRectGetMaxX(frames[i]);
+        }
     }
     for (NSUInteger g = 0; g < groupCount; g++) {
         CGRect extent = CGRectNull;
@@ -310,11 +318,21 @@ static void settle(CGRect *frames, NSUInteger *groups, NSUInteger count, NSUInte
             if (groups[i] == g) extent = CGRectUnion(extent, frames[i]);
         }
         if (CGRectIsNull(extent)) continue;
-        CGFloat shift = right ? width - CGRectGetMaxX(extent) : -CGRectGetMinX(extent);
-        if (right ? shift <= 0 : shift >= 0) continue;
+        CGFloat shift = alignment == SGRLyricsAlignmentLeft
+            ? -CGRectGetMinX(extent)
+            : alignment == SGRLyricsAlignmentRight
+                ? width - CGRectGetMaxX(extent)
+                : (width - CGRectGetWidth(extent)) / 2 - CGRectGetMinX(extent);
+        CGFloat minShift = -CGRectGetMinX(extent), maxShift = width - CGRectGetMaxX(extent);
+        shift = round(minShift <= maxShift ? MAX(minShift, MIN(maxShift, shift)) : minShift);
+        if (fabs(shift) < 0.5) continue;
         for (NSUInteger i = 0; i < count; i++) {
             if (groups[i] == g) frames[i].origin.x += shift;
         }
+    }
+    for (NSUInteger i = 0; i < count; i++) {
+        frames[i].size.width = MIN(width, MAX(0, frames[i].size.width));
+        frames[i].origin.x = MIN(MAX(0, frames[i].origin.x), width - frames[i].size.width);
     }
 }
 
@@ -331,8 +349,8 @@ static NSArray<NSNumber *> *offsetsOf(SGRPlace *places, NSUInteger count) {
 }
 
 // A text of words on its own, from `top`; returns where it ends.
-static CGFloat layRun(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat width, BOOL right, CGFloat top,
-                      NSArray<NSValue *> **frames, NSArray<NSNumber *> **offsets) {
+static CGFloat layRun(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat width, CGFloat top,
+                      SGRLyricsAlignment alignment, NSArray<NSValue *> **frames, NSArray<NSNumber *> **offsets) {
     NSUInteger count = words.count;
     SGRPlace *places = calloc(count + 1, sizeof(SGRPlace));
     CGRect *rects = calloc(count + 1, sizeof(CGRect));
@@ -345,7 +363,7 @@ static CGFloat layRun(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat wid
     }
     NSMutableString *text = [NSMutableString string];
     for (SGKaraokeWord *word in words) [text appendString:word.text];
-    settle(rects, groups, count, rows, width, readsRightToLeft(text), right);
+    settle(rects, groups, count, rows, width, readsRightToLeft(text), alignment);
     *frames = boxedFrames(rects, count);
     *offsets = offsetsOf(places, count);
     free(places);
@@ -358,7 +376,8 @@ static CGFloat layRun(NSArray<SGKaraokeWord *> *words, UIFont *font, CGFloat wid
 // leading one with the other's words under it, each under the word it starts with, as Apple Music sets
 // its pronunciation, so a syllable reads under the syllable it sounds. Returns where the pair ends.
 static CGFloat layPair(NSArray<SGKaraokeWord *> *lead, UIFont *leadFont, NSArray<SGKaraokeWord *> *under, UIFont *underFont,
-                       CGFloat width, BOOL right, CGFloat top, NSArray<NSValue *> **leadFrames, NSArray<NSNumber *> **leadOffsets,
+                       CGFloat width, CGFloat top, SGRLyricsAlignment alignment,
+                       NSArray<NSValue *> **leadFrames, NSArray<NSNumber *> **leadOffsets,
                        NSArray<NSValue *> **underFrames, NSArray<NSNumber *> **underOffsets) {
     NSUInteger leads = lead.count, unders = under.count, count = leads + unders;
     SGRPlace *places = calloc(count + 1, sizeof(SGRPlace));
@@ -420,7 +439,7 @@ static CGFloat layPair(NSArray<SGKaraokeWord *> *lead, UIFont *leadFont, NSArray
     }
     NSMutableString *text = [NSMutableString string];
     for (SGKaraokeWord *word in lead) [text appendString:word.text];
-    settle(rects, groups, count, rows, width, readsRightToLeft(text), right);
+    settle(rects, groups, count, rows, width, readsRightToLeft(text), alignment);
     *leadFrames = boxedFrames(rects, leads);
     *underFrames = boxedFrames(rects + leads, unders);
     *leadOffsets = offsetsOf(places, leads);
@@ -433,11 +452,9 @@ static CGFloat layPair(NSArray<SGKaraokeWord *> *lead, UIFont *leadFont, NSArray
 }
 
 // The texts a line has, in the style's order, the lyrics and their pronunciation set as a pair where
-// the order has them side by side, and the backing row after the lyrics. `right` is the side a backing
-// row keeps to, its line's; -1 for a line of its own, which takes its side from its voice and script.
-static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeStyle *style, NSInteger right) {
+// the order has them side by side, and an optional backing row after the lyrics.
+static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeStyle *style, BOOL allowsBacking) {
     SGRKaraokeLayout *layout = [SGRKaraokeLayout new];
-    layout.right = right >= 0 ? right : alignsRight(line);
     layout.translation = CGRectNull;
     NSArray<SGKaraokeWord *> *spoken = style.pronunciation ? line.pronunciation.words : nil;
     NSString *translation = style.translation ? line.translation : nil;
@@ -467,7 +484,7 @@ static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeSt
             NSArray<NSNumber *> *pairedOffsets;
             y = layPair(lyrics ? line.words : spoken, lyrics ? style.lyrics : style.pronunciation,
                         lyrics ? spoken : line.words, lyrics ? style.pronunciation : style.lyrics,
-                        width, layout.right, y, &frames, &offsets, &pairedFrames, &pairedOffsets);
+                        width, y, style.alignment, &frames, &offsets, &pairedFrames, &pairedOffsets);
             layout.lyricFrames = lyrics ? frames : pairedFrames;
             layout.lyricOffsets = lyrics ? offsets : pairedOffsets;
             layout.spokenFrames = lyrics ? pairedFrames : frames;
@@ -475,7 +492,8 @@ static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeSt
             p++;
             lyrics = YES;
         } else {
-            y = layRun(lyrics ? line.words : spoken, lyrics ? style.lyrics : style.pronunciation, width, layout.right, y, &frames, &offsets);
+            y = layRun(lyrics ? line.words : spoken, lyrics ? style.lyrics : style.pronunciation,
+                       width, y, style.alignment, &frames, &offsets);
             if (lyrics) {
                 layout.lyricFrames = frames;
                 layout.lyricOffsets = offsets;
@@ -484,9 +502,9 @@ static SGRKaraokeLayout *layOut(SGKaraokeLine *line, CGFloat width, SGRKaraokeSt
                 layout.spokenOffsets = offsets;
             }
         }
-        if (lyrics && right < 0 && line.backing.words.count) {
+        if (lyrics && allowsBacking && line.backing.words.count) {
             layout.backingTop = y + kBackingGap;
-            y = layout.backingTop + layOut(line.backing, width, style.backing, layout.right).height;
+            y = layout.backingTop + layOut(line.backing, width, style.backing, NO).height;
         }
     }
     layout.height = y;
@@ -501,7 +519,7 @@ static NSArray<NSNumber *> *topsOf(NSArray<SGKaraokeLine *> *lines, CGFloat widt
     CGFloat top = 0;
     for (SGKaraokeLine *line in lines) {
         [tops addObject:@(top)];
-        top += layOut(line, width, style, -1).height + gap;
+        top += layOut(line, width, style, YES).height + gap;
     }
     return tops;
 }
@@ -607,9 +625,7 @@ static double secant(SGSweepKnot *knots, NSUInteger i) {
 
 @interface SGRKaraokeLineView : UIView
 @property (nonatomic, readonly) SGKaraokeLine *line;
-// Laid against the right edge: a line written right to left, or a second voice's written left to
-// right. A backing row keeps to the edge of the line it hangs under, whatever script each is in.
-@property (nonatomic, readonly) BOOL right;
+@property (nonatomic) BOOL quoteSelected;
 @property (nonatomic) BOOL active;
 @property (nonatomic) CGFloat blur;
 // under: the line a backing row hangs under, nil for a line of its own. sweepsEstimates: the words of a
@@ -622,6 +638,17 @@ static double secant(SGSweepKnot *knots, NSUInteger i) {
 - (void)markMeaning:(NSArray<SGLyricsMeaning *> *)meanings;
 // Where the bubble can be tapped, in the line's own space; CGRectNull without one.
 @property (nonatomic, readonly) CGRect bubbleTarget;
+- (void)showMeaning;
+@end
+
+@interface SGRMeaningBubbleView : UIImageView
+@property (nonatomic, copy) BOOL (^activateMeaning)(void);
+@end
+
+@implementation SGRMeaningBubbleView
+- (BOOL)accessibilityActivate {
+    return self.activateMeaning ? self.activateMeaning() : NO;
+}
 @end
 
 // The translation of a line being sung, brighter than a line waiting but never as bright as the words.
@@ -631,11 +658,18 @@ static const CGFloat kTranslationLit = 0.6;
     NSArray<SGRKaraokeSweep *> *_sweeps;   // the line's words, then their pronunciation's where shown
     NSArray<SGRKaraokeWordView *> *_words;   // every word of both
     NSArray<SGRKaraokeWordView *> *_lyricWords;
-    UIImageView *_bubble;
-    CAShapeLayer *_underline;
+    SGRMeaningBubbleView *_bubble;
     UILabel *_translation;
+    NSArray<SGLyricsMeaning *> *_meanings;
     NSUInteger _generation;
     SGRKaraokeLineView *_backing;
+}
+
+- (void)setQuoteSelected:(BOOL)selected {
+    if (_quoteSelected == selected) return;
+    _quoteSelected = selected;
+    self.backgroundColor = selected ? [UIColor colorWithWhite:1 alpha:0.18] : UIColor.clearColor;
+    self.layer.cornerRadius = selected ? 12 : 0;
 }
 
 // A sweep's word views, each put where the layout has it and told where it sits along the sweep.
@@ -646,8 +680,9 @@ static const CGFloat kTranslationLit = 0.6;
     BOOL rightToLeft = readsRightToLeft([[words valueForKey:@"text"] componentsJoinedByString:@""]);
     NSMutableArray<SGRKaraokeWordView *> *views = [NSMutableArray arrayWithCapacity:words.count];
     for (NSUInteger i = 0; i < words.count; i++) {
-        SGRKaraokeWordView *view = [[SGRKaraokeWordView alloc] initWithWord:words[i] font:font rightToLeft:rightToLeft];
         CGRect frame = frames[i].CGRectValue;
+        SGRKaraokeWordView *view = [[SGRKaraokeWordView alloc] initWithWord:words[i] font:font
+                                                                 rightToLeft:rightToLeft width:frame.size.width];
         view.center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
         view.offset = offsets[i].doubleValue;
         [self addSubview:view];
@@ -669,8 +704,7 @@ static double wholeFrom(SGKaraokeLine *run, BOOL sweepsEstimates) {
     if (!self) return nil;
     _line = line;
     BOOL backing = under != nil;
-    SGRKaraokeLayout *layout = layOut(line, width, style, backing ? under.right : -1);
-    _right = layout.right;
+    SGRKaraokeLayout *layout = layOut(line, width, style, !backing);
     NSMutableArray<SGRKaraokeSweep *> *sweeps = [NSMutableArray array];
     SGRKaraokeSweep *sung = [self sweepOf:line.words font:style.lyrics frames:layout.lyricFrames offsets:layout.lyricOffsets
                                 wholeFrom:wholeFrom(line, sweepsEstimates)];
@@ -688,7 +722,8 @@ static double wholeFrom(SGKaraokeLine *run, BOOL sweepsEstimates) {
         _translation.font = style.translation;
         _translation.textColor = UIColor.whiteColor;
         _translation.alpha = kDimAlpha;
-        _translation.textAlignment = _right ? NSTextAlignmentRight : NSTextAlignmentLeft;
+        _translation.textAlignment = style.alignment == SGRLyricsAlignmentLeft ? NSTextAlignmentLeft
+            : style.alignment == SGRLyricsAlignmentRight ? NSTextAlignmentRight : NSTextAlignmentCenter;
         _translation.text = line.translation;
         [self addSubview:_translation];
     }
@@ -700,10 +735,11 @@ static double wholeFrom(SGKaraokeLine *run, BOOL sweepsEstimates) {
         [self addSubview:_backing];
     }
     self.frame = CGRectMake(0, 0, width, layout.height);
+    self.clipsToBounds = YES;
 
-    // Scales toward the edge its text is aligned to, and a backing row rides its line's blur.
+    // The full line stays centered while it scales; a backing row rides its line's blur.
     if (backing) return self;
-    self.layer.anchorPoint = CGPointMake(_right ? 1 : 0, 0.5);
+    self.layer.anchorPoint = CGPointMake(0.5, 0.5);
     if (!blurred) return self;
     CAFilter *blur = [NSClassFromString(@"CAFilter") filterWithType:@"gaussianBlur"];
     if (blur) self.layer.filters = @[blur];
@@ -794,60 +830,62 @@ static const NSUInteger kLinesPerFrame = 4;
     return _bubble ? CGRectInset(_bubble.frame, -kBubbleReach, -kBubbleReach) : CGRectNull;
 }
 
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    return [super pointInside:point withEvent:event] ||
+           (_bubble && CGRectContainsPoint(CGRectInset(_bubble.frame, -kBubbleReach, -kBubbleReach), point));
+}
+
+- (void)showMeaning {
+    if (_meanings.count) SGRShowMeanings(SGKaraokeLineText(_line), _meanings);
+}
+
 - (void)markMeaning:(NSArray<SGLyricsMeaning *> *)meanings {
     [_bubble removeFromSuperview];
     _bubble = nil;
-    [_underline removeFromSuperlayer];
-    _underline = nil;
+    _meanings = [meanings copy];
     if (!meanings.count || !_lyricWords.count) return;
-    if (meanings.firstObject.author == SGLyricsMeaningByArtist) {
-        SGRKaraokeWordView *last = _lyricWords.lastObject;
-        BOOL rightToLeft = readsRightToLeft(SGKaraokeLineText(_line));
-        CGRect word = CGRectMake(last.center.x - last.bounds.size.width / 2, last.center.y - last.bounds.size.height / 2,
-                                 last.bounds.size.width, last.bounds.size.height);
-        CGFloat x = rightToLeft ? CGRectGetMinX(word) - kBubbleGap - kBubbleSide : CGRectGetMaxX(word) + kBubbleGap;
-        UIImage *glyph = [UIImage systemImageNamed:@"quote.opening" withConfiguration:
-                          [UIImageSymbolConfiguration configurationWithPointSize:kBubbleGlyph weight:UIImageSymbolWeightBold]];
-        _bubble = [[UIImageView alloc] initWithImage:glyph];
-        _bubble.contentMode = UIViewContentModeCenter;
-        _bubble.tintColor = UIColor.blackColor;
-        _bubble.backgroundColor = UIColor.whiteColor;
-        _bubble.layer.cornerRadius = kBubbleSide / 2;
-        _bubble.alpha = kBubbleAlpha;
-        _bubble.frame = CGRectMake(x, CGRectGetMidY(word) - kBubbleSide / 2, kBubbleSide, kBubbleSide);
-        _bubble.isAccessibilityElement = YES;
-        _bubble.accessibilityLabel = @"Meaning from the artist";
-        [self addSubview:_bubble];
-        return;
-    }
-    // One dotted stroke under each row the line's words wrap onto.
-    UIBezierPath *path = [UIBezierPath bezierPath];
-    CGFloat rowY = NAN, from = 0, to = 0;
-    for (SGRKaraokeWordView *word in _lyricWords) {
-        CGFloat bottom = word.center.y + word.bounds.size.height / 2 + kUnderlineDrop;
-        CGFloat left = word.center.x - word.bounds.size.width / 2, right = left + word.bounds.size.width;
-        if (bottom != rowY) {
-            if (!isnan(rowY)) {
-                [path moveToPoint:CGPointMake(from, rowY)];
-                [path addLineToPoint:CGPointMake(to, rowY)];
-            }
-            rowY = bottom;
-            from = left;
-            to = right;
-            continue;
+    SGRKaraokeWordView *last = _lyricWords.lastObject;
+    BOOL rightToLeft = readsRightToLeft(SGKaraokeLineText(_line));
+    CGRect word = CGRectMake(last.center.x - last.bounds.size.width / 2, last.center.y - last.bounds.size.height / 2,
+                             last.bounds.size.width, last.bounds.size.height);
+    CGFloat width = CGRectGetWidth(self.bounds);
+    CGFloat x = rightToLeft ? CGRectGetMinX(word) - kBubbleGap - kBubbleSide : CGRectGetMaxX(word) + kBubbleGap;
+    CGRect candidate = CGRectMake(x, CGRectGetMidY(word) - kBubbleSide / 2, kBubbleSide, kBubbleSide);
+    BOOL overlapsWords = x < 0 || CGRectGetMaxX(candidate) > width;
+    for (SGRKaraokeWordView *lyricWord in _lyricWords) {
+        CGRect frame = CGRectMake(lyricWord.center.x - lyricWord.bounds.size.width / 2,
+                                  lyricWord.center.y - lyricWord.bounds.size.height / 2,
+                                  lyricWord.bounds.size.width, lyricWord.bounds.size.height);
+        if (CGRectIntersectsRect(CGRectInset(candidate, -2, -2), frame)) {
+            overlapsWords = YES;
+            break;
         }
-        from = MIN(from, left);
-        to = MAX(to, right);
     }
-    [path moveToPoint:CGPointMake(from, rowY)];
-    [path addLineToPoint:CGPointMake(to, rowY)];
-    _underline = [CAShapeLayer layer];
-    _underline.path = path.CGPath;
-    _underline.strokeColor = [UIColor colorWithWhite:1 alpha:kUnderlineAlpha].CGColor;
-    _underline.lineWidth = kUnderlineWidth;
-    _underline.lineCap = kCALineCapRound;
-    _underline.lineDashPattern = @[@0, @5];
-    [self.layer insertSublayer:_underline atIndex:0];
+    if (overlapsWords) x = rightToLeft ? width - kBubbleSide : 0;
+    x = MAX(0, MIN(width - kBubbleSide, x));
+    UIImage *glyph = [UIImage systemImageNamed:@"quote.opening" withConfiguration:
+                      [UIImageSymbolConfiguration configurationWithPointSize:kBubbleGlyph weight:UIImageSymbolWeightSemibold]];
+    _bubble = [[SGRMeaningBubbleView alloc] initWithImage:glyph];
+    _bubble.contentMode = UIViewContentModeCenter;
+    _bubble.tintColor = UIColor.whiteColor;
+    _bubble.backgroundColor = [UIColor colorWithWhite:1 alpha:0.18];
+    _bubble.layer.cornerRadius = kBubbleSide / 2;
+    _bubble.layer.borderWidth = 1;
+    _bubble.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.3].CGColor;
+    _bubble.alpha = kBubbleAlpha;
+    _bubble.frame = CGRectMake(x, CGRectGetMidY(word) - kBubbleSide / 2, kBubbleSide, kBubbleSide);
+    _bubble.isAccessibilityElement = YES;
+    _bubble.accessibilityTraits = UIAccessibilityTraitButton;
+    _bubble.accessibilityLabel = @"Show meaning for this lyric";
+    _bubble.accessibilityHint = @"Opens the explanation for this line";
+    __weak SGRKaraokeLineView *weakSelf = self;
+    _bubble.activateMeaning = ^BOOL{
+        SGRKaraokeLineView *line = weakSelf;
+        if (!line || !line->_meanings.count) return NO;
+        [line showMeaning];
+        return YES;
+    };
+    [self addSubview:_bubble];
 }
 
 @end
@@ -1036,6 +1074,7 @@ typedef struct {
 @implementation SGRKaraokeView {
     UIScrollView *_scroll;
     BOOL _browsing;
+    BOOL _homing;
     CADisplayLink *_link;
     NSString *_track;
     NSArray<SGKaraokeLine *> *_lines;
@@ -1067,14 +1106,17 @@ typedef struct {
     CGFloat _builtWidth;
     BOOL _showing;
     CAGradientLayer *_fade;
+    CALayer *_bandMask;
     UILabel *_credit;
     SGLyricsCredit *_credited;   // what the lines are credited to, nil while the page asks every frame
     CGFloat _fontSize, _margin, _lineGap, _blurPerLine, _maxBlur;
+    CGFloat _laidOutHeight;
     BOOL _crediting;   // Show source, read once
     BOOL _asksCredit;  // with a source of the mod's on, a credit its terms require shows either way
     double _clock;
     NSInteger _reported;
     CFTimeInterval _clockTime;
+    BOOL _clockNeedsSync;
     BOOL _sweepsEstimates;   // the Lyrics page's "Simulate word-by-word timing", read once like the credit
     BOOL _plain;             // the song has no timing at all: every line lit, nothing follows the clock
     NSDictionary<NSNumber *, NSArray<SGLyricsMeaning *> *> *_meanings;   // Genius's, by line
@@ -1082,6 +1124,8 @@ typedef struct {
     // The room the lines have (lineInsets), and the fade's edges on their way to it from _bandFrom.
     UIEdgeInsets _band, _bandFrom;
     CFTimeInterval _bandSince, _bandFor;
+    NSMutableIndexSet *_quoteSelection;
+    BOOL _quoting;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1095,11 +1139,15 @@ typedef struct {
     _blurPerLine = kBlurPerLine;
     _maxBlur = kMaxBlur;
     _shown = [NSMutableDictionary dictionary];
+    _quoteSelection = [NSMutableIndexSet indexSet];
     _sightArrangement = NSUIntegerMax;
     _fade = [CAGradientLayer layer];
     _fade.colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.whiteColor.CGColor,
                      (id)UIColor.whiteColor.CGColor, (id)UIColor.clearColor.CGColor];
     _fade.locations = @[@0, @(kEdgeFade), @(1 - kEdgeFade), @1];
+    _bandMask = [CALayer layer];
+    _bandMask.backgroundColor = UIColor.whiteColor.CGColor;
+    self.layer.mask = _bandMask;
     _scroll = [[UIScrollView alloc] initWithFrame:self.bounds];
     _scroll.layer.mask = _fade;
     _scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -1119,7 +1167,10 @@ typedef struct {
     _sweepsEstimates = SGFlag(SGKeyLyricsSimulateWords, NO);
     [self addSubview:_credit];
     [self addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(tapped:)]];
-    [self addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(held:)]];
+    UILongPressGestureRecognizer *quoteHold = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(held:)];
+    quoteHold.minimumPressDuration = kQuoteHold;
+    quoteHold.allowableMovement = 18;
+    [self addGestureRecognizer:quoteHold];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(playerTransitionChanged:) name:SGPlayerTransitionNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(playerTransitionChanged:) name:SGPlayerTransitionEndedNotification object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(restyle) name:SGRLyricsTextDidChangeNotification object:nil];
@@ -1161,13 +1212,280 @@ typedef struct {
 }
 
 - (void)held:(UILongPressGestureRecognizer *)hold {
-    if (hold.state != UIGestureRecognizerStateBegan || !_meanings.count) return;
     CGPoint point = [hold locationInView:_scroll];
-    for (SGRKaraokeLineView *view in _shown.allValues) {
-        if (!CGRectContainsPoint(CGRectInset(view.frame, -_margin, -_lineGap / 2), point)) continue;
-        [self explainLine:view];
-        return;
+    NSInteger index = -1;
+    for (NSNumber *key in _shown) {
+        SGRKaraokeLineView *view = _shown[key];
+        if (CGRectContainsPoint(CGRectInset(view.frame, -_margin, -_lineGap / 2), point)) {
+            index = key.integerValue;
+            break;
+        }
     }
+    if (hold.state == UIGestureRecognizerStateBegan) {
+        if (index < 0) return;
+        _quoting = YES;
+        [_quoteSelection removeAllIndexes];
+        [_quoteSelection addIndex:index];
+        [self updateQuoteSelection];
+        SGPlayFeedback(SGFeedbackSkip);
+    } else if (_quoting && hold.state == UIGestureRecognizerStateChanged) {
+        if (index < 0) return;
+        NSUInteger first = _quoteSelection.firstIndex;
+        if (first == NSNotFound) first = index;
+        [_quoteSelection addIndexesInRange:NSMakeRange(MIN(first, index), labs(index - (NSInteger)first) + 1)];
+        [self updateQuoteSelection];
+    } else if (_quoting && (hold.state == UIGestureRecognizerStateEnded || hold.state == UIGestureRecognizerStateCancelled)) {
+        _quoting = NO;
+        if (hold.state == UIGestureRecognizerStateEnded && _quoteSelection.count) [self shareQuote];
+    }
+}
+
+- (void)updateQuoteSelection {
+    for (NSNumber *key in _shown) _shown[key].quoteSelected = [_quoteSelection containsIndex:key.integerValue];
+}
+
+// The share card, laid out like the Apple Music one: the artwork full width fading into a dark tint of
+// itself, the title in capitals and the artist under it, the source's pill, a progress bar with the
+// time sung and the time left, and the chosen lines in capitals with a glow in a rounded box.
+// Laid out on a 1080x1920 canvas from the reference card (804x1290) scaled to it.
+- (UIImage *)quoteImage {
+    NSMutableArray<NSNumber *> *indexes = [NSMutableArray array];
+    [_quoteSelection enumerateIndexesUsingBlock:^(NSUInteger index, __unused BOOL *stop) {
+        [indexes addObject:@(index)];
+    }];
+    if (!indexes.count) return nil;
+    NSMutableString *text = [NSMutableString string];
+    for (NSNumber *index in indexes) {
+        NSString *line = SGKaraokeLineText(_lines[index.integerValue]);
+        if (line.length) {
+            if (text.length) [text appendString:@"\n"];
+            [text appendString:line];
+        }
+    }
+    if (!text.length) return nil;
+    NSString *lyrics = text.uppercaseString;
+
+    CGSize size = CGSizeMake(1080, 1920);
+    SPTPlayerState *player = SGPlayerState();
+    UIImage *artwork = SGRNowPlayingArtwork(NULL, NULL);
+    NSString *title = (player.track.trackTitle ?: @"").uppercaseString;
+    NSString *artist = player.track.artistName ?: @"";
+
+    NSInteger firstLine = indexes.firstObject.integerValue;
+    double durationMs = MAX(1, player.duration * 1000);
+    double selectedStart = firstLine < (NSInteger)_lines.count ? _lines[firstLine].start : 0;
+    double progress = MIN(1, MAX(0, selectedStart / durationMs));
+    NSString *(^clock)(double) = ^NSString *(double ms) {
+        NSInteger s = MAX(0, llround(ms / 1000));
+        return [NSString stringWithFormat:@"%ld:%02ld", (long)(s / 60), (long)(s % 60)];
+    };
+    NSString *elapsed = clock(selectedStart);
+    NSString *remaining = [@"-" stringByAppendingString:clock(durationMs - selectedStart)];
+
+    // The background colour: the artwork's average, darkened.
+    CGFloat br = 0.04, bg = 0.06, bb = 0.10;
+    if (artwork.CGImage) {
+        uint8_t px[4] = {0, 0, 0, 255};
+        CGColorSpaceRef rgb = CGColorSpaceCreateDeviceRGB();
+        CGContextRef one = CGBitmapContextCreate(px, 1, 1, 8, 4, rgb, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+        CGContextSetInterpolationQuality(one, kCGInterpolationMedium);
+        CGContextDrawImage(one, CGRectMake(0, 0, 1, 1), artwork.CGImage);
+        CGContextRelease(one);
+        CGColorSpaceRelease(rgb);
+        br = px[0] / 255.0 * 0.22;
+        bg = px[1] / 255.0 * 0.22;
+        bb = px[2] / 255.0 * 0.22;
+    }
+    UIColor *base = [UIColor colorWithRed:br green:bg blue:bb alpha:1];
+
+    const CGFloat left = 83, right = 1006, barWidth = right - left;
+    const CGRect box = CGRectMake(54, 1388, 972, 480);
+
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGContextRef cg = context.CGContext;
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+
+        // The background and the artwork across the full width, fading into it with no hard edge.
+        [base setFill];
+        CGContextFillRect(cg, CGRectMake(0, 0, size.width, size.height));
+        if (artwork) {
+            CGFloat top = 1120;
+            CGFloat scale = MAX(size.width / artwork.size.width, top / artwork.size.height);
+            CGSize drawn = CGSizeMake(artwork.size.width * scale, artwork.size.height * scale);
+            CGContextSaveGState(cg);
+            CGContextClipToRect(cg, CGRectMake(0, 0, size.width, top));
+            [artwork drawInRect:CGRectMake((size.width - drawn.width) / 2, (top - drawn.height) / 2, drawn.width, drawn.height)];
+            CGContextRestoreGState(cg);
+
+            // The blur: a blurred copy of the artwork comes in over the sharp one from the lower part
+            // of the cover down, through a mask that ramps it up, so the cover melts into the blur
+            // instead of ending on a line.
+            CGRect artRect = CGRectMake((size.width - drawn.width) / 2, (top - drawn.height) / 2, drawn.width, drawn.height);
+            CGImageRef blurred = NULL;
+            if (artwork.CGImage) {
+                CIImage *source = [[CIImage alloc] initWithCGImage:artwork.CGImage];
+                CGRect extent = source.extent;
+                CIFilter *blurFilter = [CIFilter filterWithName:@"CIGaussianBlur"];
+                [blurFilter setValue:[source imageByClampingToExtent] forKey:kCIInputImageKey];
+                [blurFilter setValue:@(extent.size.width / size.width * 46) forKey:kCIInputRadiusKey];
+                CIImage *result = [blurFilter.outputImage imageByCroppingToRect:extent];
+                CIContext *ci = [CIContext contextWithOptions:nil];
+                blurred = [ci createCGImage:result fromRect:extent];
+            }
+            if (blurred) {
+                CGContextSaveGState(cg);
+                CGContextClipToRect(cg, CGRectMake(0, 0, size.width, top));
+                CGContextBeginTransparencyLayer(cg, NULL);
+                // CGContext draws images upside down in UIKit's flipped space, so flip around the rect.
+                CGContextSaveGState(cg);
+                CGContextTranslateCTM(cg, 0, CGRectGetMinY(artRect) * 2 + artRect.size.height);
+                CGContextScaleCTM(cg, 1, -1);
+                CGContextDrawImage(cg, artRect, blurred);
+                CGContextRestoreGState(cg);
+                // The mask: nothing at the top of the ramp, all of the blur by its bottom.
+                CGFloat maskColors[8] = {1, 1, 1, 0, 1, 1, 1, 1};
+                CGFloat maskLocations[] = {0, 1};
+                CGGradientRef mask = CGGradientCreateWithColorComponents(space, maskColors, maskLocations, 2);
+                CGContextSetBlendMode(cg, kCGBlendModeDestinationIn);
+                CGContextDrawLinearGradient(cg, mask, CGPointMake(0, 560), CGPointMake(0, 900),
+                                            kCGGradientDrawsBeforeStartLocation | kCGGradientDrawsAfterEndLocation);
+                CGGradientRelease(mask);
+                CGContextSetBlendMode(cg, kCGBlendModeNormal);
+                CGContextEndTransparencyLayer(cg);
+                CGContextRestoreGState(cg);
+                CGImageRelease(blurred);
+            }
+
+            // Then the dark tint takes over, fully opaque before the cover's last row, so nothing of
+            // its edge shows.
+            CGFloat colors[8];
+            [[base colorWithAlphaComponent:0] getRed:&colors[0] green:&colors[1] blue:&colors[2] alpha:&colors[3]];
+            [base getRed:&colors[4] green:&colors[5] blue:&colors[6] alpha:&colors[7]];
+            CGFloat locations[] = {0, 1};
+            CGGradientRef fade = CGGradientCreateWithColorComponents(space, colors, locations, 2);
+            CGContextDrawLinearGradient(cg, fade, CGPointMake(0, 760), CGPointMake(0, top), kCGGradientDrawsAfterEndLocation);
+            CGGradientRelease(fade);
+        }
+
+        // The title and the artist, on the left.
+        NSMutableParagraphStyle *oneLine = [NSMutableParagraphStyle new];
+        oneLine.lineBreakMode = NSLineBreakByTruncatingTail;
+        CGFloat textWidth = 640;
+        [title drawInRect:CGRectMake(left, 1128, textWidth, 50) withAttributes:@{
+            NSFontAttributeName: [UIFont systemFontOfSize:44 weight:UIFontWeightSemibold],
+            NSForegroundColorAttributeName: UIColor.whiteColor, NSParagraphStyleAttributeName: oneLine}];
+        [artist drawInRect:CGRectMake(left, 1190, textWidth, 46) withAttributes:@{
+            NSFontAttributeName: [UIFont systemFontOfSize:40 weight:UIFontWeightMedium],
+            NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.55], NSParagraphStyleAttributeName: oneLine}];
+
+        // The "Spotify" pill on the right, level with the title.
+        CGRect pill = CGRectMake(right - 240, 1136, 240, 84);
+        [[UIColor colorWithWhite:1 alpha:0.10] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:pill cornerRadius:42] fill];
+        UIImage *mark = [UIImage imageNamed:@"SpotifyLogo"] ?: [UIImage imageNamed:@"spotify-logo"] ?: [UIImage imageNamed:@"AppIcon60x60"];
+        NSDictionary *pillText = @{NSFontAttributeName: [UIFont systemFontOfSize:34 weight:UIFontWeightBold],
+                                   NSForegroundColorAttributeName: UIColor.whiteColor};
+        CGSize pillSize = [@"Spotify" sizeWithAttributes:pillText];
+        CGFloat markSide = 44, inner = 14, content = (mark ? markSide + inner : 0) + pillSize.width;
+        CGFloat x = CGRectGetMidX(pill) - content / 2;
+        if (mark) {
+            CGContextSaveGState(cg);
+            [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, CGRectGetMidY(pill) - markSide / 2, markSide, markSide)
+                                        cornerRadius:markSide * 0.22] addClip];
+            [mark drawInRect:CGRectMake(x, CGRectGetMidY(pill) - markSide / 2, markSide, markSide)];
+            CGContextRestoreGState(cg);
+            x += markSide + inner;
+        }
+        [@"Spotify" drawAtPoint:CGPointMake(x, CGRectGetMidY(pill) - pillSize.height / 2) withAttributes:pillText];
+
+        // The progress bar.
+        CGFloat barY = 1286, barHeight = 16;
+        [[UIColor colorWithWhite:1 alpha:0.18] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(left, barY, barWidth, barHeight) cornerRadius:barHeight / 2] fill];
+        [[UIColor colorWithWhite:1 alpha:0.6] setFill];
+        [[UIBezierPath bezierPathWithRoundedRect:CGRectMake(left, barY, MAX(barHeight, barWidth * progress), barHeight)
+                                    cornerRadius:barHeight / 2] fill];
+
+        // The times: sung on the left, left to sing flush with the bar's right edge.
+        NSMutableParagraphStyle *rightAligned = [NSMutableParagraphStyle new];
+        rightAligned.alignment = NSTextAlignmentRight;
+        NSDictionary *timeAttrs = @{NSFontAttributeName: [UIFont systemFontOfSize:28 weight:UIFontWeightMedium],
+                                    NSForegroundColorAttributeName: [UIColor colorWithWhite:1 alpha:0.5]};
+        [elapsed drawAtPoint:CGPointMake(left, barY + 28) withAttributes:timeAttrs];
+        [remaining drawInRect:CGRectMake(right - 300, barY + 28, 300, 36) withAttributes:@{
+            NSFontAttributeName: timeAttrs[NSFontAttributeName],
+            NSForegroundColorAttributeName: timeAttrs[NSForegroundColorAttributeName],
+            NSParagraphStyleAttributeName: rightAligned}];
+
+        // The box of the lyrics.
+        UIBezierPath *boxPath = [UIBezierPath bezierPathWithRoundedRect:box cornerRadius:44];
+        [[UIColor colorWithWhite:0 alpha:0.30] setFill];
+        [boxPath fill];
+        [[UIColor colorWithWhite:1 alpha:0.14] setStroke];
+        boxPath.lineWidth = 3;
+        [boxPath stroke];
+
+        // The lyrics in capitals: the size comes down until all of them fit in the box.
+        CGRect inset = CGRectInset(box, 44, 34);
+        NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
+        paragraph.alignment = NSTextAlignmentLeft;
+        UIFont *font = nil;
+        NSDictionary *attrs = nil;
+        for (CGFloat points = 80; points >= 26; points -= 2) {
+            font = [UIFont systemFontOfSize:points weight:UIFontWeightSemibold];
+            paragraph.lineSpacing = points * 0.14;
+            attrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: UIColor.whiteColor,
+                      NSParagraphStyleAttributeName: paragraph};
+            CGRect fit = [lyrics boundingRectWithSize:CGSizeMake(inset.size.width, CGFLOAT_MAX)
+                                              options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs context:nil];
+            if (ceil(fit.size.height) <= inset.size.height) break;
+        }
+        CGRect used = [lyrics boundingRectWithSize:CGSizeMake(inset.size.width, CGFLOAT_MAX)
+                                           options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs context:nil];
+        CGRect textRect = CGRectMake(inset.origin.x, inset.origin.y + MAX(0, (inset.size.height - ceil(used.size.height)) / 2),
+                                     inset.size.width, MIN(inset.size.height, ceil(used.size.height)));
+        // The glow: two passes, a wide one and a tight one.
+        CGContextSaveGState(cg);
+        CGContextSetShadowWithColor(cg, CGSizeZero, 34, [UIColor colorWithWhite:1 alpha:0.55].CGColor);
+        [lyrics drawWithRect:textRect options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs context:nil];
+        CGContextSetShadowWithColor(cg, CGSizeZero, 10, [UIColor colorWithWhite:1 alpha:0.6].CGColor);
+        [lyrics drawWithRect:textRect options:NSStringDrawingUsesLineFragmentOrigin attributes:attrs context:nil];
+        CGContextRestoreGState(cg);
+
+        CGColorSpaceRelease(space);
+    }];
+}
+
+- (UIViewController *)quotePresenter {
+    for (UIResponder *responder = self; responder; responder = responder.nextResponder)
+        if ([responder isKindOfClass:UIViewController.class]) return (UIViewController *)responder;
+    UIViewController *root = self.window.rootViewController;
+    while (root.presentedViewController) root = root.presentedViewController;
+    return root;
+}
+
+- (void)shareQuote {
+    UIImage *image = [self quoteImage];
+    if (!image) return;
+    NSMutableString *text = [NSMutableString string];
+    [_quoteSelection enumerateIndexesUsingBlock:^(NSUInteger index, __unused BOOL *stop) {
+        NSString *line = SGKaraokeLineText(self->_lines[index]);
+        if (line.length) {
+            if (text.length) [text appendString:@"\n"];
+            [text appendString:line];
+        }
+    }];
+    UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[image, text]
+                                                                           applicationActivities:nil];
+    share.completionWithItemsHandler = ^(__unused UIActivityType activityType, __unused BOOL completed,
+                                          __unused NSArray *returnedItems, __unused NSError *error) {
+        [self->_quoteSelection removeAllIndexes];
+        [self updateQuoteSelection];
+    };
+    UIViewController *presenter = [self quotePresenter];
+    if (presenter.presentedViewController) presenter = presenter.presentedViewController;
+    [presenter presentViewController:share animated:YES completion:nil];
 }
 
 - (void)explainLine:(SGRKaraokeLineView *)view {
@@ -1199,6 +1517,7 @@ typedef struct {
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(followSong) object:nil];
     _browsing = YES;
+    _homing = NO;
     for (SGRKaraokeLineView *view in _shown.allValues) view.blur = 0;
 }
 
@@ -1219,9 +1538,14 @@ typedef struct {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(followSong) object:nil];
     if (!_browsing) return;
     _browsing = NO;
+    _homing = YES;
     [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
                         options:UIViewAnimationOptionAllowUserInteraction
-                     animations:^{ self->_scroll.contentOffset = CGPointZero; } completion:nil];
+                     animations:^{ self->_scroll.contentOffset = CGPointZero; }
+                     completion:^(BOOL finished) {
+        self->_homing = NO;
+        if (finished) [self showLinesInSight];
+    }];
     [self placeLinesAnimated:YES];
 }
 
@@ -1267,18 +1591,28 @@ typedef struct {
     [self scheduleLink];
 }
 
-// The mask sits in the scroll view's own coordinates, which move with the content as it scrolls, so
-// it is put back over the visible part on every frame, where the presentation layer says the
-// content is: that holds through a drag and through the animated scroll home alike. Left where
-// layout put it, it covered the first screenful of lines only, and a scroll past them showed nothing.
-//
-// It covers the lines' room alone, and while that grows or shrinks it is moved on every frame too, so
-// its edges travel with the room instead of jumping to where it ends up.
+// The scroll mask follows the visible content while scrolling. The view mask is independent of the
+// scroll offset and keeps off-band rows clipped even while a content offset is being committed.
 - (void)alignFade {
-    CALayer *shown = (CALayer *)_scroll.layer.presentationLayer ?: _scroll.layer;
     UIEdgeInsets band = [self shownBand];
-    CGRect frame = CGRectMake(0, shown.bounds.origin.y + band.top, self.bounds.size.width,
-                              MAX(0, self.bounds.size.height - band.top - band.bottom));
+    CGFloat height = self.bounds.size.height;
+    CGFloat top = MIN(height, MAX(0, band.top));
+    CGFloat bottom = MIN(height - top, MAX(0, band.bottom));
+    CGRect bandFrame = CGRectMake(0, top, self.bounds.size.width, height - top - bottom);
+    if (!CGRectEqualToRect(bandFrame, _bandMask.frame)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        _bandMask.frame = bandFrame;
+        [CATransaction commit];
+    }
+
+    CGFloat offset = _scroll.contentOffset.y;
+    if (_scroll.tracking || _scroll.dragging || _scroll.decelerating || _homing) {
+        CALayer *shown = (CALayer *)_scroll.layer.presentationLayer ?: _scroll.layer;
+        offset = shown.bounds.origin.y;
+    }
+    CGRect frame = CGRectMake(0, offset + band.top, self.bounds.size.width,
+                              MAX(0, height - band.top - band.bottom));
     if (CGRectEqualToRect(frame, _fade.frame)) return;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -1288,6 +1622,8 @@ typedef struct {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    CGFloat previousHeight = _laidOutHeight;
+    _laidOutHeight = self.bounds.size.height;
     [self alignFade];
     _scroll.contentSize = self.bounds.size;
     BOOL extras = _extras && !_extras.hidden;
@@ -1302,6 +1638,7 @@ typedef struct {
         _credit.center = CGPointMake(CGRectGetMaxX(_extras.frame) + kExtrasCreditGap + _credit.bounds.size.width / 2, _extras.center.y);
     }
     if (_lines && self.bounds.size.width != _builtWidth) [self rebuild];
+    else if (_tops.count && previousHeight != _laidOutHeight) [self placeLinesAnimated:NO];
 }
 
 #pragma mark - the lines' room
@@ -1365,6 +1702,7 @@ typedef struct {
 - (void)forgetSung {
     _sungCount = 0;
     _focus = _openBreak = -1;
+    _focusTop = 0;
     _arrangement++;
     [_dots removeFromSuperview];
     _dots = nil;
@@ -1397,7 +1735,10 @@ typedef struct {
 // until then, since the page shows nothing of its own before it has lines to show.
 - (void)rebuild {
     [self dropLineViews];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(followSong) object:nil];
     _browsing = NO;
+    _homing = NO;
+    _scroll.contentInset = UIEdgeInsetsZero;
     _scroll.contentOffset = CGPointZero;
     _builtWidth = self.bounds.size.width;
     CGFloat width = _builtWidth - 2 * _margin;
@@ -1514,7 +1855,7 @@ typedef struct {
 // Where a line starts on the page, for the stack as it is arranged now: an open break holds the room
 // of one row at the anchor, and the lines from the one after it on are moved down by it.
 - (CGFloat)topOfLine:(NSInteger)index {
-    CGFloat room = self.bounds.size.height - _band.top - _band.bottom;
+    CGFloat room = MAX(0, self.bounds.size.height - _band.top - _band.bottom);
     CGFloat top = _band.top + room * kAnchor + _tops[index].doubleValue - _focusTop;
     return _openBreak >= 0 && index >= _openBreak ? top + [self breakRoom] : top;
 }
@@ -1606,19 +1947,22 @@ typedef struct {
     }
 }
 
-// One line's place in the stack: the anchor sits on the edge its text is aligned to, so it scales
-// toward its own text, and it dims and blurs with its distance from what is sung.
+// One line's place in the stack: it scales around the center and dims and blurs with its distance
+// from what is sung.
 - (void)placeLine:(SGRKaraokeLineView *)view at:(NSInteger)index animated:(BOOL)animated {
     CGFloat height = self.bounds.size.height;
     NSInteger distance = [self distanceOf:index], below = index - _focus;
-    CGRect frame = CGRectMake(_margin, [self topOfLine:index], view.bounds.size.width, view.bounds.size.height);
-    CGPoint center = CGPointMake(view.right ? CGRectGetMaxX(frame) : _margin, CGRectGetMidY(frame));
+    CGFloat lineWidth = view.bounds.size.width;
+    CGRect frame = CGRectMake(_margin, [self topOfLine:index], lineWidth, view.bounds.size.height);
+    CGPoint center = CGPointMake(_margin + lineWidth / 2, CGRectGetMidY(frame));
     CGFloat scale = distance == 0 ? 1 : kDimScale;
     CGAffineTransform transform = CGAffineTransformMakeScale(scale, scale);
     view.blur = distance == 0 || _browsing ? 0 : MIN(_maxBlur, distance * _blurPerLine);
     BOOL near = CGRectIntersectsRect(CGRectInset(self.bounds, 0, -height / 2), frame)
              || CGRectIntersectsRect(CGRectInset(self.bounds, 0, -height / 2), view.frame);
     if (!animated || !near) {
+        [view.layer removeAnimationForKey:@"position"];
+        [view.layer removeAnimationForKey:@"transform"];
         view.center = center;
         view.transform = transform;
         return;
@@ -1643,7 +1987,13 @@ typedef struct {
     [self placeBreak];
     // Room to scroll until the first line or the last one reaches the anchor.
     CGFloat lastTop = _tops.lastObject.doubleValue + (_openBreak >= 0 ? [self breakRoom] : 0);
-    _scroll.contentInset = UIEdgeInsetsMake(_focusTop, 0, MAX(0, lastTop - _focusTop), 0);
+    UIEdgeInsets inset = UIEdgeInsetsMake(_focusTop, 0, MAX(0, lastTop - _focusTop), 0);
+    if (!UIEdgeInsetsEqualToEdgeInsets(_scroll.contentInset, inset)) _scroll.contentInset = inset;
+    if (!_homing && !_scroll.tracking && !_scroll.dragging && !_scroll.decelerating &&
+        fabs(_scroll.contentOffset.y) > 0.5) {
+        _scroll.contentOffset = CGPointZero;
+    }
+    [self alignFade];
 }
 
 // The dots, at the anchor for as long as a break is open, against the edge the line after it is on.
@@ -1665,7 +2015,7 @@ typedef struct {
         _dotsLine = _openBreak;
     }
     if (_dots.superview != _scroll) [_scroll addSubview:_dots];
-    _dots.right = alignsRight(_lines[(NSUInteger)_openBreak]);
+    _dots.right = _style.alignment == SGRLyricsAlignmentRight;
     CGFloat top = [self topOfLine:_openBreak] - [self breakRoom];
     _dots.frame = CGRectMake(_margin, top, _builtWidth - 2 * _margin, _dots.bounds.size.height);
 }
@@ -1707,7 +2057,8 @@ typedef struct {
     double reported = raw + (running ? (shown - CACurrentMediaTime()) * 1000 : 0);
     double predicted = _clock + (running ? (shown - _clockTime) * 1000 : 0);
     double error = reported - predicted;
-    _clock = raw < 0 || fabs(error) > kClockSnapMs ? reported : predicted + error * kClockPull;
+    _clock = _clockNeedsSync || raw < 0 || fabs(error) > kClockSnapMs ? reported : predicted + error * kClockPull;
+    _clockNeedsSync = NO;
     _reported = raw;
     _clockTime = shown;
     return _clock;
@@ -1717,6 +2068,14 @@ typedef struct {
     NSString *track = SGKaraokePlayingTrack();
     if (!(track == _track || [track isEqualToString:_track])) {
         SGLog(@"karaoke: page shows track %@, lyrics %@", track, SGKaraokeLinesForTrack(track) ? @"captured" : @"not captured yet");
+        [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(followSong) object:nil];
+        _browsing = NO;
+        _homing = NO;
+        _scroll.contentInset = UIEdgeInsetsZero;
+        _scroll.contentOffset = CGPointZero;
+        _clockNeedsSync = YES;
+        _reported = NSIntegerMin;
+        _stillSince = 0;
         _track = track;
         _lines = nil;
         _builtWidth = 0;
@@ -1752,22 +2111,30 @@ typedef struct {
     NSInteger sung[kMostSung], focus, openBreak;
     NSUInteger count = [self sungAt:now into:sung focus:&focus openBreak:&openBreak];
     if (focus != _focus || openBreak != _openBreak || count != _sungCount || memcmp(sung, _sung, count * sizeof(NSInteger))) {
-        // Lines sung out go back to dim, lines coming in light up, the ones sung throughout carry on.
-        for (NSUInteger i = 0; i < _sungCount; i++) {
-            BOOL still = NO;
-            for (NSUInteger j = 0; j < count; j++) still = still || sung[j] == _sung[i];
-            if (!still) _shown[@(_sung[i])].active = NO;
-        }
-        for (NSUInteger j = 0; j < count; j++) {
-            if (![self isSung:sung[j]]) [self viewForLine:sung[j]].active = YES;
-        }
         BOOL jump = labs(focus - _focus) > 2;   // a seek, not the song moving on
+        NSInteger previous[kMostSung];
+        memcpy(previous, _sung, sizeof(previous));
+        NSUInteger previousCount = _sungCount;
         memcpy(_sung, sung, count * sizeof(NSInteger));
         _sungCount = count;
         _focus = focus;
         _openBreak = openBreak;
+        _focusTop = _tops[(NSUInteger)MAX(_focus, 0)].doubleValue;
         _arrangement++;
         if (openBreak < 0) [_dots removeFromSuperview];
+
+        // Update the arrangement before making views: newly visible lines must be born at the
+        // destination of a skip, not at the previous frame's focus.
+        for (NSUInteger i = 0; i < previousCount; i++) {
+            BOOL still = NO;
+            for (NSUInteger j = 0; j < count; j++) still = still || sung[j] == previous[i];
+            if (!still) _shown[@(previous[i])].active = NO;
+        }
+        for (NSUInteger j = 0; j < count; j++) {
+            BOOL wasSung = NO;
+            for (NSUInteger i = 0; i < previousCount; i++) wasSung = wasSung || previous[i] == sung[j];
+            if (!wasSung) [self viewForLine:sung[j]].active = YES;
+        }
         [self placeLinesAnimated:!jump];
     } else {
         [self showLinesInSight];   // the page may be scrolling by hand, or springing back

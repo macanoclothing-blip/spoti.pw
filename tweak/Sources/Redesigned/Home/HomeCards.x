@@ -16,6 +16,88 @@
 static const CGFloat kCoverMinWidth = 80;
 
 static char kImageKey, kGlassFilmKey, kGlassRimKey, kGlassBoundsKey;
+static char kCardGlassKey, kCardImageKey, kCardTintKey, kHighlightTransformKey;
+static char kCardCoverKey, kCardObservedCoverKey, kCardImageObserverReadyKey, kCardStyleBoundsKey;
+static NSMapTable<UIImage *, UIColor *> *cardTints(void) {
+    static NSMapTable *table;
+    if (!table) table = [NSMapTable weakToStrongObjectsMapTable];
+    return table;
+}
+
+static void tintArtworkGlass(UIView *card, UIColor *color) {
+    UIVisualEffectView *glass = objc_getAssociatedObject(card, &kCardGlassKey);
+    if (!glass) return;
+    if (@available(iOS 26.0, *)) {
+        if (!SGRReduceTransparency()) {
+            UIColor *tint = color ? [color colorWithAlphaComponent:0.36] : [UIColor colorWithWhite:1 alpha:0.10];
+            UIColor *previous = objc_getAssociatedObject(card, &kCardTintKey);
+            if ([previous isEqual:tint]) return;
+            objc_setAssociatedObject(card, &kCardTintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIGlassEffect *effect = [UIGlassEffect effectWithStyle:UIGlassEffectStyleClear];
+            effect.interactive = YES;
+            effect.tintColor = tint;
+            glass.effect = effect;
+        }
+    }
+}
+
+static UIImageView *artworkCover(UIView *card) {
+    UIView *holder = SGRFindByIdentifier(card, @"Encore.ImageView", &kImageKey);
+    if (!holder) return nil;
+    UIImageView *cover = objc_getAssociatedObject(card, &kCardCoverKey);
+    if (cover && cover.superview == holder) return cover;
+    for (UIView *view in holder.subviews) {
+        if ([view isKindOfClass:UIImageView.class]) {
+            cover = (UIImageView *)view;
+            break;
+        }
+    }
+    objc_setAssociatedObject(card, &kCardCoverKey, cover, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return cover;
+}
+
+static void updateArtworkGlassTint(UIView *card) {
+    UIImageView *cover = artworkCover(card);
+    UIImage *image = cover.image;
+    if (!image) {
+        objc_setAssociatedObject(card, &kCardImageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        tintArtworkGlass(card, nil);
+        return;
+    }
+    UIColor *known = [cardTints() objectForKey:image];
+    if (known) {
+        objc_setAssociatedObject(card, &kCardImageKey, image, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        tintArtworkGlass(card, known);
+        return;
+    }
+    if (objc_getAssociatedObject(card, &kCardImageKey) == image) return;
+    objc_setAssociatedObject(card, &kCardImageKey, image, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakCard = card;
+    [SGRPalette tintForImage:image surface:SGRElevated(UIColor.blackColor) completion:^(UIColor *color) {
+        UIView *strongCard = weakCard;
+        if (color) [cardTints() setObject:color forKey:image];
+        if (strongCard && objc_getAssociatedObject(strongCard, &kCardImageKey) == image) {
+            tintArtworkGlass(strongCard, color);
+        }
+    }];
+}
+
+static BOOL watchArtworkCover(UIView *card) {
+    UIImageView *cover = artworkCover(card);
+    if (!cover) return NO;
+    if (objc_getAssociatedObject(card, &kCardObservedCoverKey) == cover) {
+        NSNumber *ready = objc_getAssociatedObject(card, &kCardImageObserverReadyKey);
+        if (ready) return ready.boolValue;
+    }
+    objc_setAssociatedObject(card, &kCardObservedCoverKey, cover, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak UIView *weakCard = card;
+    BOOL observing = SGRObserveImage(cover, ^(UIImageView *changed) {
+        UIView *strongCard = weakCard;
+        if (strongCard && [changed isDescendantOfView:strongCard]) updateArtworkGlassTint(strongCard);
+    });
+    objc_setAssociatedObject(card, &kCardImageObserverReadyKey, @(observing), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return observing;
+}
 
 static void roundCorners(UIView *view, CGFloat radius) {
     CALayer *layer = view.layer;
@@ -25,7 +107,7 @@ static void roundCorners(UIView *view, CGFloat radius) {
 
 static void roundCover(UIView *card) {
     UIView *holder = SGRFindByIdentifier(card, @"Encore.ImageView", &kImageKey);
-    if (holder.bounds.size.width < kCoverMinWidth) return;
+    if (!holder || holder.bounds.size.width < kCoverMinWidth) return;
     for (UIView *sub in holder.subviews) {
         if (![sub isKindOfClass:UIImageView.class]) continue;
         roundCorners(sub, SGRRadiusCover);
@@ -33,11 +115,34 @@ static void roundCover(UIView *card) {
     }
 }
 
-// A very light glass wash and specular rim over artwork cards. It is a gradient and two shape layers rather
-// than a live blur, so scrolling a Home shelf does not add a backdrop blur pass for every visible card.
+// Tinted clear glass sits below each card's content; the light wash and rim stay as cheap layers above it,
+// so the artwork and labels remain sharp while the card still reads as glass.
 static void glassArtworkCard(UIView *card) {
     roundCorners(card, 16);
     card.layer.masksToBounds = YES;
+    UIVisualEffectView *glass = objc_getAssociatedObject(card, &kCardGlassKey);
+    if (@available(iOS 26.0, *)) {
+        if (!SGRReduceTransparency()) {
+            if (!glass) {
+                glass = [UIVisualEffectView new];
+                glass.userInteractionEnabled = NO;
+                glass.accessibilityElementsHidden = YES;
+                objc_setAssociatedObject(card, &kCardGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            if (glass.superview != card) [card insertSubview:glass atIndex:0];
+            glass.hidden = NO;
+            if (!objc_getAssociatedObject(card, &kCardTintKey)) tintArtworkGlass(card, nil);
+            if (!CGRectEqualToRect(glass.frame, card.bounds)) glass.frame = card.bounds;
+            SGShapeGlass(glass, 16, NO);
+        } else if (glass) {
+            glass.hidden = YES;
+        }
+    } else if (glass) {
+        glass.hidden = YES;
+    }
+    watchArtworkCover(card);
+    updateArtworkGlassTint(card);
+
     CAGradientLayer *film = objc_getAssociatedObject(card, &kGlassFilmKey);
     CAShapeLayer *rim = objc_getAssociatedObject(card, &kGlassRimKey);
     if (!film) {
@@ -100,8 +205,19 @@ static void style(UIView *button) {
         return;
     }
     if ([identifier isEqualToString:@"Components.UI.HomeCard"]) {
+        NSValue *lastBounds = objc_getAssociatedObject(button, &kCardStyleBoundsKey);
+        NSNumber *observerReady = objc_getAssociatedObject(button, &kCardImageObserverReadyKey);
+        UIVisualEffectView *glass = objc_getAssociatedObject(button, &kCardGlassKey);
+        CAGradientLayer *film = objc_getAssociatedObject(button, &kGlassFilmKey);
+        CAShapeLayer *rim = objc_getAssociatedObject(button, &kGlassRimKey);
+        BOOL appearanceIntact = button.layer.cornerRadius == 16 && button.layer.masksToBounds &&
+                                film.superlayer == button.layer && rim.superlayer == button.layer &&
+                                (!glass || glass.superview == button);
+        if (appearanceIntact && observerReady.boolValue && lastBounds &&
+            CGRectEqualToRect(lastBounds.CGRectValue, button.bounds)) return;
         roundCover(button);
         glassArtworkCard(button);
+        objc_setAssociatedObject(button, &kCardStyleBoundsKey, [NSValue valueWithCGRect:button.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         return;
     }
     static Class dj;
@@ -120,6 +236,24 @@ static void style(UIView *button) {
     CFTimeInterval began = SGRHomeProbeBegin();
     style((UIView *)self);
     SGRHomeProbeEnd(SGRHomeProbeCards, began);
+}
+
+- (void)setHighlighted:(BOOL)highlighted {
+    %orig;
+    UIView *button = (UIView *)self;
+    NSString *identifier = button.accessibilityIdentifier;
+    if (![identifier isEqualToString:@"Shortcut.Card.Home"] &&
+        ![identifier isEqualToString:@"Components.UI.HomeCard"]) return;
+    NSValue *stored = objc_getAssociatedObject(button, &kHighlightTransformKey);
+    CGAffineTransform base = stored ? stored.CGAffineTransformValue : button.transform;
+    if (highlighted && !stored) {
+        objc_setAssociatedObject(button, &kHighlightTransformKey,
+                                 [NSValue valueWithCGAffineTransform:base], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGAffineTransform transform = highlighted && !SGRReduceMotion()
+        ? CGAffineTransformConcat(base, CGAffineTransformMakeScale(0.985, 0.985)) : base;
+    SGRAnimate(SGRMotionPress, ^{ button.transform = transform; }, nil);
+    if (!highlighted) objc_setAssociatedObject(button, &kHighlightTransformKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 %end
 

@@ -36,12 +36,11 @@
 // Photos or Files, in place of the one found (RecordCustom.h); takes its hype sticker off, or moves it, dragged on
 // the front where it should sit.
 //
-// Spotify's saved albums and current user's playlists are read through the Web API (GET /v1/me/albums and
-// /v1/me/playlists, Shared/Navigation/WebAPI.h), every page of each, kept for the next open; local albums are scanned
 // Spotify's saved albums are read through the Web API (GET /v1/me/albums); playlists come from Spotify's own
-// spclient rootlist, which the app uses for its Library. Both are kept for the next open; local albums are scanned
-// from audio files in Spotify's Documents folder. The records are listed newest first by when they were added, or by
-// title or artist.
+// spclient rootlist, which includes private playlists without playlist-read-private. Missing playlist covers fall
+// back through the playlist image, its track album art from the Web API, and track URIs from the authenticated
+// playlist endpoint. Both lists are kept for the next open; local albums are scanned from Spotify's Documents folder.
+// The records are listed newest first by when they were added, or by title or artist.
 //
 // Threading: main thread only.
 #import <PhotosUI/PhotosUI.h>
@@ -214,7 +213,15 @@ static NSString *recordImageURL(id value) {
     }
     if ([value isKindOfClass:NSDictionary.class]) {
         NSDictionary *dictionary = value;
-        return recordImageURL(dictionary[@"url"] ?: dictionary[@"uri"] ?: dictionary[@"id"] ?: dictionary[@"picture"]);
+        for (NSString *key in @[@"url", @"uri", @"id", @"picture", @"image", @"images", @"picture_size", @"pictureSize"]) {
+            NSString *found = recordImageURL(dictionary[key]);
+            if (found) return found;
+        }
+        for (id nested in dictionary.allValues) {
+            NSString *found = recordImageURL(nested);
+            if (found) return found;
+        }
+        return nil;
     }
     if (![value isKindOfClass:NSString.class] || ![value length]) return nil;
     NSString *picture = value;
@@ -233,6 +240,135 @@ static NSString *recordImageURL(id value) {
         return [@"https://i.scdn.co/image/" stringByAppendingString:hex];
     }
     return nil;
+}
+
+typedef void (^SGRRecordPictureLoaded)(UIImage *picture);
+typedef void (^SGRRecordPictureLoad)(NSString *address, SGRRecordPictureLoaded loaded, dispatch_block_t failed);
+
+static BOOL readProtobufVarint(const uint8_t *bytes, NSUInteger length, NSUInteger *offset, uint64_t *value) {
+    uint64_t result = 0;
+    for (NSUInteger shift = 0; shift < 70 && *offset < length; shift += 7) {
+        uint8_t byte = bytes[(*offset)++];
+        if (shift == 63 && byte > 1) return NO;
+        result |= (uint64_t)(byte & 0x7f) << shift;
+        if (!(byte & 0x80)) {
+            *value = result;
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL nextProtobufField(NSData *data, NSUInteger *offset, uint64_t *number, uint8_t *wire,
+                              NSUInteger *payloadOffset, NSUInteger *payloadLength) {
+    const uint8_t *bytes = data.bytes;
+    NSUInteger length = data.length;
+    uint64_t tag = 0;
+    if (!readProtobufVarint(bytes, length, offset, &tag) || (tag >> 3) == 0) return NO;
+    *number = tag >> 3;
+    *wire = (uint8_t)(tag & 7);
+    *payloadOffset = *offset;
+    *payloadLength = 0;
+    uint64_t size = 0;
+    switch (*wire) {
+        case 0:
+            return readProtobufVarint(bytes, length, offset, &size);
+        case 1:
+            if (length - *offset < 8) return NO;
+            *offset += 8;
+            return YES;
+        case 2:
+            if (!readProtobufVarint(bytes, length, offset, &size) || size > length - *offset) return NO;
+            *payloadOffset = *offset;
+            *payloadLength = (NSUInteger)size;
+            *offset += (NSUInteger)size;
+            return YES;
+        case 5:
+            if (length - *offset < 4) return NO;
+            *offset += 4;
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+static NSString *playlistTrackURI(NSData *item) {
+    NSUInteger offset = 0;
+    uint64_t number;
+    uint8_t wire;
+    NSUInteger payloadOffset, payloadLength;
+    while (offset < item.length) {
+        if (!nextProtobufField(item, &offset, &number, &wire, &payloadOffset, &payloadLength)) return nil;
+        if (number == 1 && wire == 2) {
+            NSString *uri = [[NSString alloc] initWithBytes:(const uint8_t *)item.bytes + payloadOffset
+                                                    length:payloadLength encoding:NSUTF8StringEncoding];
+            return [uri hasPrefix:@"spotify:track:"] ? uri : nil;
+        }
+    }
+    return nil;
+}
+
+static NSArray<NSString *> *playlistTrackURIs(NSData *playlist) {
+    NSUInteger offset = 0;
+    uint64_t number;
+    uint8_t wire;
+    NSUInteger payloadOffset, payloadLength;
+    NSMutableArray<NSString *> *tracks = [NSMutableArray array];
+    while (offset < playlist.length) {
+        if (!nextProtobufField(playlist, &offset, &number, &wire, &payloadOffset, &payloadLength)) return @[];
+        if (number != 5 || wire != 2) continue;
+        NSData *contents = [playlist subdataWithRange:NSMakeRange(payloadOffset, payloadLength)];
+        NSUInteger itemOffset = 0;
+        uint64_t itemNumber;
+        uint8_t itemWire;
+        NSUInteger itemPayloadOffset, itemPayloadLength;
+        while (itemOffset < contents.length) {
+            if (!nextProtobufField(contents, &itemOffset, &itemNumber, &itemWire, &itemPayloadOffset, &itemPayloadLength)) return @[];
+            if (itemNumber != 3 || itemWire != 2) continue;
+            NSData *item = [contents subdataWithRange:NSMakeRange(itemPayloadOffset, itemPayloadLength)];
+            NSString *uri = playlistTrackURI(item);
+            if (uri) [tracks addObject:[uri componentsSeparatedByString:@":"].lastObject];
+            if (tracks.count == 5) return tracks;
+        }
+    }
+    return tracks;
+}
+
+static void tryRecordCovers(NSArray<NSString *> *covers, NSUInteger index, SGRRecordPictureLoad load,
+                            void (^done)(NSString *address, UIImage *picture)) {
+    if (index >= covers.count) {
+        done(nil, nil);
+        return;
+    }
+    NSString *address = covers[index];
+    load(address, ^(UIImage *picture) {
+        done(address, picture);
+    }, ^{
+        tryRecordCovers(covers, index + 1, load, done);
+    });
+}
+
+static void tryRecordPlaylistTracks(NSArray<NSString *> *trackIDs, NSUInteger index, SGRRecordPictureLoad load,
+                                    void (^done)(NSString *address, UIImage *picture)) {
+    if (index >= trackIDs.count) {
+        done(nil, nil);
+        return;
+    }
+    SGWebAPI(@"GET", [NSString stringWithFormat:@"tracks/%@", trackIDs[index]], ^(NSInteger status, id answer) {
+        NSDictionary *album = [answer isKindOfClass:NSDictionary.class] && [answer[@"album"] isKindOfClass:NSDictionary.class]
+            ? answer[@"album"] : nil;
+        NSMutableArray<NSString *> *covers = [NSMutableArray array];
+        if (status == 200) {
+            for (id image in [album[@"images"] isKindOfClass:NSArray.class] ? album[@"images"] : @[]) {
+                NSString *cover = recordImageURL(image);
+                if (cover && ![covers containsObject:cover]) [covers addObject:cover];
+            }
+        }
+        tryRecordCovers(covers, 0, load, ^(NSString *address, UIImage *picture) {
+            if (picture) done(address, picture);
+            else tryRecordPlaylistTracks(trackIDs, index + 1, load, done);
+        });
+    });
 }
 
 static NSDate *recordDate(id value) {
@@ -328,10 +464,15 @@ static void readSpotifyRootlist(NSString *username, NSUInteger from, NSMutableAr
                 SGRRecord *record = recordOfRootlistItem(items[i], meta, username);
                 if (record) [sofar addObject:record];
             }
-            // The endpoint pages every rootlist entry, including folder markers. Advance by raw
-            // entries, not by playlists, and stop on a short page.
-            if (items.count == 120) {
-                readSpotifyRootlist(username, from + items.count, sofar, done);
+            // The endpoint pages every rootlist entry, including folder markers. Some account
+            // sessions return fewer than 120 entries even when another page exists, so use the
+            // server's continuation metadata when present and only fall back to page length.
+            id nextOffset = contents[@"next_offset"] ?: contents[@"nextOffset"] ?: answer[@"next_offset"] ?: answer[@"nextOffset"];
+            NSUInteger next = [nextOffset respondsToSelector:@selector(unsignedIntegerValue)]
+                ? [nextOffset unsignedIntegerValue] : from + items.count;
+            BOOL hasMore = next > from && (nextOffset || items.count == 120);
+            if (hasMore && next <= 10000) {
+                readSpotifyRootlist(username, next, sofar, done);
             } else {
                 SGLog(@"records: Spotify rootlist loaded %lu playlists", (unsigned long)sofar.count);
                 done(sofar);
@@ -596,6 +737,7 @@ static BOOL presentRecordsPage(UIViewController *page, NSURL *uri) {
     NSMutableDictionary<NSString *, SGRSleeve *> *_sleeves;
     NSMutableDictionary<NSString *, NSArray<UIColor *> *> *_colors;
     NSMutableDictionary<NSString *, NSArray<NSString *> *> *_tracks;
+    NSMutableDictionary<NSString *, NSNumber *> *_pictureRetryAfter;
     NSMutableSet<NSString *> *_asked, *_sleevesAsked, *_tracksAsked;
     // The records wearing their own pictures from an import, whatever Vinyl Scans is.
     NSMutableSet<NSString *> *_ownSleeves;
@@ -670,6 +812,7 @@ static BOOL presentRecordsPage(UIViewController *page, NSURL *uri) {
     _sleeves = [NSMutableDictionary dictionary];
     _colors = [NSMutableDictionary dictionary];
     _tracks = [NSMutableDictionary dictionary];
+    _pictureRetryAfter = [NSMutableDictionary dictionary];
     _asked = [NSMutableSet set];
     _sleevesAsked = [NSMutableSet set];
     _tracksAsked = [NSMutableSet set];
@@ -1661,13 +1804,20 @@ static BOOL matches(SGRRecord *record, NSString *query) {
     SGRRecord *record = _records[index];
     NSString *key = [record key];
     if ([_pictures objectForKey:key] || [_asked containsObject:key]) return;
+    NSNumber *retryAfter = _pictureRetryAfter[key];
+    if (retryAfter.doubleValue > CACurrentMediaTime()) return;
+    [_pictureRetryAfter removeObjectForKey:key];
     [_asked addObject:key];
     __weak SGRRecordsPage *weakSelf = self;
     void (^got)(UIImage *) = ^(UIImage *picture) {
         SGRRecordsPage *page = weakSelf;
         if (!page) return;
         [page->_asked removeObject:key];
-        if (!picture) return;
+        if (!picture) {
+            page->_pictureRetryAfter[key] = @(CACurrentMediaTime() + 60);
+            return;
+        }
+        [page->_pictureRetryAfter removeObjectForKey:key];
         [page->_pictures setObject:picture forKey:key];
         [page redrawRecordWithKey:key];
         if (SGRHasCustom(key)) [page composeFrontOf:key];
@@ -1689,58 +1839,108 @@ static BOOL matches(SGRRecord *record, NSString *query) {
         SGLocalAlbumCover(record.local, _width * UIScreen.mainScreen.scale, got);
         return;
     }
-    void (^load)(NSString *) = ^(NSString *address) {
+    SGRRecordPictureLoad load = ^(NSString *address, SGRRecordPictureLoaded loaded, dispatch_block_t failed) {
         NSURL *url = address ? [NSURL URLWithString:address] : nil;
-        // Nothing found: left asked, so the crate does not ask again at every scroll.
-        if (!url) return;
+        if (!url) {
+            failed();
+            return;
+        }
         [[NSURLSession.sharedSession dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            UIImage *picture = data ? [UIImage imageWithData:data] : nil;
+            NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+            UIImage *picture = status >= 200 && status < 300 && data.length ? [UIImage imageWithData:data] : nil;
             // Decoded here rather than on main as the layer first draws it.
             UIImage *ready = [picture imageByPreparingForDisplay] ?: picture;
-            dispatch_async(dispatch_get_main_queue(), ^{ got(ready); });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (ready) loaded(ready);
+                else failed();
+            });
         }] resume];
     };
-    if (record.picture) {
-        load(record.picture);
+    if (!record.playlist) {
+        if (record.picture) load(record.picture, got, ^{ got(nil); });
         return;
     }
-    if (!record.playlist) return;
-    // A playlist of the user's own with no picture set: its rootlist entry has none. Spotify makes its cover from
-    // its tracks, which the Web API gives as the playlist's images; failing that, the first track's album cover.
+    // A playlist without its own image uses its tracks' album art. Try every available cover: the first item may
+    // have no image or a stale URL even when later tracks have a valid one.
     NSString *identifier = [record.uri componentsSeparatedByString:@":"].lastObject;
-    if (!identifier.length) return;
-    void (^fromTracks)(void) = ^{
+    if (!identifier.length) {
+        got(nil);
+        return;
+    }
+    __block void (^fromPrivatePlaylist)(void);
+    __block void (^fromTracks)(void);
+    __block void (^fromImages)(void);
+    fromPrivatePlaylist = ^{
+        NSDictionary<NSString *, NSString *> *headers = SGKaraokeSpotifyHeaders();
+        NSString *authorization = headers[@"authorization"] ?: headers[@"Authorization"];
+        if (!authorization.length) {
+            got(nil);
+            return;
+        }
+        NSString *path = [NSString stringWithFormat:@"https://spclient.wg.spotify.com/playlist/v2/playlist/%@", identifier];
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:path]];
+        request.timeoutInterval = 8;
+        [headers enumerateKeysAndObjectsUsingBlock:^(NSString *name, NSString *value, BOOL *stop) {
+            [request setValue:value forHTTPHeaderField:name];
+        }];
+        [request setValue:@"application/x-protobuf" forHTTPHeaderField:@"Accept"];
+        [[NSURLSession.sharedSession dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+            NSArray<NSString *> *tracks = status == 200 ? playlistTrackURIs(data) : @[];
+            if (status != 200) {
+                SGLog(@"records: private playlist tracks answered %ld%@", (long)status,
+                      error ? [NSString stringWithFormat:@" (%@)", error.localizedDescription] : @"");
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                tryRecordPlaylistTracks(tracks, 0, load, ^(NSString *address, UIImage *picture) {
+                    if (address) record.picture = address;
+                    got(picture);
+                });
+            });
+        }] resume];
+    };
+    fromTracks = ^{
         SGWebAPI(@"GET", [NSString stringWithFormat:@"playlists/%@/items?limit=5", identifier], ^(NSInteger status, id answer) {
-            NSString *found = nil;
+            NSMutableArray<NSString *> *covers = [NSMutableArray array];
             if (status == 200 && [answer isKindOfClass:NSDictionary.class]) {
                 for (id entry in [answer[@"items"] isKindOfClass:NSArray.class] ? answer[@"items"] : @[]) {
                     id track = [entry isKindOfClass:NSDictionary.class] ? (entry[@"item"] ?: entry[@"track"]) : nil;
                     NSDictionary *album = [track isKindOfClass:NSDictionary.class] && [track[@"album"] isKindOfClass:NSDictionary.class] ? track[@"album"] : nil;
-                    found = recordImageURL(album[@"images"]);
-                    if (found) break;
+                    id images = [album[@"images"] isKindOfClass:NSArray.class] ? album[@"images"] : @[];
+                    for (id image in images) {
+                        NSString *cover = recordImageURL(image);
+                        if (cover && ![covers containsObject:cover]) [covers addObject:cover];
+                    }
                 }
             } else {
                 SGLog(@"records: playlist items for cover answered %ld", (long)status);
             }
-            dispatch_async(dispatch_get_main_queue(), ^{
-                SGRRecordsPage *page = weakSelf;
-                if (page && found) record.picture = found;
-                load(found);
+            tryRecordCovers(covers, 0, load, ^(NSString *address, UIImage *picture) {
+                if (picture) {
+                    if (address) record.picture = address;
+                    got(picture);
+                } else {
+                    fromPrivatePlaylist();
+                }
             });
         });
     };
-    SGWebAPI(@"GET", [NSString stringWithFormat:@"playlists/%@/images", identifier], ^(NSInteger status, id answer) {
-        NSString *found = status == 200 ? recordImageURL(answer) : nil;
-        if (!found) {
-            SGLog(@"records: playlist images answered %ld%@", (long)status, status == 200 ? @" (none)" : @"");
-            fromTracks();
-            return;
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (weakSelf) record.picture = found;
-            load(found);
+    fromImages = ^{
+        SGWebAPI(@"GET", [NSString stringWithFormat:@"playlists/%@/images", identifier], ^(NSInteger status, id answer) {
+            NSString *found = status == 200 ? recordImageURL(answer) : nil;
+            if (!found) {
+                SGLog(@"records: playlist images answered %ld%@", (long)status, status == 200 ? @" (none)" : @"");
+                fromTracks();
+                return;
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                record.picture = found;
+                load(found, got, fromTracks);
+            });
         });
-    });
+    };
+    if (record.picture) load(record.picture, got, fromImages);
+    else fromImages();
 }
 
 // The sleeve is looked for once the album's cover is in, which its front must match.

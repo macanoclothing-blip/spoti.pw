@@ -104,7 +104,7 @@ static NSString *wordIn(UIView *button) {
     if (!source) return;
     _source = source;
 
-    NSString *word = wordIn(source);
+    NSString *word = wordIn(source) ?: self.titleOverride;
     // The disc is as tall as the button, not always as wide: Liked Songs' is 80x48 with the 48pt disc at
     // x=16 (trees/continuous/1.txt, 2026-09-18), and matched by width the capsule drew no glyph at all.
     CGSize size = source.bounds.size;
@@ -121,12 +121,12 @@ static NSString *wordIn(UIView *button) {
     }
     if (![_glyph.tintColor isEqual:content]) _glyph.tintColor = content;
 
-    if (glyph.image && _glyph.image != glyph.image) {
-        _glyph.image = [glyph.image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    UIImage *image = glyph.image ?: self.fallbackGlyph;
+    if (image && _glyph.image != image) {
+        _glyph.image = [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
         static dispatch_once_t once;
         dispatch_once(&once, ^{
-            SGLog(@"redesign kit: play glyph %@ from %@, word \"%@\"", NSStringFromCGSize(glyph.image.size),
-                  NSStringFromClass(glyph.class), word);
+            SGLog(@"redesign kit: action capsule glyph %@, word \"%@\"", NSStringFromCGSize(image.size), word);
         });
     }
     // Play becomes pause without the header laying out again. Watched per glyph view rather than once for
@@ -280,8 +280,21 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
         } else {
             _glyph.image = image;
         }
-        // On is saved or followed, in the accent colour, as downloaded is.
-        _glyph.tintColor = on ? SGRAccent() : SGRPrimary();
+        // The saved state is a filled star, like Apple Music's library control.
+        // Keep the action and Spotify's state source untouched; only the glyph changes.
+        _glyph.tintColor = on ? UIColor.whiteColor : SGRPrimary();
+        if (animated && on) {
+            _glyph.transform = CGAffineTransformMakeScale(0.72, 0.72);
+            [UIView animateWithDuration:0.42 delay:0
+                 usingSpringWithDamping:0.68 initialSpringVelocity:0.25
+                               options:UIViewAnimationOptionBeginFromCurrentState |
+                                       UIViewAnimationOptionAllowUserInteraction
+                            animations:^{
+                                self->_glyph.transform = CGAffineTransformIdentity;
+                            } completion:nil];
+        } else if (!on) {
+            _glyph.transform = CGAffineTransformIdentity;
+        }
         if (first) [self setNeedsLayout];
     }
     NSString *word = source.accessibilityLabel ?: wordIn(source);
@@ -297,7 +310,7 @@ static BOOL indicatorOn(UIView *button, BOOL *found) {
         _stateShown = -1;
         return NO;
     }
-    [self sgr_showOn:added off:@"plus" on:@"checkmark" source:source];
+    [self sgr_showOn:added off:@"star" on:@"star.fill" source:source];
     return YES;
 }
 

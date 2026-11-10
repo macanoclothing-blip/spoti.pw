@@ -34,9 +34,19 @@
 @property (nonatomic, readonly) NSArray *reverse;
 @end
 
+@protocol SPTPlayerQueue <NSObject>
+@property (nonatomic, readonly) NSArray<SPTPlayerTrack *> *nextTracks;
+@end
+
+@protocol SPTPlayerQueueObserver <NSObject>
+- (void)player:(id)player queueDidChange:(id<SPTPlayerQueue>)queue;
+@end
+
 @protocol SPTPlayer <NSObject>
 @property (nonatomic, readonly) SPTPlayerState *state;
 - (void)addPlayerObserver:(id)observer;
+- (void)addPlayerQueueObserver:(id<SPTPlayerQueueObserver>)observer;
+- (void)removePlayerQueueObserver:(id<SPTPlayerQueueObserver>)observer;
 - (void)skipToNextTrack;
 - (void)seekTo:(double)seconds;
 // The commands below take Spotify's options object, nil for the defaults, and return the command's

@@ -1,8 +1,9 @@
 // Mod > App icon: the icon on the home screen, picked from the ones scripts/app-icons.sh put into the IPA
 // (icons/*.icon, listed under CFBundleAlternateIcons as SGAppIcon<Name>). iOS keeps the choice itself, so
 // nothing is stored here and Reset all settings leaves it, and iOS says that it changed in an alert of its
-// own. The alternate catalog is built for iOS 26; most choices use Glass layers, while Iridescent is a
-// flattened image with no dynamic Glass layer. The name under the icon is the signature's to set, not the app's.
+// own. The alternate catalog is built for iOS 26; most choices use Glass layers, while Iridescent and the
+// Dellify choices are flattened images with no dynamic Glass layer. The name under the icon is the
+// signature's to set, not the app's.
 #import "Core/SGCore.h"
 #import "Settings/SGPageStyle.h"
 #import "About.h"
@@ -10,11 +11,13 @@
 // In the order the list shows them: the file in icons/, and the name the list gives it. Spotify is the
 // IPA's own icon, iOS's primary one.
 static NSArray<NSString *> *iconFiles(void) {
-    return @[@"Spotify", @"Glass", @"Green", @"White", @"Pink", @"Blue", @"Purple", @"Orange", @"Lime", @"Iridescent"];
+    return @[@"Spotify", @"Glass", @"Green", @"White", @"Pink", @"Blue", @"Purple", @"Orange", @"Lime",
+             @"Iridescent", @"DellifyLightBlack", @"DellifyDark", @"DellifyLightWhite"];
 }
 
 static NSArray<NSString *> *iconTitles(void) {
-    return @[@"Spotify", @"Liquid Glass", @"Green", @"White", @"Pink", @"Blue", @"Purple", @"Orange", @"Lime", @"Vetro iridescente"];
+    return @[@"Spotify", @"Liquid Glass", @"Green", @"White", @"Pink", @"Blue", @"Purple", @"Orange", @"Lime",
+             @"Vetro iridescente", @"Dellify Light Black", @"Dellify Dark", @"Dellify Light White"];
 }
 
 static NSString *alternateName(NSString *file) {
@@ -22,7 +25,7 @@ static NSString *alternateName(NSString *file) {
 }
 
 // The icons this build has: a build without Xcode 26 has none but Spotify's. Most alternate icons use
-// a Liquid Glass mark; Iridescent is a flat, fully composited bitmap so its edges stay clean.
+// a Liquid Glass mark; Iridescent and Dellify use fully composited bitmaps.
 static NSArray<NSString *> *availableFiles(void) {
     NSDictionary *alternates = NSBundle.mainBundle.infoDictionary[@"CFBundleIcons"][@"CFBundleAlternateIcons"];
     NSMutableArray<NSString *> *files = [NSMutableArray array];

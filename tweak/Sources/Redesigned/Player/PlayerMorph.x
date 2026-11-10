@@ -80,6 +80,7 @@ static CGFloat screenRadius(void) {
     CGFloat _cardRadius, _spotifyAlpha;
     CGColorRef _overlayColor;
     BOOL _coverHidden;
+    CGFloat _maxProgress, _lastProgress;
     BOOL _follows;   // 9.1.90: Spotify animates the player's frame and alpha, which the morph then only reads
 }
 
@@ -148,6 +149,8 @@ static CGFloat screenRadius(void) {
     UIView *container = _container, *overlay = _overlay, *bar = _bar;
     if (!container || !overlay) return;
     t = MIN(1, MAX(0, t));
+    _maxProgress = MAX(_maxProgress, t);
+    _lastProgress = t;
     _spotifyAlpha = overlay.alpha;
     _spotifyFrame = overlay.frame;
 
@@ -242,6 +245,11 @@ static CGFloat screenRadius(void) {
     if (_coverHidden) SGRPlayerSetCoverHidden(NO);
     _coverHidden = NO;
     _cover = nil;
+    if (_maxProgress > 0.7 && _lastProgress < 0.3) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            SGRNowPlayingBarBounce();
+        });
+    }
 }
 
 @end

@@ -32,6 +32,7 @@
 #import "SGArtistLogo.h"
 #import "Artist.h"
 #import <AVFoundation/AVFoundation.h>
+#import <PhotosUI/PhotosUI.h>
 
 // How much of the photo's height the dissolve into the field covers, and the scrim over the top of it that
 // keeps the status bar and the back button legible on a bright picture. The playlist's and the album's.
@@ -412,7 +413,7 @@ static void showArtistInfo(NSString *name) {
 }
 @end
 
-@interface SGRArtistLogoPicker : UITableViewController
+@interface SGRArtistLogoPicker : UITableViewController <PHPickerViewControllerDelegate>
 - (instancetype)initWithArtist:(NSString *)artist;
 @end
 
@@ -451,16 +452,40 @@ static void showArtistInfo(NSString *name) {
     });
 }
 - (void)closePicker { [self.navigationController dismissViewControllerAnimated:YES completion:nil]; }
+- (void)choosePhoto {
+    PHPickerConfiguration *configuration = [PHPickerConfiguration new];
+    configuration.filter = PHPickerFilter.imagesFilter;
+    configuration.selectionLimit = 1;
+    PHPickerViewController *picker = [[PHPickerViewController alloc] initWithConfiguration:configuration];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+- (void)showPhotoError:(NSError *)error {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Impossibile usare la foto"
+        message:error.localizedDescription ?: @"Seleziona un'altra immagine e riprova."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     (void)tableView; (void)section;
-    return _options.count ? (NSInteger)_options.count + 1 : 2;
+    return _options.count ? (NSInteger)_options.count + 2 : 3;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     SGRArtistLogoPickerCell *cell = [tableView dequeueReusableCellWithIdentifier:@"artist-logo" forIndexPath:indexPath];
+    cell.accessoryView = nil;
     if (indexPath.row == 0) {
         UIImage *reset = [UIImage systemImageNamed:@"arrow.counterclockwise"];
         [cell configureTitle:@"Automatico" subtitle:@"Ripristina il logo scelto automaticamente" image:reset
                     selected:SGRArtistLogoSelectedKeyForArtist(_artist) == nil];
+        return cell;
+    }
+    if (indexPath.row == 1) {
+        UIImage *image = SGRArtistLogoCustomImageForArtist(_artist) ?: [UIImage systemImageNamed:@"photo"];
+        BOOL selected = [SGRArtistLogoSelectedKeyForArtist(_artist) hasPrefix:@"local:"];
+        NSString *subtitle = selected ? @"Tocca per cambiare la foto" : @"Scegli un'immagine dalla galleria";
+        [cell configureTitle:@"Scegli da Foto" subtitle:subtitle image:image selected:selected];
+        cell.accessibilityHint = @"Scegli una foto da usare per questa pagina artista";
         return cell;
     }
     if (_loading || !_options.count) {
@@ -480,7 +505,7 @@ static void showArtistInfo(NSString *name) {
         cell.accessibilityHint = nil;
         return cell;
     }
-    SGRArtistLogoOption *option = _options[(NSUInteger)indexPath.row - 1];
+    SGRArtistLogoOption *option = _options[(NSUInteger)indexPath.row - 2];
     BOOL selected = [option.selectionKey isEqualToString:SGRArtistLogoSelectedKeyForArtist(_artist)];
     [cell configureTitle:option.source subtitle:@"Tocca per usare questo logo" image:option.image selected:selected];
     cell.accessoryView = nil;
@@ -493,11 +518,52 @@ static void showArtistInfo(NSString *name) {
         [self closePicker];
         return;
     }
+    if (indexPath.row == 1) {
+        [self choosePhoto];
+        return;
+    }
     if (!_options.count || _loading) return;
-    NSUInteger optionIndex = (NSUInteger)indexPath.row - 1;
+    NSUInteger optionIndex = (NSUInteger)indexPath.row - 2;
     if (optionIndex >= _options.count) return;
     SGRArtistLogoSelectOption(_artist, _options[optionIndex]);
     [self closePicker];
+}
+- (void)picker:(PHPickerViewController *)picker didFinishPicking:(NSArray<PHPickerResult *> *)results {
+    PHPickerResult *result = results.firstObject;
+    if (!result) {
+        [picker dismissViewControllerAnimated:YES completion:nil];
+        return;
+    }
+    NSItemProvider *provider = result.itemProvider;
+    if (![provider canLoadObjectOfClass:UIImage.class]) {
+        [picker dismissViewControllerAnimated:YES completion:^{
+            [self showPhotoError:[NSError errorWithDomain:@"spoti.pw.artist-logo" code:7
+                userInfo:@{NSLocalizedDescriptionKey: @"The selected item is not an available image."}]];
+        }];
+        return;
+    }
+    __weak SGRArtistLogoPicker *weakSelf = self;
+    [picker dismissViewControllerAnimated:YES completion:^{
+        [provider loadObjectOfClass:UIImage.class completionHandler:^(id<NSItemProviderReading> object, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                SGRArtistLogoPicker *picker = weakSelf;
+                if (!picker) return;
+                if (error || ![(id)object isKindOfClass:UIImage.class]) {
+                    NSError *imageError = error ?: [NSError errorWithDomain:@"spoti.pw.artist-logo" code:8
+                        userInfo:@{NSLocalizedDescriptionKey: @"The selected image could not be loaded."}];
+                    [picker showPhotoError:imageError];
+                    return;
+                }
+                SGRArtistLogoSelectImage(picker->_artist, (UIImage *)object, ^(NSError *saveError) {
+                    if (saveError) {
+                        [picker showPhotoError:saveError];
+                        return;
+                    }
+                    [picker closePicker];
+                });
+            });
+        }];
+    }];
 }
 @end
 
