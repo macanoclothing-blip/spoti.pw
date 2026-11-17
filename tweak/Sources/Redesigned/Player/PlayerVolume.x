@@ -2,15 +2,22 @@
 #import <MediaPlayer/MediaPlayer.h>
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/Moments/Moments.h"
 #import "Player.h"
 #import "PlayerVinyl.h"
 
 static const CGFloat kVolumeRowHeight = 34;
+static const CGFloat kMomentButtonHeight = 38;
+static const CGFloat kMomentButtonCompactHeight = 34;
+static const CGFloat kMomentButtonWidth = 224;
 static const CGFloat kVolumeGlyphSize = 16;
 static const CGFloat kVolumeGlyphGap = 8;
 static const CGFloat kVolumeSideInset = 24;
 static const CGFloat kVolumeControlClearance = 12;
+static const CGFloat kControlsBottomPadding = 14;
+static const CGFloat kMaxControlsLift = 60;
 static char kVolumeRowKey;
+static char kMomentButtonKey, kMomentButtonGlassKey;
 static char kPreviousButtonKey, kPlayButtonKey, kNextButtonKey;
 static char kVolumeProgressSliderKey;
 static BOOL sg_idleHidden;
@@ -72,6 +79,62 @@ static CGRect volumeControlsFrame(UIView *controls, UIView *stack) {
 
 @interface SGRVolumeRow : UIView
 @end
+
+@interface SGRMomentCommentButton : UIControl
+@end
+
+@implementation SGRMomentCommentButton {
+    SGRGlyphView *_glyph;
+    UILabel *_title;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if (!(self = [super initWithFrame:frame])) return nil;
+    self.accessibilityLabel = @"Lascia un commento";
+    self.accessibilityHint = @"Aggiunge una frase al minuto scelto del brano";
+    self.accessibilityTraits = UIAccessibilityTraitButton;
+    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    _glyph = [[SGRGlyphView alloc] initWithSymbol:@"quote.bubble" pointSize:16 weight:UIImageSymbolWeightSemibold];
+    _glyph.tintColor = UIColor.whiteColor;
+    _glyph.userInteractionEnabled = NO;
+    _title = [UILabel new];
+    _title.text = @"Lascia un commento";
+    _title.textColor = UIColor.whiteColor;
+    _title.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    _title.userInteractionEnabled = NO;
+    [self addSubview:_glyph];
+    [self addSubview:_title];
+    [self addTarget:self action:@selector(openComposer) forControlEvents:UIControlEventTouchUpInside];
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat contentWidth = 20 + 8 + _title.intrinsicContentSize.width;
+    CGFloat start = MAX(14, (CGRectGetWidth(self.bounds) - contentWidth) / 2);
+    _glyph.frame = CGRectMake(start, (CGRectGetHeight(self.bounds) - 20) / 2, 20, 20);
+    _title.frame = CGRectMake(CGRectGetMaxX(_glyph.frame) + 8, 0,
+                              MAX(0, CGRectGetWidth(self.bounds) - CGRectGetMaxX(_glyph.frame) - 14),
+                              CGRectGetHeight(self.bounds));
+    SGRGlassCapsuleInside(self, &kMomentButtonGlassKey, self.bounds.size, NO);
+}
+
+- (void)openComposer {
+    SGRPresentMomentComposer(self);
+}
+
+@end
+
+static SGRMomentCommentButton *momentCommentButton(UIView *stack) {
+    SGRMomentCommentButton *button = objc_getAssociatedObject(stack, &kMomentButtonKey);
+    if (!button) {
+        button = [SGRMomentCommentButton new];
+        objc_setAssociatedObject(stack, &kMomentButtonKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UIView *host = stack.superview ?: stack;
+    if (button.superview != host) [host addSubview:button];
+    return button;
+}
 
 @interface SGRInteractiveVolumeView : MPVolumeView
 @end
@@ -158,6 +221,8 @@ static UIView *volumeArrangedRow(UIStackView *stack, UIView *view) {
 BOOL SGRPlayerLayoutVinylVolume(UIView *stack) {
     SGRVolumeRow *volume = stack ? objc_getAssociatedObject(stack, &kVolumeRowKey) : nil;
     if (!stack || !volume) return NO;
+    SGRMomentCommentButton *comment = objc_getAssociatedObject(stack, &kMomentButtonKey);
+    comment.hidden = YES;
     UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
     BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
         (!UIInterfaceOrientationIsPortrait(orientation) && stack.window.bounds.size.width > stack.window.bounds.size.height);
@@ -216,6 +281,7 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         objc_setAssociatedObject(stack, &kVolumeRowKey, volume, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (volume.superview != stack) [stack addSubview:volume];
+    SGRMomentCommentButton *comment = momentCommentButton(stack);
     if (SGFlag(SGRKeyPlayerVinyl, NO)) return SGRPlayerLayoutVinylVolume(stack);
     UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;
     BOOL landscape = UIInterfaceOrientationIsLandscape(orientation) ||
@@ -225,64 +291,140 @@ BOOL SGRPlayerLayoutVolume(UIView *stack, UIView *controls, UIView *footer) {
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;
         volume.accessibilityElementsHidden = YES;
+        comment.hidden = YES;
+        comment.userInteractionEnabled = NO;
+        comment.accessibilityElementsHidden = YES;
         return NO;
     }
     volume.hidden = NO;
     volume.userInteractionEnabled = !sg_idleHidden;
     volume.accessibilityElementsHidden = sg_idleHidden;
-    if (!controls || !footer || !stack.window) {
+    comment.hidden = sg_idleHidden || !SGRMomentsEnabled();
+    comment.userInteractionEnabled = !sg_idleHidden && !comment.hidden;
+    comment.accessibilityElementsHidden = sg_idleHidden || comment.hidden;
+    comment.alpha = sg_idleHidden || comment.hidden ? 0 : 1;
+    if (!stack.window) {
         volume.alpha = 0;
-        SGLog(@"redesign player: volume row has no window, controls or footer");
+        volume.userInteractionEnabled = NO;
+        volume.accessibilityElementsHidden = YES;
+        comment.hidden = YES;
+        SGLog(@"redesign player: player controls have no window");
         return NO;
     }
 
-    CGRect controlsFrame = volumeControlsFrame(controls, stack);
-    CGRect footerFrame = [footer convertRect:footer.bounds toView:stack];
-    CGFloat top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+    UIView *playButton = controls
+        ? SGRFindByIdentifier(controls, @"SPTNowPlayingPlayButton", &kPlayButtonKey)
+        : SGRFindByIdentifier(stack.window, @"SPTNowPlayingPlayButton", &kPlayButtonKey);
+    CGRect controlsFrame = controls ? volumeControlsFrame(controls, stack) : CGRectNull;
+    if (CGRectIsNull(controlsFrame) && playButton) controlsFrame = [playButton convertRect:playButton.bounds toView:stack];
+    CGRect footerFrame = footer ? [footer convertRect:footer.bounds toView:stack] :
+        CGRectMake(0, CGRectGetHeight(stack.bounds) - stack.safeAreaInsets.bottom - 44,
+                   CGRectGetWidth(stack.bounds), 44);
+    CGFloat top = CGRectIsNull(controlsFrame)
+        ? MAX(stack.safeAreaInsets.top + 24, CGRectGetHeight(stack.bounds) * 0.58)
+        : CGRectGetMaxY(controlsFrame) - kControlsBottomPadding + kVolumeControlClearance;
     CGFloat bottom = CGRectGetMinY(footerFrame) - kVolumeControlClearance;
     CGFloat room = bottom - top;
-    if (room < kVolumeRowHeight) {
-        // Footer layout resets the transport to its base translation before calling here. Reclaim only
-        // the space needed for the volume row, preserving any scale/rotation Spotify put on that unit.
-        CGFloat minimumTop = MAX(stack.safeAreaInsets.top + 48, 56);
-        CGFloat availableLift = MAX(0, CGRectGetMinY(controlsFrame) - minimumTop);
-        CGFloat shortage = MIN(kVolumeRowHeight - room, availableLift);
+    CGFloat buttonHeight = kMomentButtonHeight;
+    CGFloat buttonGap = 6;
+    CGFloat availableLift = CGRectIsNull(controlsFrame) ? 0 :
+        MIN(kMaxControlsLift, MAX(0, CGRectGetMinY(controlsFrame) - MAX(stack.safeAreaInsets.top + 24, 32)));
+    CGFloat desiredRoom = comment.hidden ? kVolumeRowHeight :
+        kMomentButtonHeight + buttonGap + kVolumeRowHeight;
+    if (room < desiredRoom && controls && availableLift > 0) {
+        CGFloat shortage = MIN(desiredRoom - room, availableLift);
         CGAffineTransform transform = controls.transform;
         transform.ty -= shortage;
         controls.transform = transform;
         controlsFrame = volumeControlsFrame(controls, stack);
-        top = CGRectGetMaxY(controlsFrame) + kVolumeControlClearance;
+        top = CGRectGetMaxY(controlsFrame) - kControlsBottomPadding + kVolumeControlClearance;
         room = bottom - top;
+    }
+    if (CGRectIsNull(controlsFrame)) {
+        SGLog(@"redesign player: transport container not found; placing Moments from the play button or player bounds");
+    }
+
+    if (!comment.hidden) {
+        if (room < kMomentButtonHeight + buttonGap) {
+            buttonHeight = kMomentButtonCompactHeight;
+            buttonGap = 6;
+        }
+        CGFloat minButtonY = CGRectIsNull(controlsFrame)
+            ? top : CGRectGetMaxY(controlsFrame) - kControlsBottomPadding + kVolumeControlClearance;
+        CGFloat buttonY = MIN(minButtonY, bottom - buttonHeight);
+        CGFloat buttonWidth = MIN(kMomentButtonWidth, MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset));
+        CGRect buttonFrame = [stack convertRect:CGRectMake((CGRectGetWidth(stack.bounds) - buttonWidth) / 2,
+                                                            buttonY, buttonWidth, buttonHeight)
+                                          toView:comment.superview];
+        CGRect hostBounds = comment.superview.bounds;
+        buttonFrame.origin.x = round((CGRectGetWidth(hostBounds) - buttonWidth) / 2);
+        buttonFrame.origin.y = MIN(MAX(buttonFrame.origin.y, CGRectGetMinY(hostBounds)),
+                                   CGRectGetMaxY(hostBounds) - buttonHeight);
+        comment.frame = buttonFrame;
+        comment.hidden = room < buttonHeight + buttonGap || !CGRectContainsRect(hostBounds, buttonFrame);
+        if (comment.hidden && SGRMomentsEnabled()) {
+            static NSUInteger hiddenMomentLogs;
+            if (hiddenMomentLogs++ < 5) {
+                SGLog(@"redesign player: Moments button awaiting room (%.0fpt; controls %@, footer %@)",
+                      room, NSStringFromCGRect(controlsFrame), NSStringFromCGRect(footerFrame));
+            }
+        }
+        comment.userInteractionEnabled = !comment.hidden && !sg_idleHidden;
+        comment.accessibilityElementsHidden = comment.hidden || sg_idleHidden;
+        comment.alpha = sg_idleHidden || comment.hidden ? 0 : 1;
+        [comment.superview bringSubviewToFront:comment];
     }
 
     CGFloat width = MAX(0, CGRectGetWidth(stack.bounds) - 2 * kVolumeSideInset);
-    CGFloat rowHeight = MIN(kVolumeRowHeight, room);
-    if (width < 1 || rowHeight < 12) {
+    CGFloat volumeTop = top;
+    if (!comment.hidden) {
+        volumeTop = [comment.superview convertPoint:CGPointMake(0, CGRectGetMaxY(comment.frame) + buttonGap)
+                                             toView:stack].y;
+    }
+    CGFloat volumeRoom = bottom - volumeTop;
+    CGFloat rowHeight = MIN(kVolumeRowHeight, volumeRoom);
+    if (width < 1 || rowHeight < 18) {
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;
+        volume.accessibilityElementsHidden = YES;
+        if (!comment.hidden) [comment.superview bringSubviewToFront:comment];
         static NSUInteger noGapLogs;
-        if (noGapLogs++ < 3) SGLog(@"redesign player: volume row hidden because no non-overlapping gap is available (%.0fpt)", room);
+        if (noGapLogs++ < 3) SGLog(@"redesign player: volume row hidden; Moments button remains visible (room %.0fpt)", room);
         return NO;
     }
-    // Keep the system slider wholly between the transport's hit targets and the footer. A small gap
-    // becomes a compact row; it never falls back across either set of controls.
-    CGFloat rowY = round(top + (room - rowHeight) / 2);
+    CGFloat rowY = round(volumeTop + (volumeRoom - rowHeight) / 2);
     CGRect frame = CGRectMake(kVolumeSideInset, rowY, width, rowHeight);
-    if (CGRectIntersectsRect(frame, controlsFrame) || CGRectIntersectsRect(frame, footerFrame)) {
+    if ((!CGRectIsNull(controlsFrame) && CGRectIntersectsRect(frame, controlsFrame)) ||
+        CGRectIntersectsRect(frame, footerFrame)) {
         volume.alpha = 0;
         volume.userInteractionEnabled = NO;
-        SGLog(@"redesign player: volume row suppressed after collision guard");
+        volume.accessibilityElementsHidden = YES;
+        if (!comment.hidden) [comment.superview bringSubviewToFront:comment];
+        SGLog(@"redesign player: volume row suppressed by collision guard; Moments button remains visible");
         return NO;
     }
     if (!CGRectEqualToRect(volume.frame, frame)) volume.frame = frame;
     [stack bringSubviewToFront:volume];
     CGFloat alpha = sg_idleHidden ? 0 : 1;
     if (volume.alpha != alpha) volume.alpha = alpha;
+    if (!comment.hidden) {
+        comment.alpha = alpha;
+        comment.userInteractionEnabled = !sg_idleHidden;
+        comment.accessibilityElementsHidden = sg_idleHidden;
+        [comment.superview bringSubviewToFront:comment];
+    }
     return YES;
 }
 
 void SGRPlayerSetVolumeIdleHidden(UIView *stack, BOOL hidden) {
     sg_idleHidden = hidden;
+    SGRMomentCommentButton *comment = stack ? objc_getAssociatedObject(stack, &kMomentButtonKey) : nil;
+    if (comment) {
+        comment.hidden = hidden || !SGRMomentsEnabled();
+        comment.userInteractionEnabled = !comment.hidden;
+        comment.accessibilityElementsHidden = comment.hidden;
+        comment.alpha = comment.hidden ? 0 : 1;
+    }
     SGRVolumeRow *volume = stack ? objc_getAssociatedObject(stack, &kVolumeRowKey) : nil;
     if (!volume || SGFlag(SGRKeyPlayerVinyl, NO)) return;
     UIInterfaceOrientation orientation = stack.window.windowScene.interfaceOrientation;

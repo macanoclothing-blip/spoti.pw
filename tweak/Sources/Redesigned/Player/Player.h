@@ -160,6 +160,10 @@ CGRect SGRPlayerControlsBlurFrameIn(UIView *host);
 void SGRPlayerLyricsUpdateArtwork(UIImage *artwork);
 // Re-measures the footer controls and volume lane after a lyrics transition settles.
 void SGRPlayerFooterRefreshLayout(void);
+CGFloat SGRPlayerPortraitProgressLift(void);
+BOOL SGRPlayerIdleChromeHidden(void);
+// Positive values raise the progress unit; negative values lower it.
+void SGRPlayerApplyProgressLift(UIView *progressUnit, CGFloat lift);
 // Shows them, or puts the cover back; does nothing when there are none to show.
 void SGRPlayerToggleLyrics(void);
 // Called by PlayerLyrics.x whenever either of those two changed, so the footer's lyrics glyph follows

@@ -20,7 +20,12 @@
 - (void)setLineInsets:(UIEdgeInsets)insets duration:(NSTimeInterval)duration;
 // The landscape player has a narrower reading column than the full lyrics page.
 - (void)setFontSize:(CGFloat)size;
+// A card can keep the lyrics view around without spending a display link while it is off-screen.
+- (void)setPlaybackActive:(BOOL)active;
 // Asked as a tap lands on the lines, before it seeks or opens what a line means; NO leaves the tap to
 // whoever else watches the touch. Nil takes every tap.
 @property (nonatomic, copy) BOOL (^takesTap)(void);
+// Optional owner override for a timed line. When set, line taps call this before the meaning bubble or
+// the default seek, allowing embedded lyrics to seek their owning track.
+@property (nonatomic, copy) void (^lineTapHandler)(NSInteger startTimeMs);
 @end

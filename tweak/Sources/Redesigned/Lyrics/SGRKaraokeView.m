@@ -17,6 +17,7 @@
 #import "Shared/Haptics/Haptics.h"
 #import "Redesigned/Kit/SGRTokens.h"
 #import "Redesigned/Kit/SGRBridges.h"
+#import "Redesigned/Moments/Moments.h"
 #import "Headers/SPTPlayer.h"
 #import <CoreImage/CoreImage.h>
 
@@ -1069,6 +1070,7 @@ typedef struct {
 } SGRKaraokeBreak;
 
 @interface SGRKaraokeView () <UIScrollViewDelegate>
+- (void)updateMomentBubbleAtPosition:(NSInteger)positionMs;
 @end
 
 @implementation SGRKaraokeView {
@@ -1077,6 +1079,8 @@ typedef struct {
     BOOL _homing;
     CADisplayLink *_link;
     NSString *_track;
+    SGRMomentBubbleView *_momentBubble;
+    NSString *_momentBubbleIdentity;
     NSArray<SGKaraokeLine *> *_lines;
     // The song is placed from its lines' heights alone; views exist for the lines in and near sight.
     NSArray<NSNumber *> *_tops;   // where each line starts in the stack
@@ -1126,6 +1130,7 @@ typedef struct {
     CFTimeInterval _bandSince, _bandFor;
     NSMutableIndexSet *_quoteSelection;
     BOOL _quoting;
+    BOOL _playbackActive;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -1140,6 +1145,7 @@ typedef struct {
     _maxBlur = kMaxBlur;
     _shown = [NSMutableDictionary dictionary];
     _quoteSelection = [NSMutableIndexSet indexSet];
+    _playbackActive = YES;
     _sightArrangement = NSUIntegerMax;
     _fade = [CAGradientLayer layer];
     _fade.colors = @[(id)UIColor.clearColor.CGColor, (id)UIColor.whiteColor.CGColor,
@@ -1195,6 +1201,15 @@ typedef struct {
         return;
     }
     CGPoint point = [tap locationInView:_scroll];
+    if (self.lineTapHandler && !_plain) {
+        for (SGRKaraokeLineView *view in _shown.allValues) {
+            if (!CGRectContainsPoint(CGRectInset(view.frame, -_margin, -_lineGap / 2), point)) continue;
+            self.lineTapHandler(view.line.start);
+            SGPlayFeedback(SGFeedbackSkip);
+            [self followSong];
+            return;
+        }
+    }
     for (SGRKaraokeLineView *view in _shown.allValues) {
         CGRect target = view.bubbleTarget;
         if (CGRectIsNull(target) || !CGRectContainsPoint(target, [_scroll convertPoint:point toView:view])) continue;
@@ -1573,10 +1588,16 @@ typedef struct {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startLink) object:nil];
     [_link invalidate];
     _link = nil;
-    if (!self.window) return;
+    if (!self.window || !_playbackActive) return;
     NSTimeInterval wait = SGPlayerTransitionEnds() - CACurrentMediaTime();
     if (wait <= 0) [self startLink];
     else [self performSelector:@selector(startLink) withObject:nil afterDelay:wait + kTransitionSlack inModes:@[NSRunLoopCommonModes]];
+}
+
+- (void)setPlaybackActive:(BOOL)active {
+    if (_playbackActive == active) return;
+    _playbackActive = active;
+    [self scheduleLink];
 }
 
 - (void)startLink {
@@ -2022,7 +2043,9 @@ typedef struct {
 
 - (void)creditTo:(SGLyricsCredit *)credit {
     _credited = credit;
-    NSString *text = credit.text.length && (_crediting || credit.required) ? [NSString stringWithFormat:@"Lyrics from %@", credit.text] : nil;
+    BOOL sourceNameOnly = [credit.text isEqualToString:@"Spicy Lyrics"];
+    BOOL showCredit = _crediting || (credit.required && !sourceNameOnly);
+    NSString *text = credit.text.length && showCredit ? [NSString stringWithFormat:@"Lyrics from %@", credit.text] : nil;
     if (text == _credit.text || [text isEqualToString:_credit.text]) return;
     _credit.text = text;
     _credit.hidden = !_showing || !text.length;
@@ -2076,6 +2099,9 @@ typedef struct {
         _clockNeedsSync = YES;
         _reported = NSIntegerMin;
         _stillSince = 0;
+        [_momentBubble removeFromSuperview];
+        _momentBubble = nil;
+        _momentBubbleIdentity = nil;
         _track = track;
         _lines = nil;
         _builtWidth = 0;
@@ -2141,6 +2167,47 @@ typedef struct {
     }
     for (NSUInteger i = 0; i < _sungCount; i++) [_shown[@(_sung[i])] showTime:now];
     if (_dots.superview) [_dots showTime:now running:!_stillSince || _link.targetTimestamp - _stillSince < kStillFor at:_link.targetTimestamp];
+    [self updateMomentBubbleAtPosition:(NSInteger)now];
+}
+
+- (void)updateMomentBubbleAtPosition:(NSInteger)positionMs {
+    NSDictionary<NSString *, id> *moment = SGRMomentAtPosition(_track, positionMs);
+    SGRKaraokeLineView *line = _focus >= 0 ? _shown[@(_focus)] : nil;
+    if (!moment || !line) {
+        [_momentBubble removeFromSuperview];
+        _momentBubble = nil;
+        _momentBubbleIdentity = nil;
+        return;
+    }
+
+    NSString *identity = [NSString stringWithFormat:@"%@|%@|%@", moment[@"trackID"], moment[@"timestampMs"], moment[@"createdAt"]];
+    if (![_momentBubbleIdentity isEqualToString:identity]) {
+        [_momentBubble removeFromSuperview];
+        _momentBubbleIdentity = identity;
+        _momentBubble = [[SGRMomentBubbleView alloc] initWithText:moment[@"text"]];
+        _momentBubble.alpha = 0;
+        _momentBubble.transform = CGAffineTransformMakeScale(0.96, 0.96);
+        [self addSubview:_momentBubble];
+        NSTimeInterval duration = SGRReduceMotion() ? 0.1 : 0.24;
+        [UIView animateWithDuration:duration delay:0 options:UIViewAnimationOptionBeginFromCurrentState |
+            UIViewAnimationOptionAllowUserInteraction animations:^{
+                self->_momentBubble.alpha = 1;
+                self->_momentBubble.transform = CGAffineTransformIdentity;
+            } completion:nil];
+    }
+
+    CGRect lineFrame = [line convertRect:line.bounds toView:self];
+    CGFloat maxWidth = MAX(0, self.bounds.size.width - 2 * _margin);
+    CGSize size = [_momentBubble sizeThatFits:CGSizeMake(maxWidth, 82)];
+    size.width = MIN(maxWidth, MAX(100, size.width));
+    size.height = MIN(82, MAX(40, size.height));
+    CGFloat y = CGRectGetMaxY(lineFrame) + 8;
+    CGFloat lowerEdge = self.bounds.size.height - _band.bottom;
+    if (y + size.height > lowerEdge - 4) y = CGRectGetMinY(lineFrame) - size.height - 8;
+    y = MAX(_band.top + 4, MIN(lowerEdge - size.height, y));
+    CGRect frame = CGRectMake(round((self.bounds.size.width - size.width) / 2), y, size.width, size.height);
+    if (!CGRectEqualToRect(_momentBubble.frame, frame)) _momentBubble.frame = frame;
+    [self bringSubviewToFront:_momentBubble];
 }
 
 // What is sung at `now`: each line from its start until it is sung out, so two voices over each

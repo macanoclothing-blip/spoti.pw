@@ -21,6 +21,7 @@
 #import "Redesigned/Home/Home.h"
 #import "Redesigned/Album/Album.h"
 #import "Redesigned/Lyrics/Sing.h"
+#import "Redesigned/Moments/Moments.h"
 #import "Shared/Sing/SGSingModel.h"
 #import "Shared/Privacy/Privacy.h"
 #import "Shared/Flags/Flags.h"
@@ -32,7 +33,7 @@
 #import "Pages.h"
 
 static const CGFloat kRowHeight = 56;
-static char kRowKey, kInsetKey;
+static char kRowKey, kMomentsRowKey, kInsetKey, kDrawerRowsKey;
 
 static SGModRow *pageRow(NSString *title, NSString *symbol, UIViewController *(^page)(void)) {
     return SGWithSymbol(SGPageRow(title, page), symbol);
@@ -73,6 +74,7 @@ static UIViewController *modSettingsPage(void) {
     }
     else [parts addObject:pageRow(@"Home & Library", @"house", ^UIViewController *{ return SGHomeSettingsPage(); })];
     [sections addObject:SGAppearanceSection()];
+    if (SGRedesignedUIStored()) [sections addObject:SGRMomentsSettingsSection()];
     // Sing's microphone is the redesigned player's, so Karaoke is the redesign's; its row follows a download.
     if (SGRedesignedUIStored()) {
         SGModRow *karaoke = pageRow(@"Karaoke", @"music.mic", ^UIViewController *{ return SGRKaraokeSettingsPage(); });
@@ -100,6 +102,7 @@ static UIViewController *modSettingsPage(void) {
 // drawn like the drawer's own rows: no chevron, icon and title 4pt further in.
 @interface SGModSettingsRow : UIControl
 @property (nonatomic) BOOL drawer;
+@property (nonatomic) BOOL moments;
 @end
 
 @implementation SGModSettingsRow {
@@ -112,18 +115,32 @@ static UIViewController *modSettingsPage(void) {
     if (!(self = [super initWithFrame:frame])) return nil;
     _icon = SGSymbolView(@"slider.horizontal.3", 20, UIImageSymbolWeightRegular, 24);
     _title = [UILabel new];
-    _title.text = self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings";
     _title.textColor = UIColor.whiteColor;
     _chevron = SGSymbolView(@"chevron.right", 11, UIImageSymbolWeightSemibold, 12);
     for (UIView *v in @[_icon, _title, _chevron]) [self addSubview:v];
+    [self refreshContent];
     [self addTarget:self action:@selector(open) forControlEvents:UIControlEventTouchUpInside];
     return self;
 }
 
+- (void)setMoments:(BOOL)moments {
+    _moments = moments;
+    [self refreshContent];
+}
+
+- (void)refreshContent {
+    _title.text = self.moments ? @"Spotify Moments" : (self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings");
+    _icon.image = [UIImage systemImageNamed:self.moments ? @"quote.bubble" : @"slider.horizontal.3"];
+    self.accessibilityIdentifier = self.moments ? @"SpotifyGlass.MomentsRow" : @"SpotifyGlass.ModSettingsRow";
+    self.accessibilityLabel = _title.text;
+    self.accessibilityTraits = UIAccessibilityTraitButton;
+}
+
 - (void)layoutSubviews {
     [super layoutSubviews];
+    [self refreshContent];
     _title.font = SGTitleFont();
-    _title.text = self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings";
+    if (!self.moments) _title.text = self.drawer && SGRedesignedUI() ? @"Chroma Settings" : @"Mod Settings";
     CGFloat width = self.bounds.size.width, height = self.bounds.size.height, lead = self.drawer ? 4 : 0;
     _icon.frame = CGRectMake(12 + lead, (height - 24) / 2, 24, 24);
     _title.frame = CGRectMake(48 + lead, 0, width - 96, height);
@@ -148,6 +165,10 @@ static UINavigationController *navigationIn(UIViewController *page) {
 // The drawer is presented over the app, so its row closes it first and pushes onto the stack it
 // was covering, the way the drawer's own rows open their pages.
 - (void)open {
+    if (self.moments) {
+        SGROpenSpotifyMoments(self);
+        return;
+    }
     UIViewController *owner = nil;
     for (UIResponder *r = self; r && !owner; r = r.nextResponder) {
         if ([r isKindOfClass:UIViewController.class]) owner = (UIViewController *)r;
@@ -189,6 +210,35 @@ static void placeRow(UICollectionView *list, SGModSettingsRow *row) {
     if (row.drawer) inset.top += kRowHeight;
     else inset.bottom += kRowHeight;
     objc_setAssociatedObject(list, &kInsetKey, [NSValue valueWithUIEdgeInsets:inset], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    list.contentInset = inset;
+}
+
+static SGModSettingsRow *ensureMomentsDrawerRow(UICollectionView *list) {
+    SGModSettingsRow *row = objc_getAssociatedObject(list, &kMomentsRowKey);
+    if (!row) {
+        row = [[SGModSettingsRow alloc] initWithFrame:CGRectZero];
+        row.drawer = YES;
+        row.moments = YES;
+        objc_setAssociatedObject(list, &kMomentsRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (row.superview != list) [list addSubview:row];
+    return row;
+}
+
+static void placeDrawerRows(UICollectionView *list, SGModSettingsRow *modRow, SGModSettingsRow *momentsRow) {
+    BOOL showMoments = SGRedesignedUI() && SGRMomentsEnabled();
+    momentsRow.hidden = !showMoments;
+    NSUInteger rowCount = showMoments ? 2 : 1;
+
+    NSValue *applied = objc_getAssociatedObject(list, &kInsetKey);
+    NSUInteger oldCount = [objc_getAssociatedObject(list, &kDrawerRowsKey) unsignedIntegerValue];
+    UIEdgeInsets inset = list.contentInset;
+    if (applied && UIEdgeInsetsEqualToEdgeInsets(inset, applied.UIEdgeInsetsValue)) inset.top -= oldCount * kRowHeight;
+    inset.top += rowCount * kRowHeight;
+    objc_setAssociatedObject(list, &kInsetKey, [NSValue valueWithUIEdgeInsets:inset], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(list, &kDrawerRowsKey, @(rowCount), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    modRow.frame = CGRectMake(0, -(CGFloat)rowCount * kRowHeight, list.bounds.size.width, kRowHeight);
+    if (showMoments) momentsRow.frame = CGRectMake(0, -kRowHeight, list.bounds.size.width, kRowHeight);
     list.contentInset = inset;
 }
 
@@ -258,7 +308,9 @@ static SGModSettingsRow *ensureDrawerRow(UICollectionView *list) {
     %orig;
     SGForEachView(((UIViewController *)self).view, ^(UIView *v) {
         if (![v isKindOfClass:UICollectionView.class] || ![NSStringFromClass(v.class) containsString:@"SideDrawerListCollectionView"]) return;
-        ensureDrawerRow((UICollectionView *)v);
+        UICollectionView *list = (UICollectionView *)v;
+        ensureDrawerRow(list);
+        ensureMomentsDrawerRow(list);
     });
 }
 %end
@@ -273,7 +325,12 @@ static SGModSettingsRow *ensureDrawerRow(UICollectionView *list) {
         row = ensureDrawerRow(self);
     else if (row && row.superview != self)
         [self addSubview:row];
-    if (row) placeRow(self, row);
+    if ([NSStringFromClass(self.class) containsString:@"SideDrawerListCollectionView"]) {
+        if (!row) row = ensureDrawerRow(self);
+        placeDrawerRows(self, row, ensureMomentsDrawerRow(self));
+    } else if (row) {
+        placeRow(self, row);
+    }
 }
 %end
 

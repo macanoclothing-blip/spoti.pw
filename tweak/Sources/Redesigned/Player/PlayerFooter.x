@@ -20,6 +20,7 @@
 // id=QueueButtonNowPlaying 47x32.
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/Moments/Moments.h"
 #import "Player.h"
 #import "PlayerVinyl.h"
 #import <AVFoundation/AVFoundation.h>
@@ -38,12 +39,15 @@ static char kPlaybackButtonKey;
 // The Music app keeps that row just over the home indicator: its middle this far above the safe area's
 // bottom, and never less than kRowMinBottom above the screen's on a phone without a home indicator.
 static const CGFloat kRowAboveSafeArea = 20, kRowMinBottom = 34;
-// Give portrait playback controls a little more air below the progress row. Keep this out of the
-// landscape lyrics composition, which positions its transport unit independently.
-static const CGFloat kPortraitControlsDrop = 22;
+// Raise the progress and transport rows together to create a little more room for the player actions.
+// The volume and Moments capsule use the resulting gap; landscape keeps its own composition.
+static const CGFloat kPortraitControlsDrop = -8, kPortraitProgressLift = 36;
+static const CGFloat kMomentsProgressLift = 10;
+static const CGFloat kPlayerProgressExtraLift = 7;
 
 static char kConnectKey, kShareKey, kTrimmerKey, kQueueKey, kLyricsGlyphKey, kQueueGlyphKey, kRoutePickerKey, kReachKey, kFooterSettleKey;
 static char kPreviousPlaybackButtonKey, kNextPlaybackButtonKey;
+static char kProgressLiftTransformKey, kProgressLiftSliderKey;
 static __weak SGRGlyphButton *sg_lyricsGlyph;
 static NSHashTable<MPVolumeView *> *sg_routePickers;
 
@@ -245,6 +249,38 @@ static UIViewController *unitOf(UIView *view) {
     return [next isKindOfClass:UIViewController.class] && ((UIViewController *)next).viewIfLoaded == view ? (UIViewController *)next : nil;
 }
 
+static void liftProgressUnit(UIView *root, CGFloat amount) {
+    UIView *slider = SGRFindByIdentifier(root, @"SPTNowPlayingSliderV2", &kProgressLiftSliderKey);
+    UIView *progressUnit = nil;
+    for (UIView *candidate = slider; candidate; candidate = candidate.superview) {
+        UIViewController *unit = unitOf(candidate);
+        if (unit && [NSStringFromClass(unit.class) containsString:@"DurationElement"]) {
+            progressUnit = candidate;
+            break;
+        }
+    }
+    if (!progressUnit) return;
+
+    SGRPlayerApplyProgressLift(progressUnit, amount);
+}
+
+CGFloat SGRPlayerPortraitProgressLift(void) {
+    return kPortraitProgressLift +
+        (SGRMomentsEnabled() ? kMomentsProgressLift + kPlayerProgressExtraLift : 0);
+}
+
+void SGRPlayerApplyProgressLift(UIView *progressUnit, CGFloat lift) {
+    if (!progressUnit) return;
+    NSValue *stored = objc_getAssociatedObject(progressUnit, &kProgressLiftTransformKey);
+    CGAffineTransform base = stored ? stored.CGAffineTransformValue : progressUnit.transform;
+    if (!stored) {
+        objc_setAssociatedObject(progressUnit, &kProgressLiftTransformKey,
+                                 [NSValue valueWithCGAffineTransform:base], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    CGAffineTransform transform = CGAffineTransformTranslate(base, 0, -lift);
+    if (!CGAffineTransformEqualToTransform(progressUnit.transform, transform)) progressUnit.transform = transform;
+}
+
 // Spotify wraps the player units differently across versions. Find the real transport controller by
 // its play button, instead of assuming it is a sibling immediately above the footer.
 static UIView *controlsIn(UIStackView *stack, UIView *footer) {
@@ -267,9 +303,12 @@ static void lowerRow(UIView *row) {
     UIWindow *window = row.window;
     UIView *controls = controlsIn([stack isKindOfClass:UIStackView.class] ? (UIStackView *)stack : nil, row);
     BOOL portrait = player.bounds.size.height > player.bounds.size.width;
-    CGFloat controlsMove = controls && portrait && !SGFlag(SGRKeyPlayerVinyl, NO) ? kPortraitControlsDrop : 0;
+    BOOL liftPlayerRows = portrait && !SGFlag(SGRKeyPlayerVinyl, NO);
+    CGFloat controlsMove = controls && liftPlayerRows ? kPortraitControlsDrop : 0;
     CGAffineTransform follow = CGAffineTransformMakeTranslation(0, controlsMove);
     if (controls && !CGAffineTransformEqualToTransform(controls.transform, follow)) controls.transform = follow;
+    if (!SGFlag(SGRKeyPlayerVinyl, NO) && !SGRPlayerIdleChromeHidden())
+        liftProgressUnit(row.window, liftPlayerRows ? SGRPlayerPortraitProgressLift() : 0);
     if (![stack isKindOfClass:UIStackView.class] || !player || !window) return;
 
     // Keep the footer's original positioning reference: Spotify lays it out in its immediate stack,
@@ -311,17 +350,27 @@ static void lowerRow(UIView *row) {
 // Spotify and the redesign lay out the controls and footer in separate units. The footer can finish
 // first, so settle the measured volume gap once the current layout transaction has placed both units.
 static void scheduleFooterSettle(UIView *row) {
-    if (!row || [objc_getAssociatedObject(row, &kFooterSettleKey) boolValue]) return;
-    objc_setAssociatedObject(row, &kFooterSettleKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!row) return;
+    NSUInteger generation = [objc_getAssociatedObject(row, &kFooterSettleKey) unsignedIntegerValue] + 1;
+    objc_setAssociatedObject(row, &kFooterSettleKey, @(generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     __weak UIView *weakRow = row;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIView *current = weakRow;
-        if (!current) return;
-        objc_setAssociatedObject(current, &kFooterSettleKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (!current.window) return;
+        if (!current || !current.window ||
+            [objc_getAssociatedObject(current, &kFooterSettleKey) unsignedIntegerValue] != generation) return;
         UIStackView *stack = SGRowIn(current);
         [stack layoutIfNeeded];
         lowerRow(current);
+        for (NSNumber *delay in @[@0.08, @0.25, @0.5]) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                UIView *settled = weakRow;
+                if (!settled || !settled.window ||
+                    [objc_getAssociatedObject(settled, &kFooterSettleKey) unsignedIntegerValue] != generation) return;
+                [SGRowIn(settled) layoutIfNeeded];
+                lowerRow(settled);
+            });
+        }
     });
 }
 

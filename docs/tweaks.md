@@ -307,10 +307,30 @@ Redesigned:
                   symbols like the Music app's volume row in the standard redesign, with a flat two-tone track and
                   no thumb. Its frame is recalculated from the visible transport buttons and footer after layout;
                   when the normal gap is too small, the controls move up only enough to make room instead of
-                  suppressing the volume row. Vinyl mode keeps its own retro slider styling, raises the volume row
-                  and lowers the progress row. The slider adjusts the iPhone's output
-                  volume, not Spotify Connect's remote
-                  device volume.
+                  suppressing the volume row. In portrait, the progress row is raised 36pt to open more room for
+                  the volume and Moments controls. With Moments enabled, it is raised by an additional 17pt
+                  (53pt total), while the information row is raised by an additional 17pt (37pt total).
+                  The footer rechecks its overlay placement after the player appears and as its separate units
+                  finish their initial layout, rather than relying on a lyrics transition to reveal the controls.
+                  The transport unit's empty lower padding is excluded from the gap measurement; its additional
+                  lift is capped at 60pt. The 38pt Moments capsule is anchored to the player container rather than
+                  the smaller footer stack, so it remains visible when that stack clips overflow. Vinyl mode keeps
+                  its own retro slider styling, raises the volume row and lowers the progress row. The slider
+                  adjusts the iPhone's output volume, not Spotify Connect's remote device volume. Spotify Moments
+                  adds a glass capsule below the transport controls for saving a personal comment and its mm:ss
+                  position for the current track. Comments stay in Spotify's on-device preferences, appear
+                  as a short speech bubble during the redesigned synced lyrics, and are browsable from the Home
+                  side drawer by artist; the Mod Settings root has one switch
+                  for the feature. Cards are grouped by track, show each saved comment as a tappable bubble,
+                  and keep a separate fixed marker for every comment on the progress bar. Tapping or dragging
+                  the progress bar seeks the track, and tapping a timed lyric seeks to that line.
+                  Moment cards use Spotify's canonical `spotify:track:<id>` route to start a song and return
+                  to Moments after Spotify accepts it.
+                  Their cover/Canvas style asks the same Canvas resolver as the animated player, caches video
+                  locally for the card, and uses the listener's Home avatar beside the comment rather than the
+                  artist's portrait. While a card's track is playing, its play control toggles pause/resume,
+                  its progress and time labels follow the player, and larger synchronized lyrics advance with
+                  playback using the same animated karaoke view as the player.
                   Local files can match a Spotify track from the player's three-dot menu or use a photo selected
                   with the iPhone photo picker; the association is stored per local URI and supplies that track's
                   cover in the player, mini player and lock screen, and its Canvas when available

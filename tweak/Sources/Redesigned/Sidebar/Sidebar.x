@@ -1,10 +1,12 @@
 #import "Core/SGCore.h"
 #import "Redesigned/Kit/SGRKit.h"
+#import "Redesigned/Moments/Moments.h"
 
 static char kSidebarTitleKey, kSidebarCloseKey, kSidebarTopCardKey, kSidebarRowsCardKey;
 static char kSidebarHeaderTransformKey, kSidebarListTransformKey, kSidebarProfileTransformKey, kSidebarAddTransformKey;
 static char kSidebarProfileChevronKey, kSidebarCellChevronKey, kSidebarSeparatorKey, kSidebarSectionSeparatorKey;
 static char kSidebarModSeparatorKey, kSidebarAddCellKey;
+static char kSidebarMomentsSeparatorKey;
 static char kSidebarClipMaskKey;
 
 static const CGFloat kSidebarAddRowHeight = 58;
@@ -374,10 +376,14 @@ static void sidebarApply(UIViewController *controller) {
     }
 
     // --- Riga Chroma Settings ---
-    UIView *modRow = sidebarFind(list, @"SGModSettingsRow");
+    UIView *modRow = sidebarFindID(list, @"SpotifyGlass.ModSettingsRow");
+    UIView *momentsRow = sidebarFindID(list, @"SpotifyGlass.MomentsRow");
     if ([modRow isKindOfClass:UIControl.class] && planCell) {
         CGRect planFrame = [planCell convertRect:planCell.bounds toView:host];
-        CGRect targetFrame = CGRectMake(16, CGRectGetMinY(planFrame) - 48, MAX(0, hostWidth - 32), 48);
+        BOOL showMoments = SGRMomentsEnabled() && [momentsRow isKindOfClass:UIControl.class];
+        momentsRow.hidden = !showMoments;
+        CGFloat rowsHeight = showMoments ? 96 : 48;
+        CGRect targetFrame = CGRectMake(16, CGRectGetMinY(planFrame) - rowsHeight, MAX(0, hostWidth - 32), 48);
         modRow.frame = [list convertRect:targetFrame fromView:host];
         modRow.autoresizingMask = UIViewAutoresizingNone;
         for (UIView *subview in modRow.subviews) {
@@ -391,6 +397,18 @@ static void sidebarApply(UIViewController *controller) {
         rowsFrame = CGRectIsNull(rowsFrame) ? customFrame : CGRectUnion(rowsFrame, customFrame);
         sidebarSeparator(host, modRow, &kSidebarModSeparatorKey,
                          CGRectMake(68, CGRectGetMaxY(customFrame) - 0.5, MAX(0, hostWidth - 68 - 32), 0.5));
+        if (showMoments) {
+            CGRect momentsFrame = CGRectMake(16, CGRectGetMinY(planFrame) - 48, MAX(0, hostWidth - 32), 48);
+            momentsRow.frame = [list convertRect:momentsFrame fromView:host];
+            momentsRow.autoresizingMask = UIViewAutoresizingNone;
+            CGRect visibleMomentsFrame = [momentsRow convertRect:momentsRow.bounds toView:host];
+            rowsFrame = CGRectUnion(rowsFrame, visibleMomentsFrame);
+            sidebarSeparator(host, momentsRow, &kSidebarMomentsSeparatorKey,
+                CGRectMake(68, CGRectGetMaxY(visibleMomentsFrame) - 0.5, MAX(0, hostWidth - 68 - 32), 0.5));
+        } else {
+            UIView *separator = objc_getAssociatedObject(momentsRow, &kSidebarMomentsSeparatorKey);
+            separator.hidden = YES;
+        }
     }
 
     // --- Card delle righe ---
@@ -436,6 +454,12 @@ static void sidebarApply(UIViewController *controller) {
             UIView *modSeparator = objc_getAssociatedObject(modRow, &kSidebarModSeparatorKey);
             modSeparator.hidden = CGRectGetMinY(modSeparator.frame) < clipTop ||
                                   CGRectGetMinY(modSeparator.frame) > CGRectGetHeight(host.bounds);
+        }
+        if (momentsRow && !momentsRow.hidden) {
+            sidebarClipAbove(host, momentsRow, clipTop);
+            UIView *separator = objc_getAssociatedObject(momentsRow, &kSidebarMomentsSeparatorKey);
+            separator.hidden = CGRectGetMinY(separator.frame) < clipTop ||
+                               CGRectGetMinY(separator.frame) > CGRectGetHeight(host.bounds);
         }
     }
 

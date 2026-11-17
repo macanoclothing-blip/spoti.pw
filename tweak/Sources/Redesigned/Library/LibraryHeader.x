@@ -13,6 +13,13 @@
 //    Library, every item on the Playlists page.
 // Folders keep Spotify's chips and only get the restyled header row.
 //
+// Editing the sections: the second button of the header's glass capsule turns the SHORTCUT ROWS THEMSELVES into
+// an edit mode, in place. Nothing is laid over the page and nothing changes size: the rows keep their 54pt
+// height, their icon and their text, they slide to the trailing side by kEditShift to uncover the green check
+// circles, the chevron turns into the reorder handle, and the hidden sections show up dimmed so they can be
+// checked again. The grid under the rows fades out while editing; the capsule is replaced by a green "done"
+// button. Reordering is a drag on the handle. Everything is committed to NSUserDefaults when "done" is pressed.
+//
 // Tree (trees/clean/library/03.txt:1159-1247): YourLibraryView holds YourLibraryContentView, the size of the
 // page, and after it -- so over it -- YourLibraryHeaderView 402x159.33: LiquidGlass.GradientView (the scrim), a
 // 402x48 row at {0, 62} holding an AutoLayoutStackView {8, 0} 390x48 of
@@ -67,9 +74,9 @@ static char kBackKey, kMenuKey, kFolderPlusKey, kPlayKey, kPauseKey, kFolderTitl
 static char kShortcutViewKey, kForcedTopKey, kRingKey, kLibraryHeaderHeightKey, kLibraryListKey, kHeaderActionsKey;
 static char kLibraryRestUntilKey;   // on the list: until when (CACurrentMediaTime) it is kept at its resting top
 static char kLibraryMarkKey;   // on the Library's list: "this is the one whose offset is kept at its top"
-static char kLibrarySectionsEditorKey;
 static char kLibraryLayoutActiveKey, kLibraryLayoutScheduledKey;
 static char kHeaderWatchedKey;   // on the header: its own layout passes run layoutRoot too
+static char kHeaderDoneKey;      // on the header: the green "done" button of the edit mode
 static char kPlaylistsModeKey;   // on the list: whether it was last taken for the Playlists page
 static char kMixedCountKey;      // on the list: the item count at which it was seen to hold mixed content
 
@@ -89,17 +96,6 @@ static char kMixedCountKey;      // on the list: the item count at which it was 
 }
 @end
 
-@interface SGRLibraryShortcut : UIControl
-@property (nonatomic, copy) void (^activate)(void);
-@end
-
-@implementation SGRLibraryShortcut
-- (void)activateTouch:(id)sender {
-    (void)sender;
-    if (self.activate) self.activate();
-}
-@end
-
 // The shortcut rows and the section title ahead of the list, in the Music app's Library. They are a
 // subview of the PAGE (layoutRootNow puts them there and trackShortcuts moves them with the list's offset); the
 // list's top inset is what leaves the room for them.
@@ -107,6 +103,9 @@ static const CGFloat kShortcutRowHeight = 54;
 static const CGFloat kRecentsTitleGap = 27;     // from the last hairline to the top of the section title
 static const CGFloat kRecentsTitleHeight = 28;
 static const CGFloat kRecentsSection = 47;      // what the title leaves above the first card (the grid adds 20)
+// Edit mode: how far the rows slide to the trailing side to uncover the check circles (a 28pt circle, a gap).
+static const CGFloat kEditShift = 44;
+static const CGFloat kEditHandleWidth = 44;
 // Three controls share the header's single functional glass surface.
 static const CGFloat kPillWidth = 132, kPillHeight = 46;
 static const CGFloat kPillGlyph = 18;
@@ -185,6 +184,8 @@ static NSArray<NSDictionary *> *visibleLibrarySections(void) {
 }
 
 static void layoutRoot(UIView *page);
+static void keepAtRest(UIScrollView *list, NSTimeInterval seconds);
+static void setLibraryEditing(UIView *header, BOOL editing);
 
 // The layout of Spotify's list under the section title: the first `limit` items (the list is sorted by what
 // was played last) as two columns of cards, every other item left out, and none of the supplementary views Spotify
@@ -299,100 +300,340 @@ static UIViewController *frontController(void) {
     return vc;
 }
 
-// The shortcuts' container, made once per list. It is NOT added to the list here: layoutRootNow puts it on the
-// page, and adding it to the list on every call is what made it jump between the two parents on each pass.
-static UIView *libraryShortcuts(UIView *list) {
-    UIView *existing = objc_getAssociatedObject(list, &kShortcutViewKey);
-    if (existing) return existing;
+#pragma mark - the shortcut rows
 
-    UIView *container = [UIView new];
-    container.backgroundColor = UIColor.clearColor;
-    container.clipsToBounds = NO;
-    objc_setAssociatedObject(list, &kShortcutViewKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+// One row of the shortcuts. In the normal mode it is icon, title and chevron. In the edit mode the same row
+// slides to the trailing side (the `shift` constraint of its icon, the title and the hairline follow), the
+// check circle appears in the room that leaves, and the chevron gives way to the reorder handle.
+@interface SGRLibraryShortcut : UIControl
+@property (nonatomic, copy) void (^activate)(void);
+@property (nonatomic, copy) NSString *sectionID;
+@property (nonatomic) BOOL librarySelected;
+@property (nonatomic) BOOL editing;
+@property (nonatomic, strong) UIImageView *icon;
+@property (nonatomic, strong) UILabel *label;
+@property (nonatomic, strong) UIImageView *chevron;
+@property (nonatomic, strong) UIImageView *handle;
+@property (nonatomic, strong) UIButton *check;
+@property (nonatomic, strong) NSLayoutConstraint *shift;
+- (void)activateTouch:(id)sender;
+- (void)refreshSelection:(BOOL)animated;
+@end
 
-    NSArray<NSDictionary *> *items = visibleLibrarySections();
-    UIStackView *stack = [UIStackView new];
-    stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 0;
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [container addSubview:stack];
+@implementation SGRLibraryShortcut
+- (void)activateTouch:(id)sender {
+    (void)sender;
+    if (self.editing) {
+        self.librarySelected = !self.librarySelected;
+        [self refreshSelection:YES];
+        return;
+    }
+    if (self.activate) self.activate();
+}
+
+// Everything the edit mode changes on a row is a constraint constant or an alpha, so setting this inside an
+// animation block (followed by a layoutIfNeeded of the list) is all it takes to animate it.
+- (void)setEditing:(BOOL)editing {
+    _editing = editing;
+    self.shift.constant = editing ? kEditShift : 0;
+    self.check.alpha = editing ? 1 : 0;
+    self.check.userInteractionEnabled = editing;
+    self.chevron.alpha = editing ? 0 : 1;
+    self.handle.alpha = editing ? 1 : 0;
+    self.handle.userInteractionEnabled = editing;
+    [self refreshSelection:NO];
+}
+
+- (void)refreshSelection:(BOOL)animated {
+    BOOL selected = self.librarySelected;
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:28 weight:UIImageSymbolWeightRegular];
+    UIImage *image = [UIImage systemImageNamed:selected ? @"checkmark.circle.fill" : @"circle"
+                             withConfiguration:configuration];
+    void (^apply)(void) = ^{
+        [self.check setImage:image forState:UIControlStateNormal];
+        self.check.tintColor = selected ? SGRAccent() : SGRSecondary();
+        // A section that is off stays in the list while editing, dimmed, so it can be checked again.
+        CGFloat dim = (self.editing && !selected) ? 0.4 : 1;
+        self.icon.alpha = dim;
+        self.label.alpha = dim;
+    };
+    if (animated) {
+        [UIView transitionWithView:self duration:0.15
+                           options:UIViewAnimationOptionTransitionCrossDissolve | UIViewAnimationOptionAllowUserInteraction
+                        animations:apply completion:nil];
+    } else {
+        apply();
+    }
+    BOOL italian = [NSLocale.preferredLanguages.firstObject hasPrefix:@"it"];
+    self.accessibilityValue = self.editing ? (selected ? (italian ? @"Selezionato" : @"Selected")
+                                                       : (italian ? @"Non selezionato" : @"Not selected")) : nil;
+}
+@end
+
+// The column of rows. It holds EVERY section, in the saved order; the ones that are off are hidden arranged
+// views (a stack of ours, so hiding is safe), which collapse and which the edit mode shows again. Its frame is
+// the page's business (layoutRootNow); the stack takes its height from the visible rows.
+@interface SGRLibraryShortcutList : UIView
+@property (nonatomic, strong) UIStackView *stack;
+@property (nonatomic) BOOL editing;
+- (instancetype)initWithSections:(NSArray<NSDictionary *> *)sections selected:(NSSet<NSString *> *)selected;
+- (void)applyEditing:(BOOL)editing;   // call inside an animation block to animate it
+- (void)save;
+@end
+
+@implementation SGRLibraryShortcutList {
+    __weak SGRLibraryShortcut *_dragRow;
+    NSInteger _dragStart, _dragTarget;
+}
+
+- (instancetype)initWithSections:(NSArray<NSDictionary *> *)sections selected:(NSSet<NSString *> *)selected {
+    if (!(self = [super initWithFrame:CGRectZero])) return nil;
+    self.backgroundColor = UIColor.clearColor;
+    self.clipsToBounds = NO;
+
+    _stack = [UIStackView new];
+    _stack.axis = UILayoutConstraintAxisVertical;
+    _stack.spacing = 0;
+    _stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self addSubview:_stack];
     [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:SGRSideMargin],
-        [stack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-SGRSideMargin],
-        [stack.topAnchor constraintEqualToAnchor:container.topAnchor],
-        [stack.heightAnchor constraintEqualToConstant:items.count * kShortcutRowHeight],
+        [_stack.leadingAnchor constraintEqualToAnchor:self.leadingAnchor constant:SGRSideMargin],
+        [_stack.trailingAnchor constraintEqualToAnchor:self.trailingAnchor constant:-SGRSideMargin],
+        [_stack.topAnchor constraintEqualToAnchor:self.topAnchor],
     ]];
 
+    for (NSDictionary *item in sections) {
+        SGRLibraryShortcut *row = [self rowForSection:item selected:[selected containsObject:item[@"id"]]];
+        [_stack addArrangedSubview:row];
+        row.hidden = !row.librarySelected;
+    }
+    return self;
+}
+
+- (SGRLibraryShortcut *)rowForSection:(NSDictionary *)item selected:(BOOL)selected {
     CGFloat hairlineThickness = 1.0 / MAX(1, UIScreen.mainScreen.scale);
     UIImageSymbolConfiguration *iconConfiguration =
         [UIImageSymbolConfiguration configurationWithPointSize:20 weight:UIImageSymbolWeightRegular];
     UIImageSymbolConfiguration *chevronConfiguration =
         [UIImageSymbolConfiguration configurationWithPointSize:13 weight:UIImageSymbolWeightSemibold];
-    for (NSDictionary *item in items) {
-        SGRLibraryShortcut *row = [SGRLibraryShortcut new];
-        row.accessibilityLabel = item[@"title"];
-        row.accessibilityTraits = UIAccessibilityTraitButton;
-        [row addTarget:row action:@selector(activateTouch:) forControlEvents:UIControlEventTouchUpInside];
-        UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:item[@"symbol"]
-                                                                     withConfiguration:iconConfiguration]];
-        icon.tintColor = UIColor.whiteColor;
-        icon.contentMode = UIViewContentModeCenter;
-        icon.translatesAutoresizingMaskIntoConstraints = NO;
-        UILabel *label = [UILabel new];
-        label.text = item[@"title"];
-        label.textColor = SGRPrimary();
-        label.font = SGRFont(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryLarge);
-        label.translatesAutoresizingMaskIntoConstraints = NO;
-        UIImageView *chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"
-                                                                        withConfiguration:chevronConfiguration]];
-        chevron.tintColor = [UIColor colorWithWhite:1 alpha:0.35];
-        chevron.contentMode = UIViewContentModeCenter;
-        chevron.translatesAutoresizingMaskIntoConstraints = NO;
-        UIView *line = [UIView new];
-        line.backgroundColor = SGRHairline();
-        line.userInteractionEnabled = NO;
-        line.translatesAutoresizingMaskIntoConstraints = NO;
-        [row addSubview:icon];
-        [row addSubview:label];
-        [row addSubview:chevron];
-        [row addSubview:line];
-        [NSLayoutConstraint activateConstraints:@[
-            [row.heightAnchor constraintEqualToConstant:kShortcutRowHeight],
-            [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
-            [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [icon.widthAnchor constraintEqualToConstant:29],
-            [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:12],
-            [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [chevron.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-            [chevron.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
-            [chevron.widthAnchor constraintEqualToConstant:18],
-            // The hairline under each row starts where its text does and runs to the page's margin.
-            [line.leadingAnchor constraintEqualToAnchor:label.leadingAnchor],
-            [line.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
-            [line.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
-            [line.heightAnchor constraintEqualToConstant:hairlineThickness],
-        ]];
-        __weak SGRLibraryShortcut *weakRow = row;
-        NSString *uri = item[@"uri"];
-        row.activate = ^{
-            SGRLibraryShortcut *strongRow = weakRow;
-            if (!strongRow) return;
-            if (item[@"universe"]) {
-                SGRMusicUniversePresentFrom(strongRow);
-            } else if (item[@"party"]) {
-                SGRMusicPartyPresentFrom(strongRow);
-            } else if (!SGOpenSpotifyURI([NSURL URLWithString:uri])) {
-                SGLog(@"redesign library: cannot open shortcut %@", uri);
-            } else {
-                // What the shortcut led to: a page of its own, or the Library itself filtered.
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    SGLog(@"redesign library: shortcut %@ opened, front controller %@", uri,
-                          NSStringFromClass(frontController().class));
-                });
-            }
-        };
-        [stack addArrangedSubview:row];
+    UIImageSymbolConfiguration *handleConfiguration =
+        [UIImageSymbolConfiguration configurationWithPointSize:18 weight:UIImageSymbolWeightMedium];
+
+    SGRLibraryShortcut *row = [SGRLibraryShortcut new];
+    row.sectionID = item[@"id"];
+    row.librarySelected = selected;
+    row.accessibilityLabel = item[@"title"];
+    row.accessibilityTraits = UIAccessibilityTraitButton;
+    [row addTarget:row action:@selector(activateTouch:) forControlEvents:UIControlEventTouchUpInside];
+
+    UIImageView *icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:item[@"symbol"]
+                                                                 withConfiguration:iconConfiguration]];
+    icon.tintColor = UIColor.whiteColor;
+    icon.contentMode = UIViewContentModeCenter;
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    UILabel *label = [UILabel new];
+    label.text = item[@"title"];
+    label.textColor = SGRPrimary();
+    label.font = SGRFont(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryLarge);
+    label.translatesAutoresizingMaskIntoConstraints = NO;
+    UIImageView *chevron = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"chevron.right"
+                                                                    withConfiguration:chevronConfiguration]];
+    chevron.tintColor = [UIColor colorWithWhite:1 alpha:0.35];
+    chevron.contentMode = UIViewContentModeCenter;
+    chevron.translatesAutoresizingMaskIntoConstraints = NO;
+    UIView *line = [UIView new];
+    line.backgroundColor = SGRHairline();
+    line.userInteractionEnabled = NO;
+    line.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Edit mode only: the check circle at the leading edge and the reorder handle at the trailing one.
+    UIButton *check = [UIButton buttonWithType:UIButtonTypeSystem];
+    check.translatesAutoresizingMaskIntoConstraints = NO;
+    check.isAccessibilityElement = NO;
+    check.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    [check addTarget:row action:@selector(activateTouch:) forControlEvents:UIControlEventTouchUpInside];
+    UIImageView *handle = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"line.3.horizontal"
+                                                                     withConfiguration:handleConfiguration]];
+    handle.tintColor = [UIColor colorWithWhite:1 alpha:0.45];
+    handle.contentMode = UIViewContentModeRight;
+    handle.isAccessibilityElement = NO;
+    handle.translatesAutoresizingMaskIntoConstraints = NO;
+    [handle addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(drag:)]];
+
+    [row addSubview:icon];
+    [row addSubview:label];
+    [row addSubview:chevron];
+    [row addSubview:line];
+    [row addSubview:check];
+    [row addSubview:handle];
+
+    NSLayoutConstraint *shift = [icon.leadingAnchor constraintEqualToAnchor:row.leadingAnchor];
+    [NSLayoutConstraint activateConstraints:@[
+        [row.heightAnchor constraintEqualToConstant:kShortcutRowHeight],
+        shift,
+        [icon.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [icon.widthAnchor constraintEqualToConstant:29],
+        [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:12],
+        [label.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [chevron.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [chevron.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [chevron.widthAnchor constraintEqualToConstant:18],
+        // The hairline under each row starts where its text does and runs to the page's margin.
+        [line.leadingAnchor constraintEqualToAnchor:label.leadingAnchor],
+        [line.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [line.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [line.heightAnchor constraintEqualToConstant:hairlineThickness],
+        [check.leadingAnchor constraintEqualToAnchor:row.leadingAnchor],
+        [check.centerYAnchor constraintEqualToAnchor:row.centerYAnchor],
+        [check.widthAnchor constraintEqualToConstant:32],
+        // Square, like the circle it holds: a taller button stretched the symbol into an oval.
+        [check.heightAnchor constraintEqualToConstant:32],
+        [handle.trailingAnchor constraintEqualToAnchor:row.trailingAnchor],
+        [handle.topAnchor constraintEqualToAnchor:row.topAnchor],
+        [handle.bottomAnchor constraintEqualToAnchor:row.bottomAnchor],
+        [handle.widthAnchor constraintEqualToConstant:kEditHandleWidth],
+    ]];
+
+    row.icon = icon;
+    row.label = label;
+    row.chevron = chevron;
+    row.handle = handle;
+    row.check = check;
+    row.shift = shift;
+    [row setEditing:NO];
+
+    __weak SGRLibraryShortcut *weakRow = row;
+    NSString *uri = item[@"uri"];
+    row.activate = ^{
+        SGRLibraryShortcut *strongRow = weakRow;
+        if (!strongRow) return;
+        if (item[@"universe"]) {
+            SGRMusicUniversePresentFrom(strongRow);
+        } else if (item[@"party"]) {
+            SGRMusicPartyPresentFrom(strongRow);
+        } else if (!SGOpenSpotifyURI([NSURL URLWithString:uri])) {
+            SGLog(@"redesign library: cannot open shortcut %@", uri);
+        } else {
+            // What the shortcut led to: a page of its own, or the Library itself filtered.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                SGLog(@"redesign library: shortcut %@ opened, front controller %@", uri,
+                      NSStringFromClass(frontController().class));
+            });
+        }
+    };
+    return row;
+}
+
+- (void)applyEditing:(BOOL)editing {
+    self.editing = editing;
+    for (SGRLibraryShortcut *row in self.stack.arrangedSubviews) {
+        [row setEditing:editing];
+        row.hidden = editing ? NO : !row.librarySelected;
     }
+    [self layoutIfNeeded];
+}
+
+- (void)save {
+    NSMutableArray<NSString *> *selected = [NSMutableArray array];
+    NSMutableArray<NSString *> *order = [NSMutableArray array];
+    for (SGRLibraryShortcut *row in self.stack.arrangedSubviews) {
+        [order addObject:row.sectionID];
+        if (row.librarySelected) [selected addObject:row.sectionID];
+    }
+    [NSUserDefaults.standardUserDefaults setObject:selected forKey:kLibrarySectionVisibilityKey];
+    [NSUserDefaults.standardUserDefaults setObject:order forKey:kLibrarySectionOrderKey];
+}
+
+// Reordering: while the finger is down the dragged row follows it by a transform and the rows it passes make
+// room by a transform too; the stack itself is only reordered when the finger lets go, and every row then
+// slides from where it was drawn to its new place.
+- (void)drag:(UIPanGestureRecognizer *)pan {
+    CGFloat h = kShortcutRowHeight;
+    NSArray<UIView *> *rows = self.stack.arrangedSubviews;
+    switch (pan.state) {
+        case UIGestureRecognizerStateBegan: {
+            SGRLibraryShortcut *row = (SGRLibraryShortcut *)pan.view.superview;
+            if (![row isKindOfClass:SGRLibraryShortcut.class]) return;
+            _dragRow = row;
+            _dragStart = _dragTarget = (NSInteger)[rows indexOfObject:row];
+            [self.stack bringSubviewToFront:row];
+            [[UISelectionFeedbackGenerator new] selectionChanged];
+            [UIView animateWithDuration:0.15 animations:^{
+                row.backgroundColor = [UIColor colorWithWhite:0.16 alpha:1];
+            }];
+            break;
+        }
+        case UIGestureRecognizerStateChanged: {
+            SGRLibraryShortcut *row = _dragRow;
+            if (!row) return;
+            NSInteger count = (NSInteger)rows.count;
+            CGFloat minTy = -_dragStart * h, maxTy = (count - 1 - _dragStart) * h;
+            CGFloat ty = MIN(MAX([pan translationInView:self].y, minTy), maxTy);
+            row.transform = CGAffineTransformMakeTranslation(0, ty);
+            NSInteger target = MIN(MAX((NSInteger)lround(_dragStart + ty / h), 0), count - 1);
+            if (target == _dragTarget) return;
+            _dragTarget = target;
+            [[UISelectionFeedbackGenerator new] selectionChanged];
+            NSInteger start = _dragStart;
+            [UIView animateWithDuration:0.2 delay:0
+                                options:UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction
+                             animations:^{
+                for (NSInteger i = 0; i < count; i++) {
+                    UIView *other = rows[(NSUInteger)i];
+                    if (other == row) continue;
+                    CGFloat move = 0;
+                    if (start < target && i > start && i <= target) move = -h;
+                    else if (target < start && i >= target && i < start) move = h;
+                    other.transform = CGAffineTransformMakeTranslation(0, move);
+                }
+            } completion:nil];
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed: {
+            SGRLibraryShortcut *row = _dragRow;
+            if (!row) return;
+            _dragRow = nil;
+            NSInteger target = pan.state == UIGestureRecognizerStateEnded ? _dragTarget : _dragStart;
+            NSArray<UIView *> *old = [rows copy];
+            // Where each row is drawn now, so it can be slid from there once the stack has its new order.
+            NSMutableArray<NSNumber *> *visual = [NSMutableArray array];
+            for (UIView *r in old) [visual addObject:@(r.center.y + r.transform.ty)];
+            if (target != _dragStart) {
+                [self.stack removeArrangedSubview:row];
+                [self.stack insertArrangedSubview:row atIndex:(NSUInteger)target];
+            }
+            [self.stack setNeedsLayout];
+            [self layoutIfNeeded];
+            for (NSUInteger i = 0; i < old.count; i++) {
+                UIView *r = old[i];
+                r.transform = CGAffineTransformMakeTranslation(0, visual[i].doubleValue - r.center.y);
+            }
+            [UIView animateWithDuration:0.3 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0
+                                options:UIViewAnimationOptionBeginFromCurrentState
+                             animations:^{
+                for (UIView *r in old) r.transform = CGAffineTransformIdentity;
+                row.backgroundColor = UIColor.clearColor;
+            } completion:nil];
+            break;
+        }
+        default:
+            break;
+    }
+}
+@end
+
+// The shortcuts' container, made once per list. It is NOT added to the list here: layoutRootNow puts it on the
+// page, and adding it to the list on every call is what made it jump between the two parents on each pass.
+static SGRLibraryShortcutList *libraryShortcuts(UIView *list) {
+    SGRLibraryShortcutList *existing = objc_getAssociatedObject(list, &kShortcutViewKey);
+    if (existing) return existing;
+
+    SGRLibraryShortcutList *container = [[SGRLibraryShortcutList alloc] initWithSections:orderedLibrarySections()
+                                                                                selected:selectedLibrarySectionIDs()];
+    objc_setAssociatedObject(list, &kShortcutViewKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     UILabel *recents = [UILabel new];
     recents.text = recentlyAddedTitle();
@@ -404,239 +645,7 @@ static UIView *libraryShortcuts(UIView *list) {
     return container;
 }
 
-@interface SGRLibrarySectionCell : UITableViewCell
-@property (nonatomic, copy) void (^toggle)(void);
-- (void)configureWithSection:(NSDictionary *)section selected:(BOOL)selected;
-@end
-
-@implementation SGRLibrarySectionCell {
-    UIButton *_check;
-    UIImageView *_icon;
-    UILabel *_title;
-}
-
-- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-    if (!(self = [super initWithStyle:style reuseIdentifier:reuseIdentifier])) return nil;
-    self.backgroundColor = UIColor.clearColor;
-    self.contentView.backgroundColor = UIColor.clearColor;
-    self.selectionStyle = UITableViewCellSelectionStyleNone;
-    self.separatorInset = UIEdgeInsetsMake(0, 96, 0, 16);
-    _check = [UIButton buttonWithType:UIButtonTypeSystem];
-    [_check addTarget:self action:@selector(toggleSection) forControlEvents:UIControlEventTouchUpInside];
-    [self.contentView addSubview:_check];
-    _icon = [UIImageView new];
-    _icon.contentMode = UIViewContentModeScaleAspectFit;
-    _icon.tintColor = SGRPrimary();
-    [self.contentView addSubview:_icon];
-    _title = [UILabel new];
-    _title.font = SGRFont(UIFontTextStyleBody, UIFontWeightRegular, UIContentSizeCategoryLarge);
-    _title.textColor = SGRPrimary();
-    [self.contentView addSubview:_title];
-    return self;
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    CGFloat midY = CGRectGetMidY(self.contentView.bounds);
-    _check.frame = CGRectMake(8, midY - 18, 36, 36);
-    _icon.frame = CGRectMake(56, midY - 14, 28, 28);
-    _title.frame = CGRectMake(96, 0, MAX(0, CGRectGetWidth(self.contentView.bounds) - 144),
-                              CGRectGetHeight(self.contentView.bounds));
-}
-
-- (BOOL)shouldIndentWhileEditing {
-    return NO;
-}
-
-- (void)configureWithSection:(NSDictionary *)section selected:(BOOL)selected {
-    NSString *symbol = section[@"symbol"];
-    UIImageSymbolConfiguration *configuration =
-        [UIImageSymbolConfiguration configurationWithPointSize:23 weight:UIImageSymbolWeightRegular];
-    _icon.image = [UIImage systemImageNamed:symbol withConfiguration:configuration];
-    _title.text = section[@"title"];
-    BOOL italian = [NSLocale.preferredLanguages.firstObject hasPrefix:@"it"];
-    _check.accessibilityLabel = selected
-        ? [NSString stringWithFormat:italian ? @"Rimuovi %@ dalla Libreria" : @"Remove %@ from Library", _title.text]
-        : [NSString stringWithFormat:italian ? @"Aggiungi %@ alla Libreria" : @"Add %@ to Library", _title.text];
-    _check.accessibilityValue = selected ? @"Selected" : @"Not selected";
-    _check.accessibilityTraits = UIAccessibilityTraitButton;
-    UIImageSymbolConfiguration *checkConfiguration =
-        [UIImageSymbolConfiguration configurationWithPointSize:31 weight:UIImageSymbolWeightRegular];
-    UIImage *checkImage = [UIImage systemImageNamed:selected ? @"checkmark.circle.fill" : @"circle"
-                                  withConfiguration:checkConfiguration];
-    [_check setImage:checkImage forState:UIControlStateNormal];
-    _check.tintColor = selected ? SGRAccent() : SGRSecondary();
-}
-
-- (void)toggleSection {
-    if (self.toggle) self.toggle();
-}
-@end
-
-@interface SGRLibrarySectionsEditor : UIView <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, weak) UIView *libraryPage;
-- (void)finish;
-@end
-
-@implementation SGRLibrarySectionsEditor {
-    UITableView *_table;
-    UILabel *_title;
-    UIButton *_done;
-    NSMutableArray<NSDictionary *> *_sections;
-    NSMutableSet<NSString *> *_selected;
-}
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    if (!(self = [super initWithFrame:frame])) return nil;
-    self.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
-    self.backgroundColor = UIColor.blackColor;
-    self.accessibilityViewIsModal = YES;
-    _sections = [orderedLibrarySections() mutableCopy];
-    _selected = [selectedLibrarySectionIDs() mutableCopy];
-
-    _title = [UILabel new];
-    _title.text = [NSLocale.preferredLanguages.firstObject hasPrefix:@"it"] ? @"Libreria" : @"Library";
-    _title.font = SGRFont(UIFontTextStyleLargeTitle, UIFontWeightBold, UIContentSizeCategoryLarge);
-    _title.textColor = SGRPrimary();
-    _title.accessibilityTraits = UIAccessibilityTraitHeader;
-    [self addSubview:_title];
-
-    _done = [UIButton buttonWithType:UIButtonTypeSystem];
-    UIImageSymbolConfiguration *configuration =
-        [UIImageSymbolConfiguration configurationWithPointSize:23 weight:UIImageSymbolWeightSemibold];
-    [_done setImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:configuration]
-           forState:UIControlStateNormal];
-    _done.tintColor = UIColor.whiteColor;
-    _done.backgroundColor = SGRAccent();
-    _done.layer.cornerRadius = 28;
-    _done.accessibilityLabel = [NSLocale.preferredLanguages.firstObject hasPrefix:@"it"] ? @"Fine" : @"Done";
-    [_done addTarget:self action:@selector(finish) forControlEvents:UIControlEventTouchUpInside];
-    [self addSubview:_done];
-
-    _table = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
-    _table.backgroundColor = UIColor.clearColor;
-    _table.opaque = NO;
-    _table.separatorColor = SGRHairline();
-    _table.separatorInset = UIEdgeInsetsMake(0, 96, 0, 16);
-    _table.rowHeight = 68;
-    _table.estimatedRowHeight = 68;
-    _table.dataSource = self;
-    _table.delegate = self;
-    _table.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
-    _table.showsVerticalScrollIndicator = NO;
-    _table.tableFooterView = [UIView new];
-    [_table registerClass:SGRLibrarySectionCell.class forCellReuseIdentifier:@"library-section"];
-    [_table setEditing:YES animated:NO];
-    [self addSubview:_table];
-    return self;
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    _title.frame = CGRectMake(24, 42, MAX(0, CGRectGetWidth(self.bounds) - 104), 54);
-    _done.frame = CGRectMake(CGRectGetWidth(self.bounds) - 72, 38, 56, 56);
-    _table.frame = CGRectMake(0, 118, CGRectGetWidth(self.bounds), MAX(0, CGRectGetHeight(self.bounds) - 118));
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return _sections.count;
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    SGRLibrarySectionCell *cell = [tableView dequeueReusableCellWithIdentifier:@"library-section" forIndexPath:indexPath];
-    NSDictionary *section = _sections[indexPath.row];
-    NSString *identifier = section[@"id"];
-    [cell configureWithSection:section selected:[_selected containsObject:identifier]];
-    __weak typeof(self) weakSelf = self;
-    __weak UITableView *weakTableView = tableView;
-    cell.toggle = ^{
-        SGRLibrarySectionsEditor *editor = weakSelf;
-        UITableView *strongTableView = weakTableView;
-        if (!editor || !strongTableView) return;
-        if ([editor->_selected containsObject:identifier]) [editor->_selected removeObject:identifier];
-        else [editor->_selected addObject:identifier];
-        [strongTableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
-    };
-    cell.showsReorderControl = YES;
-    return cell;
-}
-
-- (BOOL)tableView:(UITableView *)tableView canMoveRowAtIndexPath:(NSIndexPath *)indexPath {
-    return YES;
-}
-
-- (UITableViewCellEditingStyle)tableView:(UITableView *)tableView editingStyleForRowAtIndexPath:(NSIndexPath *)indexPath {
-    return UITableViewCellEditingStyleNone;
-}
-
-- (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
-      toIndexPath:(NSIndexPath *)destinationIndexPath {
-    if (sourceIndexPath.row == destinationIndexPath.row) return;
-    NSDictionary *section = _sections[sourceIndexPath.row];
-    [_sections removeObjectAtIndex:sourceIndexPath.row];
-    [_sections insertObject:section atIndex:destinationIndexPath.row];
-}
-
-- (void)finish {
-    NSMutableArray<NSString *> *selected = [NSMutableArray array];
-    NSMutableArray<NSString *> *order = [NSMutableArray array];
-    for (NSDictionary *section in _sections) {
-        NSString *identifier = section[@"id"];
-        [order addObject:identifier];
-        if ([_selected containsObject:identifier]) [selected addObject:identifier];
-    }
-    [NSUserDefaults.standardUserDefaults setObject:selected forKey:kLibrarySectionVisibilityKey];
-    [NSUserDefaults.standardUserDefaults setObject:order forKey:kLibrarySectionOrderKey];
-    UIView *page = self.libraryPage;
-    [self removeFromSuperview];
-    objc_setAssociatedObject(page, &kLibrarySectionsEditorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    UICollectionView *list = (UICollectionView *)SGRFindByIdentifier(page, SGRLibraryListIdentifier, NULL);
-    UIView *shortcuts = list ? objc_getAssociatedObject(list, &kShortcutViewKey) : nil;
-    [shortcuts removeFromSuperview];
-    if (list) objc_setAssociatedObject(list, &kShortcutViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (page) layoutRoot(page);
-}
-@end
-
-static CGFloat libraryEditorBottom(UIView *page) {
-    CGFloat bottom = CGRectGetHeight(page.bounds);
-    UIWindow *window = page.window;
-    if (!window) return MAX(0, bottom - 160);
-    UIView *nowPlaying = SGRFindByIdentifier(window, @"SPTNowPlayingBar", NULL);
-    if (nowPlaying && !nowPlaying.hidden && nowPlaying.alpha > 0.01) {
-        CGFloat top = CGRectGetMinY([nowPlaying convertRect:nowPlaying.bounds toView:page]);
-        if (top > 0) bottom = MIN(bottom, top - 8);
-    }
-    __block UIView *tabBar = nil;
-    SGForEachView(window, ^(UIView *view) {
-        if (!tabBar && [NSStringFromClass(view.class) containsString:@"UITabBarContainerWrapperView"] &&
-            !view.hidden && view.alpha > 0.01) tabBar = view;
-    });
-    if (tabBar) {
-        CGFloat top = CGRectGetMinY([tabBar convertRect:tabBar.bounds toView:page]);
-        if (top > 0) bottom = MIN(bottom, top - 8);
-    }
-    if (bottom >= CGRectGetHeight(page.bounds) - 1) bottom = MAX(0, bottom - 160);
-    return MAX(0, bottom);
-}
-
-static void presentLibrarySectionsEditor(UIView *header) {
-    UIView *page = header;
-    while (page && !SGRFindByIdentifier(page, SGRLibraryListIdentifier, NULL)) page = page.superview;
-    if (!page) {
-        SGLog(@"redesign library: cannot open section editor without the Library page");
-        return;
-    }
-    SGRLibrarySectionsEditor *editor = objc_getAssociatedObject(page, &kLibrarySectionsEditorKey);
-    if (editor) return;
-    editor = [[SGRLibrarySectionsEditor alloc] initWithFrame:CGRectZero];
-    editor.libraryPage = page;
-    objc_setAssociatedObject(page, &kLibrarySectionsEditorKey, editor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    editor.frame = CGRectMake(0, 0, CGRectGetWidth(page.bounds), libraryEditorBottom(page));
-    editor.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [page addSubview:editor];
-    [page bringSubviewToFront:editor];
-}
+#pragma mark - the header's actions
 
 // Spotify's search and add actions are fired through their original controls; editing stays in the redesign.
 static UIView *libraryHeaderActions(UIView *header) {
@@ -670,21 +679,109 @@ static UIView *libraryHeaderActions(UIView *header) {
         [button addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
             UIView *owner = weakHeader;
             if (!owner) return;
-            BOOL done;
+            BOOL handled;
             if (i == 0) {
-                done = fire(SGRFindByIdentifier(owner, @"YourLibraryHeader.plus", &kPlusKey));
+                handled = fire(SGRFindByIdentifier(owner, @"YourLibraryHeader.plus", &kPlusKey));
             } else if (i == 1) {
-                presentLibrarySectionsEditor(owner);
-                done = YES;
+                setLibraryEditing(owner, YES);
+                handled = YES;
             } else {
-                done = fire(SGRFindByIdentifier(owner, @"YourLibraryHeader.search", &kSearchKey));
+                handled = fire(SGRFindByIdentifier(owner, @"YourLibraryHeader.search", &kSearchKey));
             }
-            if (!done) SGLog(@"redesign library: no Spotify control to run for header button %lu", (unsigned long)i);
+            if (!handled) SGLog(@"redesign library: no Spotify control to run for header button %lu", (unsigned long)i);
         }] forControlEvents:UIControlEventTouchUpInside];
         [stack addArrangedSubview:button];
     }
     objc_setAssociatedObject(header, &kHeaderActionsKey, pill, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return pill;
+}
+
+// The green button that closes the edit mode. It stands where the capsule's trailing end is, invisible and
+// untouchable until the edit mode fades it in over the capsule.
+static UIView *libraryHeaderDone(UIView *header) {
+    UIView *existing = objc_getAssociatedObject(header, &kHeaderDoneKey);
+    if (existing) return existing;
+
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    button.frame = CGRectMake(0, 0, kPillHeight, kPillHeight);
+    button.backgroundColor = SGRAccent();
+    button.layer.cornerRadius = kPillHeight / 2;
+    button.layer.cornerCurve = kCACornerCurveContinuous;
+    button.tintColor = UIColor.whiteColor;
+    UIImageSymbolConfiguration *configuration =
+        [UIImageSymbolConfiguration configurationWithPointSize:kPillGlyph weight:UIImageSymbolWeightSemibold];
+    [button setImage:[UIImage systemImageNamed:@"checkmark" withConfiguration:configuration]
+            forState:UIControlStateNormal];
+    button.accessibilityLabel = [NSLocale.preferredLanguages.firstObject hasPrefix:@"it"] ? @"Fine" : @"Done";
+    button.alpha = 0;
+    button.userInteractionEnabled = NO;
+    __weak UIView *weakHeader = header;
+    [button addAction:[UIAction actionWithHandler:^(__kindof UIAction *action) {
+        UIView *owner = weakHeader;
+        if (owner) setLibraryEditing(owner, NO);
+    }] forControlEvents:UIControlEventTouchUpInside];
+    objc_setAssociatedObject(header, &kHeaderDoneKey, button, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    return button;
+}
+
+// Turns the edit mode of the shortcut rows on or off, in place and with one spring animation: the rows slide,
+// the check circles and the handles fade in (or out), the hidden sections open (or close), the grid under the
+// rows fades away (or back) and the capsule and the "done" button trade places.
+static void setLibraryEditing(UIView *header, BOOL editing) {
+    UIView *page = header;
+    while (page && !SGRFindByIdentifier(page, SGRLibraryListIdentifier, NULL)) page = page.superview;
+    UICollectionView *list = page ? (UICollectionView *)SGRFindByIdentifier(page, SGRLibraryListIdentifier, &kLibraryListKey) : nil;
+    if (![list isKindOfClass:UICollectionView.class]) {
+        SGLog(@"redesign library: cannot edit the sections without the Library page");
+        return;
+    }
+    SGRLibraryShortcutList *shortcuts = libraryShortcuts(list);
+    if (shortcuts.editing == editing) return;
+
+    UIView *pill = libraryHeaderActions(header);
+    UIView *done = libraryHeaderDone(header);
+    UILabel *recents = objc_getAssociatedObject(shortcuts, &kRecentsLabelKey);
+
+    pill.userInteractionEnabled = !editing;
+    done.userInteractionEnabled = editing;
+    list.userInteractionEnabled = !editing;
+    list.scrollEnabled = !editing;
+
+    if (editing) {
+        // The container grows to hold every section before the rows open, so they can be touched at once.
+        shortcuts.editing = YES;
+        layoutRoot(page);
+        // The rows are at the top of the page: bring the list there first if it was scrolled.
+        keepAtRest(list, 0.6);
+        [list setContentOffset:CGPointMake(list.contentOffset.x, -list.adjustedContentInset.top) animated:YES];
+        [UIView animateWithDuration:0.45 delay:0 usingSpringWithDamping:0.88 initialSpringVelocity:0
+                            options:UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{
+            [shortcuts applyEditing:YES];
+            pill.alpha = 0;
+            done.alpha = 1;
+            list.alpha = 0;
+            recents.alpha = 0;
+        } completion:nil];
+    } else {
+        [shortcuts save];
+        [UIView animateWithDuration:0.4 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
+                            options:UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{
+            [shortcuts applyEditing:NO];
+            pill.alpha = 1;
+            done.alpha = 0;
+        } completion:^(BOOL finished) {
+            // The page's own pass: the inset, the title's place and the container's height for the sections left.
+            layoutRoot(page);
+        }];
+        // The grid comes back once the rows have mostly closed, so it never shows through them.
+        [UIView animateWithDuration:0.25 delay:0.2 options:UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{
+            list.alpha = 1;
+            recents.alpha = 1;
+        } completion:nil];
+    }
 }
 
 static void vanish(UIView *view) {
@@ -858,6 +955,12 @@ static NSArray<UIView *> *placeRoot(UIView *header) {
                                   kPillWidth, kPillHeight);
     if (!CGRectEqualToRect(pill.frame, pillFrame)) pill.frame = pillFrame;
 
+    // The edit mode's "done" button takes the capsule's place, at its trailing end.
+    UIView *done = libraryHeaderDone(header);
+    if (done.superview != header) [header addSubview:done];
+    CGRect doneFrame = CGRectMake(CGRectGetMaxX(pillFrame) - kPillHeight, pillFrame.origin.y, kPillHeight, kPillHeight);
+    if (!CGRectEqualToRect(done.frame, doneFrame)) done.frame = doneFrame;
+
     NSString *override = SGFlag(SGRKeyPlayerVinyl, NO) ? @"Records" : nil;
     layoutTitle(header, spotifyTitle, override, SGRSideMargin, CGRectGetMinX(pillFrame), centre.y);
     for (UIView *control in trailing) watchRow(control.superview, header, placeRoot);
@@ -962,12 +1065,6 @@ static CGPoint restingOffset(UIScrollView *list, CGPoint offset) {
 static void layoutRootNow(UIView *page) {
     UIView *header = childNamed(page, @"YourLibraryHeaderView");
     if (!header) return;
-    SGRLibrarySectionsEditor *editor = objc_getAssociatedObject(page, &kLibrarySectionsEditorKey);
-    if (editor) {
-        editor.frame = CGRectMake(0, 0, CGRectGetWidth(page.bounds), libraryEditorBottom(page));
-        [page bringSubviewToFront:editor];
-        return;
-    }
 
     // Spotify can un-hide its own title, chips and scrim on passes of the header's own (the tab appearing, the
     // model arriving), so the header's passes run this too, once watched.
@@ -1015,6 +1112,8 @@ static void layoutRootNow(UIView *page) {
         objc_setAssociatedObject(list, &kLibraryMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         BOOL playlistCollection = isPlaylistsPage(list);
 
+        // What the list leaves room for is the sections that are ON (saved); while editing, the rows of the
+        // sections that are off are open too, but they are drawn over the grid, which is faded out then.
         CGFloat shortcutsHeight = visibleLibrarySections().count * kShortcutRowHeight;
         CGFloat lead = shortcutsHeight + kRecentsSection;
         CGFloat width = list.bounds.size.width;
@@ -1022,7 +1121,9 @@ static void layoutRootNow(UIView *page) {
         // Keep the shortcuts in page coordinates. Placing them at a negative
         // content coordinate inside the scroll view makes their visual frame
         // depend on Spotify's changing contentOffset and breaks hit testing.
-        UIView *shortcuts = libraryShortcuts(list);
+        SGRLibraryShortcutList *shortcuts = libraryShortcuts(list);
+        CGFloat containerHeight = shortcuts.editing
+            ? MAX(lead, orderedLibrarySections().count * kShortcutRowHeight) : lead;
         shortcuts.alpha = 1;
         shortcuts.userInteractionEnabled = YES;
         shortcuts.accessibilityElementsHidden = NO;
@@ -1030,7 +1131,7 @@ static void layoutRootNow(UIView *page) {
         if (shortcuts.superview != page) [page addSubview:shortcuts];
         CGFloat scrollDistance = MAX(0, list.contentOffset.y + list.adjustedContentInset.top);
         CGRect shortcutsFrame = CGRectMake(CGRectGetMinX(listFrame), rowBottom - scrollDistance,
-                                           width, lead);
+                                           width, containerHeight);
         if (!CGRectEqualToRect(shortcuts.frame, shortcutsFrame)) shortcuts.frame = shortcutsFrame;
 
         // Reorder only when needed: bringSubviewToFront queues another layout pass of the page.

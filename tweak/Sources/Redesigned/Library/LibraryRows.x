@@ -45,7 +45,17 @@ static BOOL isArtistPicture(UIView *artwork) {
     return NO;
 }
 
+// Whether the cell is an artist's. The identifier that says so (Artist.Row.Library) sits on the row INSIDE the
+// cell, so the cell's own subtree is searched first, then its ancestors. Looking only up from the cell, as this
+// once did, never found it, so no artist cell was ever treated as one and its picture kept whatever corner
+// curve a reused cover had left on it.
 static BOOL isArtistCell(UIView *cell) {
+    __block BOOL found = NO;
+    SGForEachView(cell, ^(UIView *view) {
+        if (found) return;
+        if ([view.accessibilityIdentifier.lowercaseString containsString:@"artist.row"]) found = YES;
+    });
+    if (found) return YES;
     UIView *view = cell;
     for (int depth = 0; view && depth < 6; depth++, view = view.superview) {
         NSString *identifier = view.accessibilityIdentifier.lowercaseString;
@@ -55,15 +65,27 @@ static BOOL isArtistCell(UIView *cell) {
     return NO;
 }
 
-static void roundArtistArtwork(UIView *cell) {
+// A true circle: radius half the side and the circular curve. The continuous curve with that radius is a
+// squircle that shows as a diamond, which is what a reused cover's leftover curve did to an artist.
+static void makeCircle(UIView *view) {
+    CGFloat side = MIN(view.bounds.size.width, view.bounds.size.height);
+    if (side < 1) return;
+    CALayer *layer = view.layer;
+    if (layer.cornerRadius != side / 2) layer.cornerRadius = side / 2;
+    if (![layer.cornerCurve isEqualToString:kCACornerCurveCircular]) layer.cornerCurve = kCACornerCurveCircular;
+    if (!layer.masksToBounds) layer.masksToBounds = YES;
+}
+
+// Every circle of an artist's cell is made a true one: the artwork Style found, any image view in it (the
+// picture) and any view Spotify gave a radius of half its side.
+static void roundArtistArtwork(UIView *cell, UIView *artwork) {
     if (!isArtistCell(cell)) return;
+    if (artwork) makeCircle(artwork);
     SGForEachView(cell, ^(UIView *view) {
-        if (![view isKindOfClass:UIImageView.class]) return;
+        if (view == cell) return;
         CGFloat side = MIN(view.bounds.size.width, view.bounds.size.height);
         if (side < 1) return;
-        view.layer.cornerRadius = side / 2;
-        view.layer.cornerCurve = kCACornerCurveCircular;
-        view.layer.masksToBounds = YES;
+        if ([view isKindOfClass:UIImageView.class] || view.layer.cornerRadius >= side / 2 - 0.5) makeCircle(view);
     });
 }
 
@@ -225,15 +247,19 @@ static void style(UIView *cell) {
                 SGRObserveLayout(host, ^(UIView *view) {
                     UIView *owner = weakCell, *art = weakThumb;
                     if (!owner || !art || art.superview != view) return;
-                    if (owner.bounds.size.height > 120 && owner.bounds.size.width > 140) cardLayout(owner, art);
+                    if (owner.bounds.size.height > 120 && owner.bounds.size.width > 140) {
+                        cardLayout(owner, art);
+                        roundArtistArtwork(owner, art);
+                    }
                 });
             }
         } else {
             cardTeardown(cell, artwork);
             roundCorners(artwork, SGRRadiusThumb);
         }
-        roundArtistArtwork(cell);
     }
+    // Whether or not the artwork was found yet: the circles of an artist's cell are made true ones.
+    roundArtistArtwork(cell, artwork);
     hairline(cell, thumb);
 
     // The first cell that held an artwork, so the line says what was found rather than what had not loaded yet.

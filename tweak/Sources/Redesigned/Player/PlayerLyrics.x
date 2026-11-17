@@ -50,6 +50,7 @@
 #import "Redesigned/Kit/SGRKit.h"
 #import "Redesigned/Lyrics/SGRKaraokeView.h"
 #import "Redesigned/Lyrics/SGRSingControl.h"
+#import "Redesigned/Moments/Moments.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/Sing/SGSingController.h"
 #import "Player.h"
@@ -69,7 +70,8 @@ static const CGFloat kLandscapeControlsGap = 22;
 static const CGFloat kLandscapeTransportScale = 0.78;
 static const CGFloat kLandscapeProgressWidthScale = 0.58;
 static const CGFloat kLandscapeProgressHeightScale = 0.76;
-static const CGFloat kPortraitPlayerRowsLift = 20; // cumulative portrait lift, in UIKit points
+static const CGFloat kPortraitPlayerRowsLift = 23;
+static const CGFloat kLyricsInfoRowDrop = 10;
 // The lines are a surface arriving, not something moving: they come up from just under full size as the
 // room for them opens, and go at once when it closes. An exit the eye waits through reads as a stall.
 static const CGFloat kLyricsEnterScale = 0.96;
@@ -443,7 +445,7 @@ static SGRLyricsLayout layoutIn(UIView *host) {
     l.rotate = CGRectMake(CGRectGetMaxX(area) - kRotateButtonSide - kRotateButtonGap,
                           lines, kRotateButtonSide, kRotateButtonSide);
     CGFloat stageTop = lines + kRotateButtonSide + kRotateButtonGap;
-    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : kPortraitPlayerRowsLift;
+    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : SGRPlayerPortraitProgressLift();
     l.stage = CGRectMake(CGRectGetMinX(area), stageTop, area.size.width,
                          CGRectGetMinY(bar) - progressLift - kLyricsBottom - stageTop);
     // With the controls away: from the header row's top, just under the status bar, down to the home
@@ -463,7 +465,7 @@ static CGRect queueStageIn(UIView *host, SGRLyricsLayout l) {
     CGRect row = untransformed(info, host), bar = untransformed(duration, host);
     CGFloat rowTop = CGRectGetMidY(l.thumb) - row.size.height / 2;
     CGFloat contentTop = MAX(CGRectGetMaxY(l.thumb), rowTop + row.size.height) + 10;
-    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : kPortraitPlayerRowsLift;
+    CGFloat progressLift = SGFlag(SGRKeyPlayerVinyl, NO) ? 0 : SGRPlayerPortraitProgressLift();
     CGFloat contentBottom = CGRectGetMinY(bar) - progressLift - kLyricsBottom;
     if (contentBottom <= contentTop) return CGRectNull;
     return CGRectMake(CGRectGetMinX(l.stage), contentTop, l.stage.size.width, contentBottom - contentTop);
@@ -1144,8 +1146,7 @@ static void syncIdleCoverInteraction(BOOL hidden) {
 }
 
 static void syncIdleControls(void) {
-    BOOL hidden = sg_idleChromeHidden && !playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO) &&
-        !sg_open && !sg_queueOpen;
+    BOOL hidden = SGRPlayerIdleChromeHidden();
     syncIdleCoverInteraction(hidden);
     UIView *header = sg_header.viewIfLoaded;
     if (header) {
@@ -1166,12 +1167,18 @@ static void syncIdleControls(void) {
     if ([stack isKindOfClass:UIStackView.class]) SGRPlayerSetVolumeIdleHidden(stack, hidden);
 }
 
+BOOL SGRPlayerIdleChromeHidden(void) {
+    return sg_idleChromeHidden && !playerIsLandscape() && !SGFlag(SGRKeyPlayerVinyl, NO) &&
+        !sg_open && !sg_queueOpen;
+}
+
 static void placeTitleRow(SGRLyricsLayout l) {
     UIView *info = sg_info.viewIfLoaded;
     if (!info) return;
     syncLandscapeFooter();
     BOOL landscape = sg_host.bounds.size.width > sg_host.bounds.size.height;
-    CGFloat portraitLift = (!landscape && !SGFlag(SGRKeyPlayerVinyl, NO)) ? kPortraitPlayerRowsLift : 0;
+    CGFloat portraitLift = (!landscape && !SGFlag(SGRKeyPlayerVinyl, NO))
+        ? kPortraitPlayerRowsLift + (SGRMomentsEnabled() ? 17 : 0) : 0;
     UIView *duration = sg_duration.viewIfLoaded;
     UIView *controls = sg_controls.viewIfLoaded;
     BOOL expanded = sg_open || sg_queueOpen;
@@ -1194,7 +1201,7 @@ static void placeTitleRow(SGRLyricsLayout l) {
     [SGRowIn(info) layoutIfNeeded];
     CGRect baseInfo = untransformed(info, sg_host);
     CGFloat lift = idle ? idleProgressTop(sg_host, duration) - baseInfo.size.height - kIdleInfoGap - CGRectGetMinY(baseInfo)
-                        : (expanded ? l.lift : 0) - portraitLift;
+                        : (expanded ? l.lift + (sg_open ? kLyricsInfoRowDrop : 0) : 0) - portraitLift;
     CGFloat shift = expanded ? l.shift : (landscape ? l.baseShift : 0);
     CGAffineTransform rise = CGAffineTransformMakeTranslation(0, round(lift));
     if (!CGAffineTransformEqualToTransform(info.transform, rise)) info.transform = rise;
@@ -1202,10 +1209,11 @@ static void placeTitleRow(SGRLyricsLayout l) {
     // title, artist and any inline add/remove actions, so its matching offset moves that whole row.
     // Landscape lyrics and Vinyl keep their independently measured layouts.
     if (!SGFlag(SGRKeyPlayerVinyl, NO) && duration) {
-        CGFloat progressLift = landscape ? 0 : -portraitLift;
-        if (idle) progressLift = idleProgressTop(sg_host, duration) - CGRectGetMinY(untransformed(duration, sg_host));
-        CGAffineTransform progressOffset = CGAffineTransformMakeTranslation(0, progressLift);
-        if (!CGAffineTransformEqualToTransform(duration.transform, progressOffset)) duration.transform = progressOffset;
+        CGFloat progressLift = landscape ? 0 : SGRPlayerPortraitProgressLift();
+        if (idle) {
+            progressLift = CGRectGetMinY(untransformed(duration, sg_host)) - idleProgressTop(sg_host, duration);
+        }
+        SGRPlayerApplyProgressLift(duration, progressLift);
     }
     UIView *title = sg_titleElement;
     if (!title) return;
@@ -1402,6 +1410,7 @@ static void setPlayerIdleChromeHidden(BOOL hidden, BOOL animated) {
     void (^updates)(void) = ^{
         placeTitleRow(layoutIn(host));
         SGRPlayerAnimatedSetIdleChromeHidden(hidden);
+        SGRPlayerCoversFollowClip(0);
         syncIdleControls();
         syncLandscapeFooter();
     };
@@ -1610,7 +1619,9 @@ static void restoreSpotifyCover(UIView *host) {
         return;
     }
     SGRPlayerSetCoverHidden(NO);
-    SGRPlayerCoverList().alpha = 1;
+    UIView *coverList = SGRPlayerCoverList();
+    coverList.alpha = 1;
+    SGRPlayerCoversFollowClip(0);
     SGRPlayerLyricsOverlay *overlay = host ? objc_getAssociatedObject(host, &kOverlayKey) : nil;
     if (overlay && !sg_open) [overlay removeFromSuperview];
 }
@@ -2013,6 +2024,9 @@ void SGRPlayerIdleChromeSettingChanged(void) {
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
     SGRPlayerOrientationPlayerDidAppear((UIViewController *)self);
+    if (sg_idleChromeHidden) setPlayerIdleChromeHidden(NO, NO);
+    replace();
+    SGRPlayerFooterRefreshLayout();
 }
 
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {
